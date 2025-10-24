@@ -8162,6 +8162,36 @@ function goAdvancedUI() {
   if (window.refreshMinimalState) window.refreshMinimalState();
 }
 
+function isElementActuallyVisible(el) {
+  if (!el || !el.isConnected) return false;
+  if (el.hasAttribute("hidden")) return false;
+
+  // Walk up the tree to ensure no ancestor hides the element.
+  let current = el;
+  while (current && current.nodeType === Node.ELEMENT_NODE) {
+    const style = window.getComputedStyle(current);
+    if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") {
+      return false;
+    }
+    current = current.parentElement;
+  }
+
+  const rect = el.getBoundingClientRect();
+  if (rect.width <= 1 || rect.height <= 1) return false;
+
+  if (typeof el.checkVisibility === "function") {
+    try {
+      if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+        return false;
+      }
+    } catch (_) {
+      // Older browsers might throw; ignore and rely on the other heuristics.
+    }
+  }
+
+  return true;
+}
+
 function isVideoPlaybackPage() {
   let pathname = "";
   try {
@@ -8194,12 +8224,21 @@ function isVideoPlaybackPage() {
   );
   if (!playerVideo) return false;
 
-  const playerContainer = playerVideo.closest(
-    "#movie_player, .html5-video-player, ytd-player, ytd-watch-flexy"
-  );
+  // Ensure the player belongs to a visible full player rather than an inline preview/miniplayer.
+  const watchFlexy = playerVideo.closest("ytd-watch-flexy");
+  if (watchFlexy) {
+    if (!isElementActuallyVisible(watchFlexy)) return false;
+    if (watchFlexy.closest("ytd-miniplayer")) return false;
+    return true;
+  }
+
+  const playerContainer = playerVideo.closest("#movie_player, .html5-video-player, ytd-player");
   if (!playerContainer) return false;
 
-  if (playerContainer.closest("ytd-miniplayer")) return false;
+  if (!isElementActuallyVisible(playerContainer)) return false;
+  if (playerContainer.closest("ytd-miniplayer, ytd-inline-player-renderer, ytd-popup-container")) {
+    return false;
+  }
 
   return true;
 }
