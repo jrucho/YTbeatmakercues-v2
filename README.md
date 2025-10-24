@@ -13,25 +13,6 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 ## New in 2.0
 * New UI
 
-[https://www.instagram.com/reel/DKsfsPPMOxg/?igsh=NzkzdDVhajFrZWk1](https://www.instagram.com/reel/DKvE_jEseKd/?igsh=MTJra2M5Z3A5ZTM4aw==)
-
-https://www.instagram.com/reel/DKvgj2TIICH/?igsh=Ym5xNDR0bXUzZXZj
-(Thanks for the video Noche !)
-
-The extension supports managing multiple sample packs at once. Use the multi-
-select dropdown in the advanced panel to load several packs together or delete
-unused ones. Creating a new pack only asks for a name; you can later import
-kicks, hihats and snares using each row’s "Imp" button. Samples are stored in
-the pack and persist between sessions. You can delete individual samples from
-any pack; built-in samples remain protected, but extra ones you add to the
-built-in pack can be removed.
-
-Manage multiple compressors (Native, Tape Warm, Roland SP404OG) to shape your audio character. Adjust settings effortlessly through a user-friendly interface.
-
-Integrate MIDI controllers with customizable mappings to trigger cues, samples, and effects directly.
-
-Samples and cue points persist between sessions. Easily export loops, manage cues, and maintain workflow efficiency.
-
 ## Key Features
 
 - 🎯 **Cue Points**  
