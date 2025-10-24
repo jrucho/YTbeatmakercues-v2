@@ -4,7 +4,7 @@ You can try out my new website with some of the extension’s features here, bef
 
 > This extension was inspired by the muscle memory workflow of the OP-Z, the versatility of Ableton Live, and the hands-on approach I developed over the years using the SP-404.
 
-![Screenshot 2025-10-24 at 09 58 08](https://github.com/user-attachments/assets/e786f174-26b2-49a5-889d-1ae56293cb56)
+![Screenshot 2025-10-24 at 10 05 00](https://github.com/user-attachments/assets/267905da-ff7b-4a51-9591-ad1000a5b8a3)
 
 Mark cue points, loop audio/video, apply live effects, and customize your beatmaking experience on YouTube.
 
