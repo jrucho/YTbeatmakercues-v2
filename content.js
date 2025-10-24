@@ -2125,6 +2125,7 @@ tapBpmBtn.addEventListener("click", () => {
     }
   }
 });
+
 controlRow.appendChild(tapBpmBtn);
 
     
@@ -2665,12 +2666,16 @@ function attachAudioPriming() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Ensure minimal view is active immediately
-  if (typeof goMinimalUI === "function") goMinimalUI();
-  // Also launch minimal view after audio context is ready
-  ensureAudioContext()
-    .then(() => { if (typeof goMinimalUI === "function") goMinimalUI(); })
-    .catch(console.error);
+  // Ensure the minimal UI respects the current page immediately
+  if (typeof updateMinimalUIForCurrentPage === "function") {
+    updateMinimalUIForCurrentPage();
+  }
+  // Only prime audio/minimal UI automatically on video playback pages
+  if (isVideoPlaybackPage()) {
+    ensureAudioContext()
+      .then(() => { if (typeof goMinimalUI === "function") goMinimalUI(); })
+      .catch(console.error);
+  }
 
   // If no cue points are loaded, generate random cues
   if (Object.keys(cuePoints).length === 0 && typeof placeRandomCues === "function") {
@@ -2685,8 +2690,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // Attach a one-time click listener
     cueButton.addEventListener('click', () => {
       ensureAudioContext();
-      goMinimalUI(); // Open the minimal view
+      goMinimalUI(); // Open the minimal view when applicable
     }, { once: true });
+  }
+});
+
+window.addEventListener('yt-navigate-finish', () => {
+  if (typeof updateMinimalUIForCurrentPage === "function") {
+    updateMinimalUIForCurrentPage();
   }
 });
 document.addEventListener('click', () => {
@@ -2712,6 +2723,9 @@ document.addEventListener(
         saveCuePointsToURL();
         updateCueMarkers();
         refreshCuesButton();
+        if (window.refreshMinimalState) {
+          window.refreshMinimalState();
+        }
       }
     }
   },
@@ -8148,8 +8162,43 @@ function goAdvancedUI() {
   if (window.refreshMinimalState) window.refreshMinimalState();
 }
 
+function isVideoPlaybackPage() {
+  try {
+    const { pathname } = new URL(window.location.href);
+    if (
+      pathname.startsWith("/watch") ||
+      pathname.startsWith("/embed/") ||
+      pathname.startsWith("/live/") ||
+      pathname.startsWith("/shorts/")
+    ) {
+      return true;
+    }
+  } catch (err) {
+    // Ignore URL parsing issues and fall back to DOM checks
+  }
+
+  return Boolean(
+    document.querySelector(
+      "ytd-watch-flexy video, ytd-watch-grid video, ytd-reel-video-renderer video, ytd-shorts video, #movie_player video"
+    )
+  );
+}
+
+function hideMinimalUIBar() {
+  minimalActive = false;
+  minimalVisible = false;
+  updateMinimalToggleButtonState();
+  if (minimalUIContainer) {
+    minimalUIContainer.style.display = "none";
+  }
+}
+
 function goMinimalUI() {
   if (blindMode) return; // do not show the minimal UI if blind mode is active
+  if (!isVideoPlaybackPage()) {
+    hideMinimalUIBar();
+    return;
+  }
   minimalActive = true;
   minimalVisible = true;
   updateMinimalToggleButtonState();
@@ -8163,6 +8212,14 @@ function goMinimalUI() {
     minimalUIContainer.style.display = "flex";
   }
   if (window.refreshMinimalState) window.refreshMinimalState();
+}
+
+function updateMinimalUIForCurrentPage() {
+  if (isVideoPlaybackPage()) {
+    goMinimalUI();
+  } else {
+    hideMinimalUIBar();
+  }
 }
 
 /**************************************
@@ -11652,6 +11709,9 @@ function detectVideoChanges() {
     if (currentUrl !== lastUrl) {
       lastUrl = currentUrl;
       console.log("Video changed! Re-attaching loadedmetadata listener.");
+      if (typeof updateMinimalUIForCurrentPage === "function") {
+        updateMinimalUIForCurrentPage();
+      }
       attachVideoMetadataListener();
     }
   }, 1000);
@@ -11723,6 +11783,7 @@ async function initialize() {
     }
     addControls();
     buildMinimalUIBar();
+    updateMinimalUIForCurrentPage();
     addTouchSequencerButtonToAdvancedUI();
     buildFxPadWindow();
     attachAudioPriming();
