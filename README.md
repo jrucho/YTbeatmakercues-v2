@@ -4,68 +4,14 @@ You can try out my new website with some of the extension’s features here, bef
 
 > This extension was inspired by the muscle memory workflow of the OP-Z, the versatility of Ableton Live, and the hands-on approach I developed over the years using the SP-404.
 
-![Screenshot 2025-06-06 at 19 38 10](https://github.com/user-attachments/assets/fc70d22d-c90a-4b66-9c4a-b66f001cdcc5)
+![Screenshot 2025-10-24 at 09 56 58](https://github.com/user-attachments/assets/cada46dd-8632-4d9d-bed7-34a5c1b2d1e6)
 
 Mark cue points, loop audio/video, apply live effects, and customize your beatmaking experience on YouTube.
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
-## New in 1.6.4
-* Super Knob: absolute & endless encoder support. The master “Super Knob” now auto-detects standard absolute MIDI knobs and endless/relative encoders, with configurable sensitivity and wrap-safe smoothing.
-* MIDI Loopers = Session-View style. MIDI loopers now behave like Ableton’s Session View: launching one clip/slot on a track stops the previously playing clip on that track (exclusive switching), quantized to the global grid. This lets you structure beats on the fly. (Audio loopers remain classic synced loopers.)
-* Modifier-mute for pads & keys. Hold Shift or Cmd (Ctrl on Windows/Linux) and press a sample pad or mapped keyboard key to mute/unmute that looper instantly.
-
-## New in 1.6.3
-* Allowed the looper import picker to accept both audio and video containers so MP4 audio tracks can be selected.
-* Reused the standard loop finalisation pipeline for imported media to populate the active looper slot and start playback reliably.
-  
-## New in 1.6.2
-* Added state tracking and a handleShiftTap routine so Shift (midi button) taps can play the video on pause or pause it on double-tap
-
-## New in 1.6.1
-* Added shift+pad to use as a mute toggle for drum samples
-  
-## New in 1.6
-* Unified TransportClock syncs audio and MIDI loops
-* Four MIDI loopers mirror the audio loopers with matching colors and progress bars
-* Switch between audio and MIDI loopers in the Advanced panel
-* Undo and redo restore MIDI loops
-
-## New in 1.5
-* "Nova Bass" synth window with realtime controls and pitch sync to the video feed
-* Layer multiple presets or generate new ones with the **Random** button
-* Synth stays off until opened and fades out cleanly when closed
-* Loops align perfectly to the master start time for rock‑solid sync
-* Progress bars track each loop's own start so visuals line up every time
-* The longest clip becomes the reference so loops of different lengths stay in phase
-* Newly recorded loops begin playing on the very next bar for snappier response
-* Reduced latency and cleaner loop boundaries for punchier recordings
-
-## Update 1.4
-* Four independent audio loopers with bright progress bars beneath the looper button
-* Each bar shows four tick marks so you can follow the beat
-* Progress bars are a uniform 1.4 px thick
-* Export downloads every active loop as its own track with BPM
-* Pitching loops renames files with `-pitched-<BPM>bpm`
-
-
-## Update 1.3
-* Works inside the YouTube iframe on [Samplette.io](https://samplette.io) and other `youtube-nocookie.com` embeds, even when the referrer is hidden. The toolbar becomes scrollable and MIDI features are disabled there.
-* Minimal bar and advanced window become scrollable when space is limited
-* Route audio to any available output device via the **Audio Out** dropdown ("Default output" preselected)
-* Choose your microphone via the **Audio In** dropdown ("Default input" preselected)
-* Choose a device from the **Monitor In** dropdown and toggle **Mon On/Off** to hear that source through your computer's default speakers. Monitoring starts off on each page load and stops cleanly when you navigate away.
-* Output routing adjusts automatically when selecting a new device
-* Lower latency when switching outputs using native sink routing when supported
-* Input monitoring uses a separate low-latency `AudioContext` for minimal delay
-* Advanced control buttons now display in two columns for easier access
-* **Super Knob** scrolls cues using any MIDI CC. Endless encoders behave like
-  regular 0–127 knobs for now. Hold **Shift** to reposition before continuing
-  and choose a speed (1–3) in the MIDI mapping window. Speed **1** is the
-  default, with **2** and **3** moving cues faster.
-* Avoids duplicate initialization in YouTube iframes to prevent freezes
-* Mic button cycles Off → Record (green) → Monitor (red) so you can hear the mic while capturing loops
-* Adjust cue points live using a single MIDI knob
+## New in 2.0
+* New UI
 
 [https://www.instagram.com/reel/DKsfsPPMOxg/?igsh=NzkzdDVhajFrZWk1](https://www.instagram.com/reel/DKvE_jEseKd/?igsh=MTJra2M5Z3A5ZTM4aw==)
 
