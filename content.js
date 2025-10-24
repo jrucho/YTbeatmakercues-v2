@@ -8163,25 +8163,45 @@ function goAdvancedUI() {
 }
 
 function isVideoPlaybackPage() {
+  let pathname = "";
   try {
-    const { pathname } = new URL(window.location.href);
-    if (
-      pathname.startsWith("/watch") ||
-      pathname.startsWith("/embed/") ||
-      pathname.startsWith("/live/") ||
-      pathname.startsWith("/shorts/")
-    ) {
-      return true;
-    }
+    pathname = new URL(window.location.href).pathname;
   } catch (err) {
-    // Ignore URL parsing issues and fall back to DOM checks
+    if (window.location && typeof window.location.pathname === "string") {
+      pathname = window.location.pathname;
+    }
   }
 
-  return Boolean(
-    document.querySelector(
-      "ytd-watch-flexy video, ytd-watch-grid video, ytd-reel-video-renderer video, ytd-shorts video, #movie_player video"
-    )
+  if (
+    pathname.startsWith("/watch") ||
+    pathname.startsWith("/embed/") ||
+    pathname.startsWith("/live/") ||
+    pathname.startsWith("/shorts/")
+  ) {
+    return true;
+  }
+
+  const appRoot = document.querySelector("ytd-app");
+  if (appRoot) {
+    const pageSubtype = appRoot.getAttribute("page-subtype") || "";
+    if (appRoot.hasAttribute("is-watch-page") || pageSubtype.includes("watch")) {
+      return true;
+    }
+  }
+
+  const playerVideo = document.querySelector(
+    "#movie_player video, .html5-video-player video, ytd-player video, ytd-watch-flexy video"
   );
+  if (!playerVideo) return false;
+
+  const playerContainer = playerVideo.closest(
+    "#movie_player, .html5-video-player, ytd-player, ytd-watch-flexy"
+  );
+  if (!playerContainer) return false;
+
+  if (playerContainer.closest("ytd-miniplayer")) return false;
+
+  return true;
 }
 
 function hideMinimalUIBar() {
