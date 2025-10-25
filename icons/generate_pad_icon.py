@@ -90,12 +90,28 @@ def _write_png(path: Path, pixels: list[list[tuple[int, int, int, int]]]) -> Non
 
 
 def main() -> None:
-    out_dir = Path(__file__).resolve().parent
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate Beatmaker pad icons")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path(__file__).resolve().parent,
+        help="Output directory for generated icons (defaults to the icons/ directory)",
+    )
+    args = parser.parse_args()
+
+    out_dir = args.out.resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
     for size in OUTPUT_SIZES:
         pixels = _generate_pixels(size)
         target = out_dir / f"pad-{size}.png"
         _write_png(target, pixels)
-        print(f"wrote {target.relative_to(out_dir.parent)} ({size}x{size})")
+        try:
+            rel = target.relative_to(Path.cwd())
+        except ValueError:
+            rel = target
+        print(f"wrote {rel} ({size}x{size})")
 
 
 if __name__ == "__main__":
