@@ -16,17 +16,17 @@ BACKGROUND = (5, 5, 5, 255)
 SQUARE_COLOR = (216, 216, 216, 255)
 TRIANGLE_COLOR = (245, 245, 245, 255)
 SQUARE_COORDS = [
-    (12.0, 12.0), (44.0, 12.0), (76.0, 12.0),
-    (12.0, 44.0),                 (76.0, 44.0),
-    (12.0, 76.0), (44.0, 76.0), (76.0, 76.0),
+    (6.0, 6.0), (38.0, 6.0), (70.0, 6.0),
+    (6.0, 38.0),               (70.0, 38.0),
+    (6.0, 70.0), (38.0, 70.0), (70.0, 70.0),
 ]
 SQUARE_SIZE = 20.0
 SQUARE_RADIUS = 6.0
 TRI_MARGIN = 3.0
 TRIANGLE_POINTS = (
-    (44.0 + TRI_MARGIN, 44.0 + TRI_MARGIN),
-    (44.0 + TRI_MARGIN, 64.0 - TRI_MARGIN),
-    (64.0 - TRI_MARGIN, 54.0),
+    (38.0 + TRI_MARGIN, 38.0 + TRI_MARGIN),
+    (38.0 + TRI_MARGIN, 58.0 - TRI_MARGIN),
+    (58.0 - TRI_MARGIN, 48.0),
 )
 
 

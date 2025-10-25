@@ -20,6 +20,7 @@
   background: transparent;
   color: inherit;
   cursor: pointer;
+  line-height: 0;
   transition: background-color 160ms ease, opacity 160ms ease;
 }
 
@@ -39,6 +40,8 @@
 .ytp-chrome-controls .ytbm-toggle-btn .ytbm-toggle-icon {
   width: 22px;
   height: 22px;
+  display: block;
+  object-fit: contain;
   pointer-events: none;
 }
 
