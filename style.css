@@ -6,6 +6,51 @@
   background-color: red;
   pointer-events: none;
 }
+
+.ytp-chrome-controls .ytbm-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin-right: 4px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background-color 160ms ease, opacity 160ms ease;
+}
+
+.ytp-chrome-controls .ytbm-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.ytp-chrome-controls .ytbm-toggle-btn--active {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.ytp-chrome-controls .ytbm-toggle-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.7);
+  outline-offset: 2px;
+}
+
+.ytp-chrome-controls .ytbm-toggle-btn .ytbm-toggle-icon {
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+}
+
+.ytp-big-mode .ytp-chrome-controls .ytbm-toggle-btn {
+  width: 48px;
+  height: 48px;
+}
+
+.ytp-big-mode .ytp-chrome-controls .ytbm-toggle-btn .ytbm-toggle-icon {
+  width: 28px;
+  height: 28px;
+}
 /* Synth slider style */
 input.looper-knob {
   appearance: none;

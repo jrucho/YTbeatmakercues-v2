@@ -657,7 +657,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       instrumentPowerButton = null,
       bpmDisplayButton = null,
       bpmInlineInput = null,
-      minimalActive = true,
+      minimalActive = false,
       loopProgressFills = new Array(MAX_AUDIO_LOOPS).fill(null),
       loopProgressFillsMin = new Array(MAX_AUDIO_LOOPS).fill(null),
       looperPulseEl = null,
@@ -2665,12 +2665,8 @@ function attachAudioPriming() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Ensure minimal view is active immediately
-  if (typeof goMinimalUI === "function") goMinimalUI();
-  // Also launch minimal view after audio context is ready
-  ensureAudioContext()
-    .then(() => { if (typeof goMinimalUI === "function") goMinimalUI(); })
-    .catch(console.error);
+  initializeMinimalUIManager();
+  ensureAudioContext().catch(console.error);
 
   // If no cue points are loaded, generate random cues
   if (Object.keys(cuePoints).length === 0 && typeof placeRandomCues === "function") {
@@ -2685,10 +2681,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // Attach a one-time click listener
     cueButton.addEventListener('click', () => {
       ensureAudioContext();
-      goMinimalUI(); // Open the minimal view
+      showMinimalBar({ persist: false });
     }, { once: true });
   }
 });
+
+if (document.readyState !== 'loading') {
+  initializeMinimalUIManager();
+}
 document.addEventListener('click', () => {
   ensureAudioContext();
 }, { once: true });
@@ -2712,6 +2712,9 @@ document.addEventListener(
         saveCuePointsToURL();
         updateCueMarkers();
         refreshCuesButton();
+        if (window.refreshMinimalState) {
+          window.refreshMinimalState();
+        }
       }
     }
   },
@@ -3767,15 +3770,237 @@ const YTBM_ICON_PATHS = {
 };
 
 const MINIMAL_POS_KEY = "ytbm_minimalPos";
-let minimalToggleButton = null;
-let minimalVisible = true;
+const MINIMAL_VISIBILITY_KEY = "ytbm_minimalVisibility_v1";
+const PAD_ICON_RESOURCE_PATH = "icons/pad-32.png";
+const PAD_ICON_DATA_URI = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA5NiA5NiI+CiAgPHJlY3Qgd2lkdGg9Ijk2IiBoZWlnaHQ9Ijk2IiByeD0iMjAiIGZpbGw9IiMwNTA1MDUiLz4KICA8ZyBmaWxsPSIjZDhkOGQ4Ij4KICAgIDxyZWN0IHg9IjEyIiB5PSIxMiIgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNiIvPgogICAgPHJlY3QgeD0iNDQiIHk9IjEyIiB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHJ4PSI2Ii8+CiAgICA8cmVjdCB4PSI3NiIgeT0iMTIiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgcng9IjYiLz4KICAgIDxyZWN0IHg9IjEyIiB5PSI0NCIgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNiIvPgogICAgPHJlY3QgeD0iNzYiIHk9IjQ0IiB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHJ4PSI2Ii8+CiAgICA8cmVjdCB4PSIxMiIgeT0iNzYiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgcng9IjYiLz4KICAgIDxyZWN0IHg9IjQ0IiB5PSI3NiIgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNiIvPgogICAgPHJlY3QgeD0iNzYiIHk9Ijc2IiB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHJ4PSI2Ii8+CiAgPC9nPgogIDxwYXRoIGZpbGw9IiNmNWY1ZjUiIGQ9Ik00NiA0NGg2bDE2IDEyLTE2IDEyaC02eiIvPgo8L3N2Zz4=";
 
-function ensureMinimalToggleButton() {
-  document.querySelectorAll(".ytbm-toggle-btn").forEach(btn => btn.remove());
-  minimalToggleButton = null;
+let minimalToggleButton = null;
+let minimalUserPrefersVisible = readMinimalVisibilityPreference();
+let minimalVisible = minimalUserPrefersVisible;
+let minimalVisibilityUpdatePending = false;
+let minimalNavigationObserver = null;
+
+if (minimalUserPrefersVisible) {
+  minimalActive = true;
 }
 
-function updateMinimalToggleButtonState() {}
+function readMinimalVisibilityPreference() {
+  try {
+    const stored = localStorage.getItem(MINIMAL_VISIBILITY_KEY);
+    if (stored === "1" || stored === "true") return true;
+    if (stored === "0" || stored === "false") return false;
+  } catch (err) {
+    console.warn("Failed to read minimal visibility preference", err);
+  }
+  return false;
+}
+
+function persistMinimalVisibilityPreference(value) {
+  try {
+    localStorage.setItem(MINIMAL_VISIBILITY_KEY, value ? "1" : "0");
+  } catch (err) {
+    console.warn("Failed to persist minimal visibility preference", err);
+  }
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    try {
+      chrome.storage.local.set({ [MINIMAL_VISIBILITY_KEY]: value }, () => {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          console.warn("chrome.storage.local set failed", chrome.runtime.lastError.message);
+        }
+      });
+    } catch (err) {
+      console.warn("Unable to persist preference to chrome.storage", err);
+    }
+  }
+}
+
+function loadPreferenceFromChromeStorage() {
+  if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) return;
+  try {
+    chrome.storage.local.get([MINIMAL_VISIBILITY_KEY], (result) => {
+      if (chrome.runtime && chrome.runtime.lastError) {
+        console.warn("chrome.storage.local get failed", chrome.runtime.lastError.message);
+        return;
+      }
+      if (Object.prototype.hasOwnProperty.call(result, MINIMAL_VISIBILITY_KEY)) {
+        const stored = result[MINIMAL_VISIBILITY_KEY];
+        const pref = typeof stored === "boolean" ? stored : stored === "1" || stored === "true";
+        minimalUserPrefersVisible = !!pref;
+        if (minimalUserPrefersVisible) {
+          minimalActive = true;
+        }
+        scheduleMinimalVisibilityUpdate();
+      }
+    });
+  } catch (err) {
+    console.warn("Unable to read preference from chrome.storage", err);
+  }
+}
+
+function getPadIconURL() {
+  try {
+    if (typeof chrome !== "undefined" && chrome.runtime && typeof chrome.runtime.getURL === "function") {
+      return chrome.runtime.getURL(PAD_ICON_RESOURCE_PATH);
+    }
+  } catch (err) {
+    console.warn("Failed to resolve pad icon URL", err);
+  }
+  return PAD_ICON_DATA_URI;
+}
+
+function createMinimalToggleButton() {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ytp-button ytbm-toggle-btn";
+  button.setAttribute("aria-label", "Toggle Beatmaker minimal bar");
+  button.addEventListener("click", () => {
+    button.blur();
+    setMinimalPreference(!minimalUserPrefersVisible);
+  });
+
+  const icon = document.createElement("img");
+  icon.className = "ytbm-toggle-icon";
+  icon.alt = "";
+  icon.setAttribute("aria-hidden", "true");
+  icon.src = getPadIconURL();
+  icon.addEventListener("error", () => {
+    if (icon.src !== PAD_ICON_DATA_URI) {
+      icon.src = PAD_ICON_DATA_URI;
+    }
+  });
+  button.appendChild(icon);
+
+  return button;
+}
+
+function attachToggleButton() {
+  const controls = document.querySelector(".ytp-right-controls");
+  if (!controls) return;
+
+  if (!minimalToggleButton) {
+    minimalToggleButton = createMinimalToggleButton();
+  }
+
+  if (minimalToggleButton.parentElement !== controls) {
+    controls.insertBefore(minimalToggleButton, controls.firstChild || null);
+  }
+
+  updateMinimalToggleButtonState();
+}
+
+function detachToggleButton() {
+  if (minimalToggleButton && minimalToggleButton.parentElement) {
+    minimalToggleButton.parentElement.removeChild(minimalToggleButton);
+  }
+}
+
+function updateMinimalToggleButtonState() {
+  if (!minimalToggleButton) return;
+
+  const isVideoPage = isVideoPlaybackPage() && !blindMode;
+  const isVisible = minimalActive && minimalVisible && isVideoPage;
+
+  minimalToggleButton.classList.toggle("ytbm-toggle-btn--active", isVisible);
+  minimalToggleButton.setAttribute("aria-pressed", isVisible ? "true" : "false");
+  minimalToggleButton.title = isVisible ? "Hide Beatmaker minimal bar" : "Show Beatmaker minimal bar";
+}
+
+function setMinimalPreference(visible) {
+  minimalUserPrefersVisible = !!visible;
+  minimalActive = !!visible;
+  persistMinimalVisibilityPreference(minimalUserPrefersVisible);
+  applyMinimalVisibility();
+}
+
+function scheduleMinimalVisibilityUpdate() {
+  if (minimalVisibilityUpdatePending) return;
+  minimalVisibilityUpdatePending = true;
+  requestAnimationFrame(() => {
+    minimalVisibilityUpdatePending = false;
+    applyMinimalVisibility();
+  });
+}
+
+function isVideoPlaybackPage() {
+  const { pathname, search } = window.location;
+  if (pathname.startsWith("/shorts")) return false;
+  if (pathname === "/" || pathname.startsWith("/feed")) return false;
+
+  const hasVideoParam = search.includes("v=");
+  const watchLike = pathname.startsWith("/watch") || pathname.startsWith("/embed/") || pathname.startsWith("/live");
+
+  const watchFlexy = document.querySelector("ytd-watch-flexy:not([hidden])");
+  const moviePlayer = document.querySelector("#movie_player, .html5-video-player");
+  const videoEl = getVideoElement();
+
+  const playerVisible = !!(moviePlayer && moviePlayer.offsetParent !== null);
+  const flexyVisible = !!(watchFlexy && watchFlexy.offsetParent !== null);
+  const videoVisible = !!(videoEl && videoEl.offsetParent !== null && videoEl.videoWidth > 0);
+
+  if (watchLike && hasVideoParam) return true;
+  if (flexyVisible && (playerVisible || videoVisible)) return true;
+  if (pathname.startsWith("/embed/") && (playerVisible || videoVisible)) return true;
+
+  return false;
+}
+
+function applyMinimalVisibility() {
+  const isVideoPage = isVideoPlaybackPage();
+
+  if (!isVideoPage || blindMode) {
+    detachToggleButton();
+    if (minimalUserPrefersVisible) {
+      hideMinimalBar({ persist: false, keepActive: true });
+    } else {
+      hideMinimalBar({ persist: false });
+    }
+    updateMinimalToggleButtonState();
+    return;
+  }
+
+  attachToggleButton();
+
+  const advancedVisible = panelContainer && panelContainer.style.display !== "none";
+  const shouldShowMinimal = !advancedVisible && (minimalActive || minimalUserPrefersVisible);
+
+  if (shouldShowMinimal) {
+    showMinimalBar({ persist: false });
+  } else {
+    const keepActive = minimalUserPrefersVisible && !advancedVisible;
+    hideMinimalBar({ persist: false, keepActive });
+  }
+
+  updateMinimalToggleButtonState();
+}
+
+let minimalManagerInitialized = false;
+
+function initializeMinimalUIManager() {
+  if (minimalManagerInitialized) return;
+  minimalManagerInitialized = true;
+
+  loadPreferenceFromChromeStorage();
+  applyMinimalVisibility();
+
+  const navigationEvents = [
+    "yt-navigate-start",
+    "yt-navigate-finish",
+    "yt-navigate-cache-loaded",
+    "yt-page-data-updated",
+    "yt-player-updated",
+    "spfdone",
+    "popstate"
+  ];
+
+  navigationEvents.forEach((evt) => {
+    window.addEventListener(evt, scheduleMinimalVisibilityUpdate, { passive: true });
+  });
+
+  window.addEventListener("yt-action", scheduleMinimalVisibilityUpdate, { passive: true });
+
+  minimalNavigationObserver = new MutationObserver(() => scheduleMinimalVisibilityUpdate());
+  minimalNavigationObserver.observe(document.documentElement, { childList: true, subtree: true });
+}
 
 function createIconButton(iconPath, labelText) {
   const button = document.createElement("button");
@@ -3792,7 +4017,6 @@ function createIconButton(iconPath, labelText) {
  * Minimal UI Bar
  **************************************/
 function mountMinimalUIContainer() {
-  ensureMinimalToggleButton();
   if (!minimalUIContainer) return;
   if (!minimalUIContainer.isConnected) {
     document.body.appendChild(minimalUIContainer);
@@ -3887,6 +4111,12 @@ function onMinimalPointerUp(e) {
   minimalUIContainer = document.createElement("div");
   minimalUIContainer.className = "ytbm-minimal-bar ytbm-glass";
   minimalUIContainer.style.display = "none";
+  minimalUIContainer.addEventListener("dblclick", (event) => {
+    if (event.target && event.target.closest("button, input, select, textarea, .ytbm-range")) {
+      return;
+    }
+    setMinimalPreference(false);
+  });
   mountMinimalUIContainer();
   setupMinimalUIDrag();
 
@@ -8131,10 +8361,43 @@ function analyseBPMFromEnergies(energies) {
   return Math.round(bpm);
 }
 
-function goAdvancedUI() {
-  minimalActive = false;
+function hideMinimalBar({ persist = false, keepActive = false } = {}) {
+  if (persist) {
+    minimalUserPrefersVisible = false;
+    persistMinimalVisibilityPreference(false);
+  }
+  if (!keepActive) {
+    minimalActive = false;
+  }
   minimalVisible = false;
+  if (minimalUIContainer) {
+    minimalUIContainer.style.display = "none";
+  }
   updateMinimalToggleButtonState();
+}
+
+function showMinimalBar({ persist = false } = {}) {
+  if (blindMode) return;
+  if (persist) {
+    minimalUserPrefersVisible = true;
+    persistMinimalVisibilityPreference(true);
+  }
+  minimalActive = true;
+  minimalVisible = true;
+  if (panelContainer) panelContainer.style.display = "none";
+  if (!minimalUIContainer) {
+    buildMinimalUIBar();
+  } else {
+    setupMinimalUIDrag();
+    mountMinimalUIContainer();
+    minimalUIContainer.style.display = "flex";
+    if (window.refreshMinimalState) window.refreshMinimalState();
+  }
+  updateMinimalToggleButtonState();
+}
+
+function goAdvancedUI() {
+  hideMinimalBar({ persist: false });
   if (panelContainer) panelContainer.style.display = "block";
   // Remove any minimal UI containers present in the DOM.
   document.querySelectorAll('.ytbm-minimal-bar').forEach(el => {
@@ -8149,20 +8412,7 @@ function goAdvancedUI() {
 }
 
 function goMinimalUI() {
-  if (blindMode) return; // do not show the minimal UI if blind mode is active
-  minimalActive = true;
-  minimalVisible = true;
-  updateMinimalToggleButtonState();
-  if (panelContainer) panelContainer.style.display = "none";
-  // Rebuild the minimal UI if it doesn't exist.
-  if (!minimalUIContainer) {
-    buildMinimalUIBar();
-  } else {
-    setupMinimalUIDrag();
-    mountMinimalUIContainer();
-    minimalUIContainer.style.display = "flex";
-  }
-  if (window.refreshMinimalState) window.refreshMinimalState();
+  showMinimalBar({ persist: false });
 }
 
 /**************************************
@@ -11671,7 +11921,7 @@ function attachVideoMetadataListener() {
 // 3) In that listener, reset pitch back to 0
 function onNewVideoLoaded() {
   console.log("New video loaded => resetting pitch to 0%");
-  ensureMinimalToggleButton();
+  scheduleMinimalVisibilityUpdate();
 
   // Reset everything
   pitchPercentage = 0;
