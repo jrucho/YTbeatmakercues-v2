@@ -2664,31 +2664,6 @@ function attachAudioPriming() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  initializeMinimalUIManager();
-  ensureAudioContext().catch(console.error);
-
-  // If no cue points are loaded, generate random cues
-  if (Object.keys(cuePoints).length === 0 && typeof placeRandomCues === "function") {
-    placeRandomCues();
-    updateCueMarkers();
-    refreshCuesButton();
-  }
-
-  // Assuming your button is created as the drag handle for your panel:
-  const cueButton = document.querySelector('.looper-drag-handle');
-  if (cueButton) {
-    // Attach a one-time click listener
-    cueButton.addEventListener('click', () => {
-      ensureAudioContext();
-      showMinimalBar({ persist: false });
-    }, { once: true });
-  }
-});
-
-if (document.readyState !== 'loading') {
-  initializeMinimalUIManager();
-}
 document.addEventListener('click', () => {
   ensureAudioContext();
 }, { once: true });
@@ -4000,6 +3975,32 @@ function initializeMinimalUIManager() {
 
   minimalNavigationObserver = new MutationObserver(() => scheduleMinimalVisibilityUpdate());
   minimalNavigationObserver.observe(document.documentElement, { childList: true, subtree: true });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  initializeMinimalUIManager();
+  ensureAudioContext().catch(console.error);
+
+  // If no cue points are loaded, generate random cues
+  if (Object.keys(cuePoints).length === 0 && typeof placeRandomCues === "function") {
+    placeRandomCues();
+    updateCueMarkers();
+    refreshCuesButton();
+  }
+
+  // Assuming your button is created as the drag handle for your panel:
+  const cueButton = document.querySelector('.looper-drag-handle');
+  if (cueButton) {
+    // Attach a one-time click listener
+    cueButton.addEventListener('click', () => {
+      ensureAudioContext();
+      showMinimalBar({ persist: false });
+    }, { once: true });
+  }
+});
+
+if (document.readyState !== 'loading') {
+  initializeMinimalUIManager();
 }
 
 function createIconButton(iconPath, labelText) {
