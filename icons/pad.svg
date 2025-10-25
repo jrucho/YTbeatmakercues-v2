@@ -10,5 +10,5 @@
     <rect x="38" y="70" width="20" height="20" rx="6"/>
     <rect x="70" y="70" width="20" height="20" rx="6"/>
   </g>
-  <path fill="#f5f5f5" d="M40 38h6l16 12-16 12h-6z"/>
+  <path fill="#f5f5f5" d="M37 38h6l16 12-16 12h-6z"/>
 </svg>

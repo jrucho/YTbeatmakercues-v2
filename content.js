@@ -3747,7 +3747,7 @@ const YTBM_ICON_PATHS = {
 const MINIMAL_POS_KEY = "ytbm_minimalPos";
 const MINIMAL_VISIBILITY_KEY = "ytbm_minimalVisibility_v1";
 const PAD_ICON_RESOURCE_PATH = "icons/pad.svg";
-const PAD_ICON_DATA_URI = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA5NiA5NiI+CiAgPHJlY3Qgd2lkdGg9Ijk2IiBoZWlnaHQ9Ijk2IiByeD0iMjAiIGZpbGw9IiMwNTA1MDUiLz4KICA8ZyBmaWxsPSIjZDhkOGQ4Ij4KICAgIDxyZWN0IHg9IjYiIHk9IjYiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgcng9IjYiLz4KICAgIDxyZWN0IHg9IjM4IiB5PSI2IiB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHJ4PSI2Ii8+CiAgICA8cmVjdCB4PSI3MCIgeT0iNiIgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNiIvPgogICAgPHJlY3QgeD0iNiIgeT0iMzgiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgcng9IjYiLz4KICAgIDxyZWN0IHg9IjcwIiB5PSIzOCIgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNiIvPgogICAgPHJlY3QgeD0iNiIgeT0iNzAiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgcng9IjYiLz4KICAgIDxyZWN0IHg9IjM4IiB5PSI3MCIgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNiIvPgogICAgPHJlY3QgeD0iNzAiIHk9IjcwIiB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHJ4PSI2Ii8+CiAgPC9nPgogIDxwYXRoIGZpbGw9IiNmNWY1ZjUiIGQ9Ik00MCAzOGg2bDE2IDEyLTE2IDEyaC02eiIvPgo8L3N2Zz4=";
+const PAD_ICON_DATA_URI = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA5NiA5NiI+CiAgPHJlY3Qgd2lkdGg9Ijk2IiBoZWlnaHQ9Ijk2IiByeD0iMjAiIGZpbGw9IiMwNTA1MDUiLz4KICA8ZyBmaWxsPSIjZDhkOGQ4Ij4KICAgIDxyZWN0IHg9IjYiIHk9IjYiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgcng9IjYiLz4KICAgIDxyZWN0IHg9IjM4IiB5PSI2IiB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHJ4PSI2Ii8+CiAgICA8cmVjdCB4PSI3MCIgeT0iNiIgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNiIvPgogICAgPHJlY3QgeD0iNiIgeT0iMzgiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgcng9IjYiLz4KICAgIDxyZWN0IHg9IjcwIiB5PSIzOCIgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNiIvPgogICAgPHJlY3QgeD0iNiIgeT0iNzAiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgcng9IjYiLz4KICAgIDxyZWN0IHg9IjM4IiB5PSI3MCIgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNiIvPgogICAgPHJlY3QgeD0iNzAiIHk9IjcwIiB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHJ4PSI2Ii8+CiAgPC9nPgogIDxwYXRoIGZpbGw9IiNmNWY1ZjUiIGQ9Ik0zNyAzOGg2bDE2IDEyLTE2IDEyaC02eiIvPgo8L3N2Zz4=";
 
 let minimalToggleButton = null;
 let minimalUserPrefersVisible = readMinimalVisibilityPreference();
@@ -3881,10 +3881,20 @@ function updateMinimalToggleButtonState() {
 }
 
 function isMinimalBarVisibleOnScreen() {
-  if (!minimalActive || !minimalVisible) return false;
   if (blindMode) return false;
   if (!isVideoPlaybackPage()) return false;
-  if (minimalUIContainer && minimalUIContainer.style.display === "none") return false;
+
+  if (!minimalUIContainer || !minimalUIContainer.isConnected) {
+    return minimalActive && minimalVisible;
+  }
+
+  const style = window.getComputedStyle(minimalUIContainer);
+  if (style.display === "none" || style.visibility === "hidden") return false;
+  if (Number(style.opacity) === 0) return false;
+
+  const rect = minimalUIContainer.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return false;
+
   return true;
 }
 

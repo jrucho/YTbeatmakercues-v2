@@ -42,6 +42,7 @@
   height: 22px;
   display: block;
   object-fit: contain;
+  object-position: center;
   pointer-events: none;
 }
 

@@ -22,11 +22,12 @@ SQUARE_COORDS = [
 ]
 SQUARE_SIZE = 20.0
 SQUARE_RADIUS = 6.0
-TRI_MARGIN = 3.0
+ARROW_BODY = (37.0, 38.0, 6.0, 24.0)
+ARROW_TIP_LENGTH = 16.0
 TRIANGLE_POINTS = (
-    (38.0 + TRI_MARGIN, 38.0 + TRI_MARGIN),
-    (38.0 + TRI_MARGIN, 58.0 - TRI_MARGIN),
-    (58.0 - TRI_MARGIN, 48.0),
+    (ARROW_BODY[0] + ARROW_BODY[2], ARROW_BODY[1]),
+    (ARROW_BODY[0] + ARROW_BODY[2], ARROW_BODY[1] + ARROW_BODY[3]),
+    (ARROW_BODY[0] + ARROW_BODY[2] + ARROW_TIP_LENGTH, ARROW_BODY[1] + ARROW_BODY[3] / 2.0),
 )
 
 
@@ -34,12 +35,19 @@ def _sign(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> f
     return (px - bx) * (ay - by) - (ax - bx) * (py - by)
 
 
-def _point_in_triangle(px: float, py: float) -> bool:
-    (ax, ay), (bx, by), (cx, cy) = TRIANGLE_POINTS
+def _point_in_triangle(px: float, py: float, points: tuple[tuple[float, float], ...]) -> bool:
+    (ax, ay), (bx, by), (cx, cy) = points
     b1 = _sign(px, py, ax, ay, bx, by) <= 0.0
     b2 = _sign(px, py, bx, by, cx, cy) <= 0.0
     b3 = _sign(px, py, cx, cy, ax, ay) <= 0.0
     return (b1 == b2) and (b2 == b3)
+
+
+def _point_in_arrow(px: float, py: float) -> bool:
+    left, top, width, height = ARROW_BODY
+    if left <= px <= left + width and top <= py <= top + height:
+        return True
+    return _point_in_triangle(px, py, TRIANGLE_POINTS)
 
 
 def _point_in_round_rect(px: float, py: float, rx: float, ry: float) -> bool:
@@ -58,7 +66,7 @@ def _generate_pixels(size: int) -> list[list[tuple[int, int, int, int]]]:
         for x in range(size):
             base_x = (x + 0.5) / size * BASE_SIZE
             base_y = (y + 0.5) / size * BASE_SIZE
-            if _point_in_triangle(base_x, base_y):
+            if _point_in_arrow(base_x, base_y):
                 pixels[y][x] = TRIANGLE_COLOR
                 continue
             for rx, ry in SQUARE_COORDS:
