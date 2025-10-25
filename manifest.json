@@ -11,7 +11,17 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_icon": "icon.png"
+    "default_icon": {
+      "16": "icons/pad.svg",
+      "32": "icons/pad.svg",
+      "48": "icons/pad.svg"
+    }
+  },
+  "icons": {
+    "16": "icons/pad.svg",
+    "32": "icons/pad.svg",
+    "48": "icons/pad.svg",
+    "128": "icons/pad.svg"
   },
   "content_scripts": [
     {
@@ -26,8 +36,13 @@
     }
   ],
   "web_accessible_resources": [{
-    "resources": ["sounds/*","sp303-compressor-worklet.js",
-      "sp404-compressor-worklet.js"],
+    "resources": [
+      "sounds/*",
+      "sp303-compressor-worklet.js",
+      "sp404-compressor-worklet.js",
+      "icons/*.png",
+      "icons/*.svg"
+    ],
     "matches": ["<all_urls>"]
   }],
   "options_page": "options.html"

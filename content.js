@@ -1,39 +1,41 @@
 // ---- Basic helpers (added by ChatGPT fix) ----
-if (typeof getVideoElement === "undefined") {
-  function getVideoElement() {
+const globalScope = typeof window !== "undefined" ? window : globalThis;
+
+if (typeof globalScope.getVideoElement !== "function") {
+  globalScope.getVideoElement = function getVideoElement() {
     return document.querySelector('video');
-  }
+  };
 }
 
-if (typeof safeSeekVideo === "undefined") {
+if (typeof globalScope.safeSeekVideo !== "function") {
   /**
    * Seek the main YouTube player safely and resume playback.
    * @param {*} _  (kept for compatibility with old call‑sites that pass “evt”)
    * @param {number} t  target time in seconds
    */
-  function safeSeekVideo(_, t) {
+  globalScope.safeSeekVideo = function safeSeekVideo(_, t) {
     const vid = getVideoElement();
     if (!vid) return;
     vid.currentTime = t;
     vid.play();
-  }
+  };
 }
 
-if (typeof escapeHtml === "undefined") {
-  function escapeHtml(str) {
+if (typeof globalScope.escapeHtml !== "function") {
+  globalScope.escapeHtml = function escapeHtml(str) {
     return String(str)
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/\"/g, "&quot;")
       .replace(/'/g, "&#39;");
-  }
+  };
 }
 // Provide a safe, global helper to attach the Touch Sequencer button
 // to the Advanced UI. This avoids init-time errors if other copies
 // of the code forgot to define it.
-if (typeof addTouchSequencerButtonToAdvancedUI === "undefined") {
-  function addTouchSequencerButtonToAdvancedUI() {
+if (typeof globalScope.addTouchSequencerButtonToAdvancedUI !== "function") {
+  globalScope.addTouchSequencerButtonToAdvancedUI = function addTouchSequencerButtonToAdvancedUI() {
     try {
       if (!panelContainer) return;
       if (panelContainer.querySelector('.ytbm-touch-sequencer-btn')) return;
@@ -61,7 +63,7 @@ if (typeof addTouchSequencerButtonToAdvancedUI === "undefined") {
     } catch (e) {
       // Fail silently to avoid breaking init
     }
-  }
+  };
 }
 // ----------------------------------------------
 // --- Suggest Cues from Transients Helper ---
@@ -113,24 +115,73 @@ async function suggestCuesFromTransients() {
 
   saveCuePointsToURL();
   updateCueMarkers();
-  refreshCuesButton();
+  refreshCueDisplays();
 }
 // --- Random Cues Button logic (normal and modified press) ---
-if (typeof placeRandomCues === "undefined") {
+if (typeof globalScope.placeRandomCues !== "function") {
   // Dummy fallback if not defined elsewhere
-  function placeRandomCues() {
+  globalScope.placeRandomCues = function placeRandomCues() {
     // No-op, add your implementation elsewhere
-  }
+  };
 }
-if (typeof refreshCuesButton === "undefined") {
-  function refreshCuesButton() {}
+if (typeof globalScope.refreshCuesButton !== "function") {
+  globalScope.refreshCuesButton = function refreshCuesButton() {};
 }
 
-if (typeof saveCuePointsToURL === "undefined") {
-  function saveCuePointsToURL() {}
+if (typeof globalScope.saveCuePointsToURL !== "function") {
+  globalScope.saveCuePointsToURL = function saveCuePointsToURL() {};
 }
-if (typeof updateCueMarkers === "undefined") {
-  function updateCueMarkers() {}
+if (typeof globalScope.updateCueMarkers !== "function") {
+  globalScope.updateCueMarkers = function updateCueMarkers() {};
+}
+
+function refreshCueDisplays() {
+  try {
+    refreshCuesButton();
+  } catch (err) {
+    console.warn("Failed to refresh advanced cue button", err);
+  }
+  if (typeof window.refreshMinimalState === "function") {
+    try {
+      window.refreshMinimalState();
+    } catch (err) {
+      console.warn("Failed to refresh minimal cue state", err);
+    }
+  }
+}
+
+function handleCueHotkey(e) {
+  if (!(e.ctrlKey || e.metaKey)) return false;
+  if (typeof e.key !== "string" || e.key < "0" || e.key > "9") return false;
+  if (typeof isTypingInTextField === "function" && isTypingInTextField(e)) return false;
+
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+
+  const cueKey = e.key;
+  if (e.shiftKey || e.altKey) {
+    if (cuePoints[cueKey] !== undefined) {
+      pushUndoState();
+      delete cuePoints[cueKey];
+      saveCuePointsToURL();
+      updateCueMarkers();
+      refreshCueDisplays();
+    }
+    return true;
+  }
+
+  const vid = getVideoElement();
+  if (!vid) {
+    return true;
+  }
+
+  pushUndoState();
+  cuePoints[cueKey] = vid.currentTime;
+  saveCuePointsToURL();
+  updateCueMarkers();
+  refreshCueDisplays();
+  return true;
 }
 
 // Attach to minimal random cues button
@@ -657,7 +708,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       instrumentPowerButton = null,
       bpmDisplayButton = null,
       bpmInlineInput = null,
-      minimalActive = true,
+      minimalActive = false,
       loopProgressFills = new Array(MAX_AUDIO_LOOPS).fill(null),
       loopProgressFillsMin = new Array(MAX_AUDIO_LOOPS).fill(null),
       looperPulseEl = null,
@@ -2023,7 +2074,7 @@ for (let i = 0; i < 10; i++) {
       cuePoints[cueKey] = vid.currentTime;
       saveCuePointsToURL();
       updateCueMarkers();
-      refreshCuesButton();
+      refreshCueDisplays();
       console.log(`Modifier active: Pad ${i} marked cue ${cueKey} at time ${vid.currentTime}`);
     } else {
       // For normal pad taps, mirror the digit‑key path:
@@ -2369,7 +2420,7 @@ hideYouTubePopups();
                   cuePoints[key] = vid.currentTime;
                   saveCuePointsToURL();
                   updateCueMarkers();
-                  refreshCuesButton();
+                  refreshCueDisplays();
                   return; // skip original to avoid playback
                 }
                 break;
@@ -2427,7 +2478,7 @@ document.addEventListener(
         cuePoints[key] = vid.currentTime;
         saveCuePointsToURL();
         updateCueMarkers();
-        refreshCuesButton();
+        refreshCueDisplays();
         return; // do not play on this first press
       }
       // Otherwise, play the existing cue
@@ -2664,31 +2715,6 @@ function attachAudioPriming() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  // Ensure minimal view is active immediately
-  if (typeof goMinimalUI === "function") goMinimalUI();
-  // Also launch minimal view after audio context is ready
-  ensureAudioContext()
-    .then(() => { if (typeof goMinimalUI === "function") goMinimalUI(); })
-    .catch(console.error);
-
-  // If no cue points are loaded, generate random cues
-  if (Object.keys(cuePoints).length === 0 && typeof placeRandomCues === "function") {
-    placeRandomCues();
-    updateCueMarkers();
-    refreshCuesButton();
-  }
-
-  // Assuming your button is created as the drag handle for your panel:
-  const cueButton = document.querySelector('.looper-drag-handle');
-  if (cueButton) {
-    // Attach a one-time click listener
-    cueButton.addEventListener('click', () => {
-      ensureAudioContext();
-      goMinimalUI(); // Open the minimal view
-    }, { once: true });
-  }
-});
 document.addEventListener('click', () => {
   ensureAudioContext();
 }, { once: true });
@@ -2698,22 +2724,7 @@ document.addEventListener('click', () => {
 document.addEventListener(
   "keydown",
   (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key >= "0" && e.key <= "9") {
-      const vid = getVideoElement();
-      if (vid) {
-        // Save current time before any jump occurs.
-        const t = vid.currentTime;
-        // Prevent YouTube's default behavior:
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        // Now mark the cue point:
-        pushUndoState();
-        cuePoints[e.key] = t;
-        saveCuePointsToURL();
-        updateCueMarkers();
-        refreshCuesButton();
-      }
-    }
+    if (handleCueHotkey(e)) return;
   },
   true // capture phase
 );
@@ -2999,7 +3010,7 @@ function restoreAppState(st) {
   // Re-apply everything
   saveCuePointsToURL();
   updateCueMarkers();
-  refreshCuesButton();
+  refreshCueDisplays();
 
   updateSampleDisplay("kick");
   updateSampleDisplay("hihat");
@@ -3767,15 +3778,281 @@ const YTBM_ICON_PATHS = {
 };
 
 const MINIMAL_POS_KEY = "ytbm_minimalPos";
-let minimalToggleButton = null;
-let minimalVisible = true;
+const MINIMAL_VISIBILITY_KEY = "ytbm_minimalVisibility_v1";
+const PAD_ICON_RESOURCE_PATH = "icons/pad.svg";
+const PAD_ICON_DATA_URI = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA5NiA5NiI+CiAgPHJlY3Qgd2lkdGg9Ijk2IiBoZWlnaHQ9Ijk2IiByeD0iMjAiIGZpbGw9IiMwNTA1MDUiLz4KICA8ZyBmaWxsPSIjZDhkOGQ4Ij4KICAgIDxyZWN0IHg9IjYiIHk9IjYiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgcng9IjYiLz4KICAgIDxyZWN0IHg9IjM4IiB5PSI2IiB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHJ4PSI2Ii8+CiAgICA8cmVjdCB4PSI3MCIgeT0iNiIgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNiIvPgogICAgPHJlY3QgeD0iNiIgeT0iMzgiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgcng9IjYiLz4KICAgIDxyZWN0IHg9IjcwIiB5PSIzOCIgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNiIvPgogICAgPHJlY3QgeD0iNiIgeT0iNzAiIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgcng9IjYiLz4KICAgIDxyZWN0IHg9IjM4IiB5PSI3MCIgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiByeD0iNiIvPgogICAgPHJlY3QgeD0iNzAiIHk9IjcwIiB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHJ4PSI2Ii8+CiAgPC9nPgogIDxwYXRoIGZpbGw9IiNmNWY1ZjUiIGQ9Ik0zNyAzOGg2bDE2IDEyLTE2IDEyaC02eiIvPgo8L3N2Zz4=";
 
-function ensureMinimalToggleButton() {
-  document.querySelectorAll(".ytbm-toggle-btn").forEach(btn => btn.remove());
-  minimalToggleButton = null;
+let minimalToggleButton = null;
+let minimalUserPrefersVisible = readMinimalVisibilityPreference();
+let minimalVisible = minimalUserPrefersVisible;
+let minimalVisibilityUpdatePending = false;
+let minimalNavigationObserver = null;
+
+if (minimalUserPrefersVisible) {
+  minimalActive = true;
 }
 
-function updateMinimalToggleButtonState() {}
+function readMinimalVisibilityPreference() {
+  try {
+    const stored = localStorage.getItem(MINIMAL_VISIBILITY_KEY);
+    if (stored === "1" || stored === "true") return true;
+    if (stored === "0" || stored === "false") return false;
+  } catch (err) {
+    console.warn("Failed to read minimal visibility preference", err);
+  }
+  return false;
+}
+
+function persistMinimalVisibilityPreference(value) {
+  try {
+    localStorage.setItem(MINIMAL_VISIBILITY_KEY, value ? "1" : "0");
+  } catch (err) {
+    console.warn("Failed to persist minimal visibility preference", err);
+  }
+  if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+    try {
+      chrome.storage.local.set({ [MINIMAL_VISIBILITY_KEY]: value }, () => {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          console.warn("chrome.storage.local set failed", chrome.runtime.lastError.message);
+        }
+      });
+    } catch (err) {
+      console.warn("Unable to persist preference to chrome.storage", err);
+    }
+  }
+}
+
+function loadPreferenceFromChromeStorage() {
+  if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) return;
+  try {
+    chrome.storage.local.get([MINIMAL_VISIBILITY_KEY], (result) => {
+      if (chrome.runtime && chrome.runtime.lastError) {
+        console.warn("chrome.storage.local get failed", chrome.runtime.lastError.message);
+        return;
+      }
+      if (Object.prototype.hasOwnProperty.call(result, MINIMAL_VISIBILITY_KEY)) {
+        const stored = result[MINIMAL_VISIBILITY_KEY];
+        const pref = typeof stored === "boolean" ? stored : stored === "1" || stored === "true";
+        minimalUserPrefersVisible = !!pref;
+        if (minimalUserPrefersVisible) {
+          minimalActive = true;
+        }
+        scheduleMinimalVisibilityUpdate();
+      }
+    });
+  } catch (err) {
+    console.warn("Unable to read preference from chrome.storage", err);
+  }
+}
+
+function getPadIconURL() {
+  try {
+    if (typeof chrome !== "undefined" && chrome.runtime && typeof chrome.runtime.getURL === "function") {
+      return chrome.runtime.getURL(PAD_ICON_RESOURCE_PATH);
+    }
+  } catch (err) {
+    console.warn("Failed to resolve pad icon URL", err);
+  }
+  return PAD_ICON_DATA_URI;
+}
+
+function createMinimalToggleButton() {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ytp-button ytbm-toggle-btn";
+  button.setAttribute("aria-label", "Toggle Beatmaker minimal bar");
+  button.addEventListener("click", () => {
+    button.blur();
+    const nextVisible = !isMinimalBarVisibleOnScreen();
+    setMinimalPreference(nextVisible);
+  });
+
+  const icon = document.createElement("img");
+  icon.className = "ytbm-toggle-icon";
+  icon.alt = "";
+  icon.setAttribute("aria-hidden", "true");
+  icon.src = getPadIconURL();
+  icon.addEventListener("error", () => {
+    if (icon.src !== PAD_ICON_DATA_URI) {
+      icon.src = PAD_ICON_DATA_URI;
+    }
+  });
+  button.appendChild(icon);
+
+  return button;
+}
+
+function attachToggleButton() {
+  const controls = document.querySelector(".ytp-right-controls");
+  if (!controls) return;
+
+  if (!minimalToggleButton) {
+    minimalToggleButton = createMinimalToggleButton();
+  }
+
+  if (minimalToggleButton.parentElement !== controls) {
+    controls.insertBefore(minimalToggleButton, controls.firstChild || null);
+  }
+
+  updateMinimalToggleButtonState();
+}
+
+function detachToggleButton() {
+  if (minimalToggleButton && minimalToggleButton.parentElement) {
+    minimalToggleButton.parentElement.removeChild(minimalToggleButton);
+  }
+}
+
+function updateMinimalToggleButtonState() {
+  if (!minimalToggleButton) return;
+
+  const isVisible = isMinimalBarVisibleOnScreen();
+
+  minimalToggleButton.classList.toggle("ytbm-toggle-btn--active", isVisible);
+  minimalToggleButton.setAttribute("aria-pressed", isVisible ? "true" : "false");
+  minimalToggleButton.title = isVisible ? "Hide Beatmaker minimal bar" : "Show Beatmaker minimal bar";
+}
+
+function isMinimalBarVisibleOnScreen() {
+  if (blindMode) return false;
+  if (!isVideoPlaybackPage()) return false;
+
+  if (!minimalUIContainer || !minimalUIContainer.isConnected) {
+    return minimalActive && minimalVisible;
+  }
+
+  const style = window.getComputedStyle(minimalUIContainer);
+  if (style.display === "none" || style.visibility === "hidden") return false;
+  if (Number(style.opacity) === 0) return false;
+
+  const rect = minimalUIContainer.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return false;
+
+  return true;
+}
+
+function setMinimalPreference(visible) {
+  minimalUserPrefersVisible = !!visible;
+  minimalActive = !!visible;
+  persistMinimalVisibilityPreference(minimalUserPrefersVisible);
+  applyMinimalVisibility();
+}
+
+function scheduleMinimalVisibilityUpdate() {
+  if (minimalVisibilityUpdatePending) return;
+  minimalVisibilityUpdatePending = true;
+  requestAnimationFrame(() => {
+    minimalVisibilityUpdatePending = false;
+    applyMinimalVisibility();
+  });
+}
+
+function isVideoPlaybackPage() {
+  const { pathname, search } = window.location;
+  if (pathname.startsWith("/shorts")) return false;
+  if (pathname === "/" || pathname.startsWith("/feed")) return false;
+
+  const hasVideoParam = search.includes("v=");
+  const watchLike = pathname.startsWith("/watch") || pathname.startsWith("/embed/") || pathname.startsWith("/live");
+
+  const watchFlexy = document.querySelector("ytd-watch-flexy:not([hidden])");
+  const moviePlayer = document.querySelector("#movie_player, .html5-video-player");
+  const videoEl = getVideoElement();
+
+  const playerVisible = !!(moviePlayer && moviePlayer.offsetParent !== null);
+  const flexyVisible = !!(watchFlexy && watchFlexy.offsetParent !== null);
+  const videoVisible = !!(videoEl && videoEl.offsetParent !== null && videoEl.videoWidth > 0);
+
+  if (watchLike && hasVideoParam) return true;
+  if (flexyVisible && (playerVisible || videoVisible)) return true;
+  if (pathname.startsWith("/embed/") && (playerVisible || videoVisible)) return true;
+
+  return false;
+}
+
+function applyMinimalVisibility() {
+  const isVideoPage = isVideoPlaybackPage();
+
+  if (!isVideoPage || blindMode) {
+    detachToggleButton();
+    if (minimalUserPrefersVisible) {
+      hideMinimalBar({ persist: false, keepActive: true });
+    } else {
+      hideMinimalBar({ persist: false });
+    }
+    updateMinimalToggleButtonState();
+    return;
+  }
+
+  attachToggleButton();
+
+  const advancedVisible = panelContainer && panelContainer.style.display !== "none";
+  const shouldShowMinimal = !advancedVisible && (minimalActive || minimalUserPrefersVisible);
+
+  if (shouldShowMinimal) {
+    showMinimalBar({ persist: false });
+  } else {
+    const keepActive = minimalUserPrefersVisible && !advancedVisible;
+    hideMinimalBar({ persist: false, keepActive });
+  }
+
+  updateMinimalToggleButtonState();
+}
+
+let minimalManagerInitialized = false;
+
+function initializeMinimalUIManager() {
+  if (minimalManagerInitialized) return;
+  minimalManagerInitialized = true;
+
+  loadPreferenceFromChromeStorage();
+  applyMinimalVisibility();
+
+  const navigationEvents = [
+    "yt-navigate-start",
+    "yt-navigate-finish",
+    "yt-navigate-cache-loaded",
+    "yt-page-data-updated",
+    "yt-player-updated",
+    "spfdone",
+    "popstate"
+  ];
+
+  navigationEvents.forEach((evt) => {
+    window.addEventListener(evt, scheduleMinimalVisibilityUpdate, { passive: true });
+  });
+
+  window.addEventListener("yt-action", scheduleMinimalVisibilityUpdate, { passive: true });
+
+  minimalNavigationObserver = new MutationObserver(() => scheduleMinimalVisibilityUpdate());
+  minimalNavigationObserver.observe(document.documentElement, { childList: true, subtree: true });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  initializeMinimalUIManager();
+  ensureAudioContext().catch(console.error);
+
+  // If no cue points are loaded, generate random cues
+  if (Object.keys(cuePoints).length === 0 && typeof placeRandomCues === "function") {
+    placeRandomCues();
+    updateCueMarkers();
+    refreshCueDisplays();
+  }
+
+  // Assuming your button is created as the drag handle for your panel:
+  const cueButton = document.querySelector('.looper-drag-handle');
+  if (cueButton) {
+    // Attach a one-time click listener
+    cueButton.addEventListener('click', () => {
+      ensureAudioContext();
+      showMinimalBar({ persist: false });
+    }, { once: true });
+  }
+});
+
+if (document.readyState !== 'loading') {
+  initializeMinimalUIManager();
+}
 
 function createIconButton(iconPath, labelText) {
   const button = document.createElement("button");
@@ -3792,7 +4069,6 @@ function createIconButton(iconPath, labelText) {
  * Minimal UI Bar
  **************************************/
 function mountMinimalUIContainer() {
-  ensureMinimalToggleButton();
   if (!minimalUIContainer) return;
   if (!minimalUIContainer.isConnected) {
     document.body.appendChild(minimalUIContainer);
@@ -3887,6 +4163,12 @@ function onMinimalPointerUp(e) {
   minimalUIContainer = document.createElement("div");
   minimalUIContainer.className = "ytbm-minimal-bar ytbm-glass";
   minimalUIContainer.style.display = "none";
+  minimalUIContainer.addEventListener("dblclick", (event) => {
+    if (event.target && event.target.closest("button, input, select, textarea, .ytbm-range")) {
+      return;
+    }
+    setMinimalPreference(false);
+  });
   mountMinimalUIContainer();
   setupMinimalUIDrag();
 
@@ -5426,10 +5708,7 @@ function updateVideoWithCues() {
       video.addEventListener(
         "keydown",
         (e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key >= "0" && e.key <= "9") {
-            e.preventDefault();
-            e.stopPropagation();
-          }
+          if (handleCueHotkey(e)) return;
         },
         true // use capture phase
       );
@@ -6306,8 +6585,7 @@ function pasteCuesFromLink() {
       });
       saveCuePointsToURL();
       updateCueMarkers();
-      refreshCuesButton();
-      if (window.refreshMinimalState) window.refreshMinimalState();
+      refreshCueDisplays();
       alert("Cues pasted and updated!");
     } else {
       alert("No cue_points parameter found in the URL.");
@@ -6333,8 +6611,7 @@ function randomizeCuesInOneClick() {
   }
   saveCuePointsToURL();
   updateCueMarkers();
-  refreshCuesButton();
-  if (window.refreshMinimalState) window.refreshMinimalState();
+  refreshCueDisplays();
 }
 
 // Call this function when the page first loads (or when you detect a new video)
@@ -6401,9 +6678,7 @@ function loadCuePointsAtStartup() {
     randomizeCuesInOneClick();
   } else {
     updateCueMarkers();
-  refreshCuesButton();
-  if (window.refreshMinimalState) {
-    window.refreshMinimalState();
+    refreshCueDisplays();
   }
 
   // --- ADD THESE LINES BELOW ---
@@ -6430,7 +6705,7 @@ function loadCuePointsFromURLParam() {
   });
   if (foundAny) {
     updateCueMarkers();
-    refreshCuesButton();
+    refreshCueDisplays();
   }
   return foundAny;
 }
@@ -6547,8 +6822,7 @@ function updateCueMarkers() {
       delete cuePoints[key];
       saveCuePointsToURL();
       updateCueMarkers();
-      refreshCuesButton();
-      if (window.refreshMinimalState) window.refreshMinimalState();
+      refreshCueDisplays();
     });
 
     // If you support dragging, keep your existing mousedown logic here:
@@ -6638,8 +6912,7 @@ function addCueAtTime(t) {
   cuePoints[k] = t;
   saveCuePointsToURL();
   updateCueMarkers();
-  refreshCuesButton();
-  if (window.refreshMinimalState) window.refreshMinimalState();
+  refreshCueDisplays();
 }
 
 function addCueAtCurrentVideoTime() {
@@ -6652,8 +6925,7 @@ function addCueAtCurrentVideoTime() {
   cuePoints[k] = vid.currentTime;
   saveCuePointsToURL();
   updateCueMarkers();
-  refreshCuesButton();
-  if (window.refreshMinimalState) window.refreshMinimalState();
+  refreshCueDisplays();
 }
 
 function adjustSelectedCue(dt) {
@@ -6666,7 +6938,7 @@ function adjustSelectedCue(dt) {
   cuePoints[selectedCueKey] = t;
   scheduleSaveCuePoints();
   updateCueMarkers();
-  refreshCuesButton();
+  refreshCueDisplays();
 }
 
 const SUPER_KNOB_RELATIVE_MAX_DELTA = 24;
@@ -6857,8 +7129,7 @@ function refreshCuesButton() {
       cuePoints = {};
       saveCuePointsToURL();
       updateCueMarkers();
-      refreshCuesButton();
-      if (window.refreshMinimalState) window.refreshMinimalState();
+      refreshCueDisplays();
     };
   } else {
     cuesButton.innerText = `AddCue(${c}/10)`;
@@ -6870,8 +7141,7 @@ function refreshCuesButton() {
           cuePoints = {};
           saveCuePointsToURL();
           updateCueMarkers();
-          refreshCuesButton();
-          if (window.refreshMinimalState) window.refreshMinimalState();
+          refreshCueDisplays();
         }
       } else {
         addCueAtCurrentVideoTime();
@@ -7031,6 +7301,9 @@ function onKeyDown(e) {
   if (e.key === "Alt") { isAltKeyDown = true; return; }
   if (e.key === "Meta") { isMetaKeyDown = true; return; }
   if (isTypingInTextField(e)) {
+    return;
+  }
+  if (handleCueHotkey(e)) {
     return;
   }
   // Check for Cmd+Delete to toggle visuals.
@@ -7301,19 +7574,6 @@ function onKeyDown(e) {
   }
 
   let vid = getVideoElement();
-  if ((e.ctrlKey || e.metaKey) && k >= "0" && k <= "9") {
-    // Prevent YouTube's default behavior (jumping in the video)
-    e.preventDefault();
-    e.stopPropagation();
-
-    pushUndoState();
-    cuePoints[e.key] = vid.currentTime;
-    saveCuePointsToURL();
-    updateCueMarkers();
-    refreshCuesButton();
-    if (window.refreshMinimalState) window.refreshMinimalState();
-    return;
-  }
 }
 
 function onKeyUp(e) {
@@ -8131,10 +8391,43 @@ function analyseBPMFromEnergies(energies) {
   return Math.round(bpm);
 }
 
-function goAdvancedUI() {
-  minimalActive = false;
+function hideMinimalBar({ persist = false, keepActive = false } = {}) {
+  if (persist) {
+    minimalUserPrefersVisible = false;
+    persistMinimalVisibilityPreference(false);
+  }
+  if (!keepActive) {
+    minimalActive = false;
+  }
   minimalVisible = false;
+  if (minimalUIContainer) {
+    minimalUIContainer.style.display = "none";
+  }
   updateMinimalToggleButtonState();
+}
+
+function showMinimalBar({ persist = false } = {}) {
+  if (blindMode) return;
+  if (persist) {
+    minimalUserPrefersVisible = true;
+    persistMinimalVisibilityPreference(true);
+  }
+  minimalActive = true;
+  minimalVisible = true;
+  if (panelContainer) panelContainer.style.display = "none";
+  if (!minimalUIContainer) {
+    buildMinimalUIBar();
+  } else {
+    setupMinimalUIDrag();
+    mountMinimalUIContainer();
+    minimalUIContainer.style.display = "flex";
+    if (window.refreshMinimalState) window.refreshMinimalState();
+  }
+  updateMinimalToggleButtonState();
+}
+
+function goAdvancedUI() {
+  hideMinimalBar({ persist: false });
   if (panelContainer) panelContainer.style.display = "block";
   // Remove any minimal UI containers present in the DOM.
   document.querySelectorAll('.ytbm-minimal-bar').forEach(el => {
@@ -8149,20 +8442,7 @@ function goAdvancedUI() {
 }
 
 function goMinimalUI() {
-  if (blindMode) return; // do not show the minimal UI if blind mode is active
-  minimalActive = true;
-  minimalVisible = true;
-  updateMinimalToggleButtonState();
-  if (panelContainer) panelContainer.style.display = "none";
-  // Rebuild the minimal UI if it doesn't exist.
-  if (!minimalUIContainer) {
-    buildMinimalUIBar();
-  } else {
-    setupMinimalUIDrag();
-    mountMinimalUIContainer();
-    minimalUIContainer.style.display = "flex";
-  }
-  if (window.refreshMinimalState) window.refreshMinimalState();
+  showMinimalBar({ persist: false });
 }
 
 /**************************************
@@ -8708,6 +8988,7 @@ function addControls() {
   updateReverbButtonColor();
   updateCassetteButtonColor();
   updateInstrumentButtonColor();
+  refreshCueDisplays();
 }
 
 
@@ -9219,8 +9500,7 @@ function handleMIDIMessage(e) {
           cuePoints[k] = vid.currentTime;
           saveCuePointsToURL();
           updateCueMarkers();
-          refreshCuesButton();
-          if (window.refreshMinimalState) window.refreshMinimalState();
+          refreshCueDisplays();
         } else {
           if (k in cuePoints) {
         selectedCueKey = k;
@@ -11671,7 +11951,7 @@ function attachVideoMetadataListener() {
 // 3) In that listener, reset pitch back to 0
 function onNewVideoLoaded() {
   console.log("New video loaded => resetting pitch to 0%");
-  ensureMinimalToggleButton();
+  scheduleMinimalVisibilityUpdate();
 
   // Reset everything
   pitchPercentage = 0;
