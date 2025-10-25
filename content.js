@@ -657,7 +657,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       instrumentPowerButton = null,
       bpmDisplayButton = null,
       bpmInlineInput = null,
-      minimalActive = true,
+      minimalActive = minimalPreferredVisible,
       loopProgressFills = new Array(MAX_AUDIO_LOOPS).fill(null),
       loopProgressFillsMin = new Array(MAX_AUDIO_LOOPS).fill(null),
       looperPulseEl = null,
@@ -1897,7 +1897,7 @@ function toggleBlindMode() {
     }
     console.log("Blind mode is now OFF");
     // Optionally restore the minimal UI automatically when leaving blind mode:
-    if (minimalActive) goMinimalUI();
+    if (minimalPreferredVisible) goMinimalUI();
   }
   updateMinimalToggleButtonState();
 }
@@ -2321,8 +2321,8 @@ function triggerPadCue(padIndex) {
       // Toggle advanced UI: close if open, open if closed
       if (panelContainer && panelContainer.style.display !== 'none') {
         panelContainer.style.display = 'none';
-        // Also open minimal UI after closing advanced
-        if (typeof goMinimalUI === "function") goMinimalUI();
+        // Also open minimal UI after closing advanced when the user prefers it
+        if (minimalPreferredVisible && typeof goMinimalUI === "function") goMinimalUI();
       } else if (typeof goAdvancedUI === "function") {
         goAdvancedUI();
       }
@@ -2672,9 +2672,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   // Only prime audio/minimal UI automatically on video playback pages
   if (isVideoPlaybackPage()) {
-    ensureAudioContext()
-      .then(() => { if (typeof goMinimalUI === "function") goMinimalUI(); })
-      .catch(console.error);
+    ensureAudioContext().catch(console.error);
   }
 
   // If no cue points are loaded, generate random cues
@@ -2690,7 +2688,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Attach a one-time click listener
     cueButton.addEventListener('click', () => {
       ensureAudioContext();
-      goMinimalUI(); // Open the minimal view when applicable
     }, { once: true });
   }
 });
@@ -3777,19 +3774,89 @@ const YTBM_ICON_PATHS = {
   loop: "M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 .34-.03.67-.08 1h2.02c.04-.33.06-.66.06-1 0-4.41-3.59-8-8-8zm-6 8c0-.34.03-.67.08-1H4.06c-.04.33-.06.66-.06 1 0 4.41 3.59 8 8 8v3l4-4-4-4v3c-3.31 0-6-2.69-6-6z",
   import: "M5 20h14v-2H5v2zm7-18-5 5h3v6h4V7h3l-5-5z",
   advanced: "M3 6h18v2H3V6zm0 5h18v2H3v-2zm0 5h18v2H3v-2z",
-  mic: "M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"
+  mic: "M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z",
+  minimalToggle: "M12 2a10 10 0 1 0 10 10A10.011 10.011 0 0 0 12 2zm-5 8h2v4H7zm4-3h2v10h-2zm4 2h2v6h-2z"
 };
+
+const MINIMAL_VISIBILITY_KEY = "ytbm_minimalPreferredVisible";
+let minimalPreferredVisible = false;
+try {
+  minimalPreferredVisible = localStorage.getItem(MINIMAL_VISIBILITY_KEY) === "true";
+} catch (err) {
+  minimalPreferredVisible = false;
+}
 
 const MINIMAL_POS_KEY = "ytbm_minimalPos";
 let minimalToggleButton = null;
-let minimalVisible = true;
+let minimalVisible = minimalPreferredVisible;
+let minimalToggleEnsureTimer = null;
 
-function ensureMinimalToggleButton() {
+function removeMinimalToggleButton() {
+  if (minimalToggleEnsureTimer) {
+    clearTimeout(minimalToggleEnsureTimer);
+    minimalToggleEnsureTimer = null;
+  }
   document.querySelectorAll(".ytbm-toggle-btn").forEach(btn => btn.remove());
   minimalToggleButton = null;
 }
 
-function updateMinimalToggleButtonState() {}
+function scheduleMinimalToggleRetry() {
+  if (minimalToggleEnsureTimer) return;
+  minimalToggleEnsureTimer = setTimeout(() => {
+    minimalToggleEnsureTimer = null;
+    ensureMinimalToggleButton();
+  }, 500);
+}
+
+function ensureMinimalToggleButton() {
+  if (!isVideoPlaybackPage()) {
+    removeMinimalToggleButton();
+    return;
+  }
+
+  if (minimalToggleButton && minimalToggleButton.isConnected) {
+    updateMinimalToggleButtonState();
+    return;
+  }
+
+  const player = document.querySelector(".html5-video-player");
+  const controls = player ? player.querySelector(".ytp-right-controls") : null;
+
+  if (!controls) {
+    scheduleMinimalToggleRetry();
+    return;
+  }
+
+  let button = controls.querySelector(".ytbm-toggle-btn");
+  if (!button) {
+    button = document.createElement("button");
+    button.type = "button";
+    button.className = "ytp-button ytbm-toggle-btn";
+    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="${YTBM_ICON_PATHS.minimalToggle}" fill="currentColor"/></svg>`;
+    button.addEventListener("click", () => {
+      if (minimalActive && minimalVisible) {
+        hideMinimalUIBar();
+      } else {
+        goMinimalUI();
+      }
+    });
+    controls.prepend(button);
+  }
+
+  minimalToggleButton = button;
+  updateMinimalToggleButtonState();
+}
+
+function updateMinimalToggleButtonState() {
+  if (!minimalToggleButton) return;
+  const active = minimalActive && minimalVisible && !blindMode;
+  const label = active ? "Hide Beatmaker minimal controls" : "Show Beatmaker minimal controls";
+  minimalToggleButton.classList.toggle("ytbm-toggle-btn--active", active);
+  minimalToggleButton.setAttribute("aria-pressed", String(active));
+  minimalToggleButton.setAttribute("aria-label", label);
+  minimalToggleButton.setAttribute("title", label);
+  minimalToggleButton.disabled = !!blindMode;
+}
 
 function createIconButton(iconPath, labelText) {
   const button = document.createElement("button");
@@ -8243,9 +8310,22 @@ function isVideoPlaybackPage() {
   return true;
 }
 
-function hideMinimalUIBar() {
+function persistMinimalVisibilityPreference(value) {
+  minimalPreferredVisible = !!value;
+  try {
+    localStorage.setItem(MINIMAL_VISIBILITY_KEY, minimalPreferredVisible ? "true" : "false");
+  } catch (err) {
+    console.warn("Failed to persist minimal visibility preference", err);
+  }
+}
+
+function hideMinimalUIBar(options = {}) {
+  const { preservePreference = false } = options;
   minimalActive = false;
   minimalVisible = false;
+  if (!preservePreference) {
+    persistMinimalVisibilityPreference(false);
+  }
   updateMinimalToggleButtonState();
   if (minimalUIContainer) {
     minimalUIContainer.style.display = "none";
@@ -8255,11 +8335,13 @@ function hideMinimalUIBar() {
 function goMinimalUI() {
   if (blindMode) return; // do not show the minimal UI if blind mode is active
   if (!isVideoPlaybackPage()) {
-    hideMinimalUIBar();
+    hideMinimalUIBar({ preservePreference: true });
     return;
   }
+  persistMinimalVisibilityPreference(true);
   minimalActive = true;
   minimalVisible = true;
+  ensureMinimalToggleButton();
   updateMinimalToggleButtonState();
   if (panelContainer) panelContainer.style.display = "none";
   // Rebuild the minimal UI if it doesn't exist.
@@ -8275,9 +8357,15 @@ function goMinimalUI() {
 
 function updateMinimalUIForCurrentPage() {
   if (isVideoPlaybackPage()) {
-    goMinimalUI();
+    ensureMinimalToggleButton();
+    if (minimalPreferredVisible) {
+      goMinimalUI();
+    } else {
+      hideMinimalUIBar({ preservePreference: true });
+    }
   } else {
-    hideMinimalUIBar();
+    hideMinimalUIBar({ preservePreference: true });
+    removeMinimalToggleButton();
   }
 }
 
@@ -11400,6 +11488,37 @@ function injectCustomCSS() {
       font-weight: 600;
       letter-spacing: 0.08em;
       text-transform: uppercase;
+    }
+    .ytp-button.ytbm-toggle-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      color: rgba(255,255,255,0.86);
+      transition: background-color 0.2s ease, color 0.2s ease;
+    }
+    .ytp-button.ytbm-toggle-btn svg {
+      width: 20px;
+      height: 20px;
+      opacity: 0.78;
+    }
+    .ytp-button.ytbm-toggle-btn:hover svg,
+    .ytp-button.ytbm-toggle-btn:focus-visible svg {
+      opacity: 1;
+    }
+    .ytp-button.ytbm-toggle-btn--active {
+      color: #3ea6ff;
+      background-color: rgba(62,166,255,0.16);
+    }
+    .ytp-button.ytbm-toggle-btn--active svg {
+      opacity: 1;
+    }
+    .ytp-button.ytbm-toggle-btn[disabled] {
+      opacity: 0.4;
+      pointer-events: none;
     }
     .html5-video-player {
       position: relative;
