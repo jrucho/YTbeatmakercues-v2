@@ -113,7 +113,7 @@ async function suggestCuesFromTransients() {
 
   saveCuePointsToURL();
   updateCueMarkers();
-  refreshCuesButton();
+  refreshCueDisplays();
 }
 // --- Random Cues Button logic (normal and modified press) ---
 if (typeof placeRandomCues === "undefined") {
@@ -131,6 +131,55 @@ if (typeof saveCuePointsToURL === "undefined") {
 }
 if (typeof updateCueMarkers === "undefined") {
   function updateCueMarkers() {}
+}
+
+function refreshCueDisplays() {
+  try {
+    refreshCuesButton();
+  } catch (err) {
+    console.warn("Failed to refresh advanced cue button", err);
+  }
+  if (typeof window.refreshMinimalState === "function") {
+    try {
+      window.refreshMinimalState();
+    } catch (err) {
+      console.warn("Failed to refresh minimal cue state", err);
+    }
+  }
+}
+
+function handleCueHotkey(e) {
+  if (!(e.ctrlKey || e.metaKey)) return false;
+  if (typeof e.key !== "string" || e.key < "0" || e.key > "9") return false;
+  if (typeof isTypingInTextField === "function" && isTypingInTextField(e)) return false;
+
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+
+  const cueKey = e.key;
+  if (e.shiftKey || e.altKey) {
+    if (cuePoints[cueKey] !== undefined) {
+      pushUndoState();
+      delete cuePoints[cueKey];
+      saveCuePointsToURL();
+      updateCueMarkers();
+      refreshCueDisplays();
+    }
+    return true;
+  }
+
+  const vid = getVideoElement();
+  if (!vid) {
+    return true;
+  }
+
+  pushUndoState();
+  cuePoints[cueKey] = vid.currentTime;
+  saveCuePointsToURL();
+  updateCueMarkers();
+  refreshCueDisplays();
+  return true;
 }
 
 // Attach to minimal random cues button
@@ -2023,7 +2072,7 @@ for (let i = 0; i < 10; i++) {
       cuePoints[cueKey] = vid.currentTime;
       saveCuePointsToURL();
       updateCueMarkers();
-      refreshCuesButton();
+      refreshCueDisplays();
       console.log(`Modifier active: Pad ${i} marked cue ${cueKey} at time ${vid.currentTime}`);
     } else {
       // For normal pad taps, mirror the digit‑key path:
@@ -2369,7 +2418,7 @@ hideYouTubePopups();
                   cuePoints[key] = vid.currentTime;
                   saveCuePointsToURL();
                   updateCueMarkers();
-                  refreshCuesButton();
+                  refreshCueDisplays();
                   return; // skip original to avoid playback
                 }
                 break;
@@ -2427,7 +2476,7 @@ document.addEventListener(
         cuePoints[key] = vid.currentTime;
         saveCuePointsToURL();
         updateCueMarkers();
-        refreshCuesButton();
+        refreshCueDisplays();
         return; // do not play on this first press
       }
       // Otherwise, play the existing cue
@@ -2673,25 +2722,7 @@ document.addEventListener('click', () => {
 document.addEventListener(
   "keydown",
   (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key >= "0" && e.key <= "9") {
-      const vid = getVideoElement();
-      if (vid) {
-        // Save current time before any jump occurs.
-        const t = vid.currentTime;
-        // Prevent YouTube's default behavior:
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        // Now mark the cue point:
-        pushUndoState();
-        cuePoints[e.key] = t;
-        saveCuePointsToURL();
-        updateCueMarkers();
-        refreshCuesButton();
-        if (window.refreshMinimalState) {
-          window.refreshMinimalState();
-        }
-      }
-    }
+    if (handleCueHotkey(e)) return;
   },
   true // capture phase
 );
@@ -2977,7 +3008,7 @@ function restoreAppState(st) {
   // Re-apply everything
   saveCuePointsToURL();
   updateCueMarkers();
-  refreshCuesButton();
+  refreshCueDisplays();
 
   updateSampleDisplay("kick");
   updateSampleDisplay("hihat");
@@ -4003,7 +4034,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (Object.keys(cuePoints).length === 0 && typeof placeRandomCues === "function") {
     placeRandomCues();
     updateCueMarkers();
-    refreshCuesButton();
+    refreshCueDisplays();
   }
 
   // Assuming your button is created as the drag handle for your panel:
@@ -5675,10 +5706,7 @@ function updateVideoWithCues() {
       video.addEventListener(
         "keydown",
         (e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key >= "0" && e.key <= "9") {
-            e.preventDefault();
-            e.stopPropagation();
-          }
+          if (handleCueHotkey(e)) return;
         },
         true // use capture phase
       );
@@ -6555,8 +6583,7 @@ function pasteCuesFromLink() {
       });
       saveCuePointsToURL();
       updateCueMarkers();
-      refreshCuesButton();
-      if (window.refreshMinimalState) window.refreshMinimalState();
+      refreshCueDisplays();
       alert("Cues pasted and updated!");
     } else {
       alert("No cue_points parameter found in the URL.");
@@ -6582,8 +6609,7 @@ function randomizeCuesInOneClick() {
   }
   saveCuePointsToURL();
   updateCueMarkers();
-  refreshCuesButton();
-  if (window.refreshMinimalState) window.refreshMinimalState();
+  refreshCueDisplays();
 }
 
 // Call this function when the page first loads (or when you detect a new video)
@@ -6650,9 +6676,7 @@ function loadCuePointsAtStartup() {
     randomizeCuesInOneClick();
   } else {
     updateCueMarkers();
-  refreshCuesButton();
-  if (window.refreshMinimalState) {
-    window.refreshMinimalState();
+    refreshCueDisplays();
   }
 
   // --- ADD THESE LINES BELOW ---
@@ -6679,7 +6703,7 @@ function loadCuePointsFromURLParam() {
   });
   if (foundAny) {
     updateCueMarkers();
-    refreshCuesButton();
+    refreshCueDisplays();
   }
   return foundAny;
 }
@@ -6796,8 +6820,7 @@ function updateCueMarkers() {
       delete cuePoints[key];
       saveCuePointsToURL();
       updateCueMarkers();
-      refreshCuesButton();
-      if (window.refreshMinimalState) window.refreshMinimalState();
+      refreshCueDisplays();
     });
 
     // If you support dragging, keep your existing mousedown logic here:
@@ -6887,8 +6910,7 @@ function addCueAtTime(t) {
   cuePoints[k] = t;
   saveCuePointsToURL();
   updateCueMarkers();
-  refreshCuesButton();
-  if (window.refreshMinimalState) window.refreshMinimalState();
+  refreshCueDisplays();
 }
 
 function addCueAtCurrentVideoTime() {
@@ -6901,8 +6923,7 @@ function addCueAtCurrentVideoTime() {
   cuePoints[k] = vid.currentTime;
   saveCuePointsToURL();
   updateCueMarkers();
-  refreshCuesButton();
-  if (window.refreshMinimalState) window.refreshMinimalState();
+  refreshCueDisplays();
 }
 
 function adjustSelectedCue(dt) {
@@ -6915,7 +6936,7 @@ function adjustSelectedCue(dt) {
   cuePoints[selectedCueKey] = t;
   scheduleSaveCuePoints();
   updateCueMarkers();
-  refreshCuesButton();
+  refreshCueDisplays();
 }
 
 const SUPER_KNOB_RELATIVE_MAX_DELTA = 24;
@@ -7106,8 +7127,7 @@ function refreshCuesButton() {
       cuePoints = {};
       saveCuePointsToURL();
       updateCueMarkers();
-      refreshCuesButton();
-      if (window.refreshMinimalState) window.refreshMinimalState();
+      refreshCueDisplays();
     };
   } else {
     cuesButton.innerText = `AddCue(${c}/10)`;
@@ -7119,8 +7139,7 @@ function refreshCuesButton() {
           cuePoints = {};
           saveCuePointsToURL();
           updateCueMarkers();
-          refreshCuesButton();
-          if (window.refreshMinimalState) window.refreshMinimalState();
+          refreshCueDisplays();
         }
       } else {
         addCueAtCurrentVideoTime();
@@ -7280,6 +7299,9 @@ function onKeyDown(e) {
   if (e.key === "Alt") { isAltKeyDown = true; return; }
   if (e.key === "Meta") { isMetaKeyDown = true; return; }
   if (isTypingInTextField(e)) {
+    return;
+  }
+  if (handleCueHotkey(e)) {
     return;
   }
   // Check for Cmd+Delete to toggle visuals.
@@ -7550,19 +7572,6 @@ function onKeyDown(e) {
   }
 
   let vid = getVideoElement();
-  if ((e.ctrlKey || e.metaKey) && k >= "0" && k <= "9") {
-    // Prevent YouTube's default behavior (jumping in the video)
-    e.preventDefault();
-    e.stopPropagation();
-
-    pushUndoState();
-    cuePoints[e.key] = vid.currentTime;
-    saveCuePointsToURL();
-    updateCueMarkers();
-    refreshCuesButton();
-    if (window.refreshMinimalState) window.refreshMinimalState();
-    return;
-  }
 }
 
 function onKeyUp(e) {
@@ -8977,6 +8986,7 @@ function addControls() {
   updateReverbButtonColor();
   updateCassetteButtonColor();
   updateInstrumentButtonColor();
+  refreshCueDisplays();
 }
 
 
@@ -9488,8 +9498,7 @@ function handleMIDIMessage(e) {
           cuePoints[k] = vid.currentTime;
           saveCuePointsToURL();
           updateCueMarkers();
-          refreshCuesButton();
-          if (window.refreshMinimalState) window.refreshMinimalState();
+          refreshCueDisplays();
         } else {
           if (k in cuePoints) {
         selectedCueKey = k;
