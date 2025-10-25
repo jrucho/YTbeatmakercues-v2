@@ -6689,7 +6689,6 @@ function loadCuePointsAtStartup() {
   loopPitchPercentage = 0;  // Optional, if you want the "loop" pitch to be 0
   updatePitch(0);           // This call updates all UI sliders and playback rates
 }
-}
 
 function loadCuePointsFromURLParam() {
   let u = new URL(window.location.href);
