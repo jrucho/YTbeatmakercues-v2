@@ -1,39 +1,41 @@
 // ---- Basic helpers (added by ChatGPT fix) ----
-if (typeof getVideoElement === "undefined") {
-  function getVideoElement() {
+const globalScope = typeof window !== "undefined" ? window : globalThis;
+
+if (typeof globalScope.getVideoElement !== "function") {
+  globalScope.getVideoElement = function getVideoElement() {
     return document.querySelector('video');
-  }
+  };
 }
 
-if (typeof safeSeekVideo === "undefined") {
+if (typeof globalScope.safeSeekVideo !== "function") {
   /**
    * Seek the main YouTube player safely and resume playback.
    * @param {*} _  (kept for compatibility with old call‑sites that pass “evt”)
    * @param {number} t  target time in seconds
    */
-  function safeSeekVideo(_, t) {
+  globalScope.safeSeekVideo = function safeSeekVideo(_, t) {
     const vid = getVideoElement();
     if (!vid) return;
     vid.currentTime = t;
     vid.play();
-  }
+  };
 }
 
-if (typeof escapeHtml === "undefined") {
-  function escapeHtml(str) {
+if (typeof globalScope.escapeHtml !== "function") {
+  globalScope.escapeHtml = function escapeHtml(str) {
     return String(str)
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/\"/g, "&quot;")
       .replace(/'/g, "&#39;");
-  }
+  };
 }
 // Provide a safe, global helper to attach the Touch Sequencer button
 // to the Advanced UI. This avoids init-time errors if other copies
 // of the code forgot to define it.
-if (typeof addTouchSequencerButtonToAdvancedUI === "undefined") {
-  function addTouchSequencerButtonToAdvancedUI() {
+if (typeof globalScope.addTouchSequencerButtonToAdvancedUI !== "function") {
+  globalScope.addTouchSequencerButtonToAdvancedUI = function addTouchSequencerButtonToAdvancedUI() {
     try {
       if (!panelContainer) return;
       if (panelContainer.querySelector('.ytbm-touch-sequencer-btn')) return;
@@ -61,7 +63,7 @@ if (typeof addTouchSequencerButtonToAdvancedUI === "undefined") {
     } catch (e) {
       // Fail silently to avoid breaking init
     }
-  }
+  };
 }
 // ----------------------------------------------
 // --- Suggest Cues from Transients Helper ---
@@ -116,21 +118,21 @@ async function suggestCuesFromTransients() {
   refreshCueDisplays();
 }
 // --- Random Cues Button logic (normal and modified press) ---
-if (typeof placeRandomCues === "undefined") {
+if (typeof globalScope.placeRandomCues !== "function") {
   // Dummy fallback if not defined elsewhere
-  function placeRandomCues() {
+  globalScope.placeRandomCues = function placeRandomCues() {
     // No-op, add your implementation elsewhere
-  }
+  };
 }
-if (typeof refreshCuesButton === "undefined") {
-  function refreshCuesButton() {}
+if (typeof globalScope.refreshCuesButton !== "function") {
+  globalScope.refreshCuesButton = function refreshCuesButton() {};
 }
 
-if (typeof saveCuePointsToURL === "undefined") {
-  function saveCuePointsToURL() {}
+if (typeof globalScope.saveCuePointsToURL !== "function") {
+  globalScope.saveCuePointsToURL = function saveCuePointsToURL() {};
 }
-if (typeof updateCueMarkers === "undefined") {
-  function updateCueMarkers() {}
+if (typeof globalScope.updateCueMarkers !== "function") {
+  globalScope.updateCueMarkers = function updateCueMarkers() {};
 }
 
 function refreshCueDisplays() {
