@@ -4310,24 +4310,91 @@ function generateSimpleReverbIR(ctx) {
   return impulse;
 }
 
-function describeWorkletFailure(reason) {
+function describeWorkletFailure(reason, seen = new Set()) {
   if (!reason) return "";
   if (typeof reason === "string") return reason;
-  if (reason instanceof Error) {
-    const name = reason.name || "Error";
-    return reason.message ? `${name}: ${reason.message}` : name;
-  }
-  if (typeof reason === "object") {
-    const name = reason.name || (reason.constructor && reason.constructor.name);
-    const message = reason.message;
-    if (name || message) {
-      return [name, message].filter(Boolean).join(": ");
+  if (typeof reason !== "object") {
+    try {
+      return JSON.stringify(reason);
+    } catch (_) {
+      return String(reason);
     }
   }
+
+  if (seen.has(reason)) return "";
+  seen.add(reason);
+
+  const name = reason.name || (reason.constructor && reason.constructor.name);
+  const message = reason.message;
+  let base = "";
+  if (name && message) base = `${name}: ${message}`;
+  else if (name) base = name;
+  else if (message) base = message;
+  else {
+    try {
+      base = JSON.stringify(reason);
+    } catch (_) {
+      base = String(reason);
+    }
+  }
+
+  if (reason.cause) {
+    const cause = describeWorkletFailure(reason.cause, seen);
+    if (cause) {
+      return base ? `${base} (caused by ${cause})` : cause;
+    }
+  }
+
+  return base;
+}
+
+async function loadAudioWorkletModule(ctx, url) {
   try {
-    return JSON.stringify(reason);
-  } catch (_) {
-    return String(reason);
+    await ctx.audioWorklet.addModule(url);
+    return;
+  } catch (err) {
+    const shouldRetry = err && err.name === "AbortError" && ctx && ctx.state === "suspended" && typeof ctx.resume === "function";
+    if (!shouldRetry) throw err;
+
+    try {
+      await ctx.resume();
+    } catch (resumeErr) {
+      let assigned = true;
+      try {
+        resumeErr.cause = err;
+      } catch (_) {
+        assigned = false;
+      }
+      if (assigned) throw resumeErr;
+
+      const wrapped = new Error(resumeErr && resumeErr.message ? resumeErr.message : "Failed to resume AudioContext");
+      wrapped.name = (resumeErr && resumeErr.name) || "AudioContextResumeError";
+      wrapped.cause = err;
+      wrapped.originalError = resumeErr;
+      throw wrapped;
+    }
+
+    try {
+      await ctx.audioWorklet.addModule(url);
+      return;
+    } catch (retryErr) {
+      if (retryErr) {
+        let assigned = true;
+        try {
+          if (!retryErr.cause) retryErr.cause = err;
+        } catch (_) {
+          assigned = false;
+        }
+        if (assigned) throw retryErr;
+
+        const wrapped = new Error(retryErr && retryErr.message ? retryErr.message : "Failed to load worklet module");
+        wrapped.name = (retryErr && retryErr.name) || "WorkletLoadError";
+        wrapped.cause = err;
+        wrapped.originalError = retryErr;
+        throw wrapped;
+      }
+      throw err;
+    }
   }
 }
 
@@ -4461,7 +4528,7 @@ async function createCassetteNode(ctx) {
   
   // Load the module into the AudioWorklet.
   try {
-    await ctx.audioWorklet.addModule(blobURL);
+    await loadAudioWorkletModule(ctx, blobURL);
   } catch (err) {
     URL.revokeObjectURL(blobURL);
     return createCassetteBypassNode(ctx, err);
@@ -4532,7 +4599,7 @@ async function createLoopRecorderNode(ctx) {
 
   const blob = new Blob([code], { type: 'application/javascript' });
   const url = URL.createObjectURL(blob);
-  await ctx.audioWorklet.addModule(url);
+  await loadAudioWorkletModule(ctx, url);
   URL.revokeObjectURL(url);
 
   return new AudioWorkletNode(ctx, 'loop-recorder');
