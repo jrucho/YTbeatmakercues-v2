@@ -4310,13 +4310,40 @@ function generateSimpleReverbIR(ctx) {
   return impulse;
 }
 
+function describeWorkletFailure(reason) {
+  if (!reason) return "";
+  if (typeof reason === "string") return reason;
+  if (reason instanceof Error) {
+    const name = reason.name || "Error";
+    return reason.message ? `${name}: ${reason.message}` : name;
+  }
+  if (typeof reason === "object") {
+    const name = reason.name || (reason.constructor && reason.constructor.name);
+    const message = reason.message;
+    if (name || message) {
+      return [name, message].filter(Boolean).join(": ");
+    }
+  }
+  try {
+    return JSON.stringify(reason);
+  } catch (_) {
+    return String(reason);
+  }
+}
+
 function createCassetteBypassNode(ctx, reason) {
   const bypassNode = ctx.createGain();
   bypassNode.port = {
     postMessage() {}
   };
-  if (reason) {
-    console.warn("Cassette effect running in bypass mode:", reason);
+  const detail = describeWorkletFailure(reason);
+  if (detail) {
+    console.warn(`Cassette effect running in bypass mode: ${detail}`);
+  } else {
+    console.warn("Cassette effect running in bypass mode.");
+  }
+  if (reason && typeof reason === "object" && reason !== null) {
+    console.debug("Cassette worklet bypass detail:", reason);
   }
   return bypassNode;
 }
