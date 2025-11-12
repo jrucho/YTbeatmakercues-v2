@@ -4310,9 +4310,20 @@ function generateSimpleReverbIR(ctx) {
   return impulse;
 }
 
+function createCassetteBypassNode(ctx, reason) {
+  const bypassNode = ctx.createGain();
+  bypassNode.port = {
+    postMessage() {}
+  };
+  if (reason) {
+    console.warn("Cassette effect running in bypass mode:", reason);
+  }
+  return bypassNode;
+}
+
 async function createCassetteNode(ctx) {
   if (!ctx.audioWorklet) {
-    throw new Error("AudioWorklet not supported in this browser.");
+    return createCassetteBypassNode(ctx, "AudioWorklet unsupported");
   }
   
   // Define the processor code as a string.
@@ -4422,16 +4433,26 @@ async function createCassetteNode(ctx) {
   const blobURL = URL.createObjectURL(blob);
   
   // Load the module into the AudioWorklet.
-  await ctx.audioWorklet.addModule(blobURL);
+  try {
+    await ctx.audioWorklet.addModule(blobURL);
+  } catch (err) {
+    URL.revokeObjectURL(blobURL);
+    return createCassetteBypassNode(ctx, err);
+  }
   // Clean up the Blob URL.
   URL.revokeObjectURL(blobURL);
-  
-  // Create the AudioWorkletNode using our processor.
-  const node = new AudioWorkletNode(ctx, 'cassette-processor', {
-    numberOfInputs: 1,
-    numberOfOutputs: 1,
-    outputChannelCount: [2]  // stereo output
-  });
+
+  let node;
+  try {
+    // Create the AudioWorkletNode using our processor.
+    node = new AudioWorkletNode(ctx, 'cassette-processor', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [2]  // stereo output
+    });
+  } catch (err) {
+    return createCassetteBypassNode(ctx, err);
+  }
   
   // Initialize the processor's parameters.
   node.port.postMessage({
