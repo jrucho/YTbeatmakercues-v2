@@ -10,6 +10,11 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.0.1
+* Replace inline AudioWorklet definitions with modules loaded via chrome.runtime.getURL
+* Add dedicated worklet scripts for cassette, loop recorder, vinyl break, stutter, phaser, and bit reduction processors
+* Expose the new worklet files through web_accessible_resources in the manifest to satisfy MV3 CSP
+
 ## New in 2.0
 * New UI
 * Modifier-mute for pads & keys. Hold Shift AND Cmd at the same time (Ctrl on Windows/Linux) and press a sample pad or mapped keyboard key to mute/unmute them
