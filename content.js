@@ -4310,274 +4310,60 @@ function generateSimpleReverbIR(ctx) {
   return impulse;
 }
 
-async function createCassetteNode(ctx) {
-  if (!ctx.audioWorklet) {
-    throw new Error("AudioWorklet not supported in this browser.");
-  }
-  
-  // Define the processor code as a string.
-  // This processor applies a bit‐crusher (emulating a 303 sampler at 22 kHz)
-  // plus a one‐pole low‐pass filter (default cutoff 5000 Hz) to warm the sound.
-  const workletCode = `
-    class CassetteProcessor extends AudioWorkletProcessor {
-      constructor() {
-        super();
-        // The effect is off by default.
-        this.active = false;
-        // Bit crusher settings:
-        this.bitDepth = 8; // target bit depth (8-bit quantization)
-        this.targetSampleRate = 22000; // target effective sample rate (22 kHz)
-        this.step = Math.max(1, Math.floor(sampleRate / this.targetSampleRate));
-        this.counter = 0; // sample counter for bit crushing
-        this.lastSamples = []; // per-channel held sample values
-        
-        // Noise amplitude:
-        this.noiseAmp = 0.0002;
-        
-        // Lowpass filter settings:
-        this.cutoff = 5000; // default cutoff frequency in Hz
-        // We'll compute the filter coefficient (alpha) on each process call.
-        // We also keep a per-channel state for the filtered output.
-        this.prevFiltered = [];
-        
-        // Listen for messages from the main thread to update parameters.
-        this.port.onmessage = (event) => {
-          if (event.data) {
-            if (event.data.hasOwnProperty('active')) {
-              this.active = event.data.active;
-            }
-            if (event.data.hasOwnProperty('bitDepth')) {
-              this.bitDepth = event.data.bitDepth;
-            }
-            if (event.data.hasOwnProperty('targetSampleRate')) {
-              this.targetSampleRate = event.data.targetSampleRate;
-              this.step = Math.max(1, Math.floor(sampleRate / this.targetSampleRate));
-            }
-            if (event.data.hasOwnProperty('cutoff')) {
-              this.cutoff = event.data.cutoff;
-            }
-            if (event.data.hasOwnProperty('noiseAmp')) {
-              this.noiseAmp = event.data.noiseAmp;
-            }
-          }
-        };
-      }
-      
-      process(inputs, outputs, parameters) {
-        const input = inputs[0];
-        const output = outputs[0];
-        if (!input || input.length === 0) return true;
-        
-        // If the effect is off, bypass the processing.
-        if (!this.active) {
-          for (let channel = 0; channel < input.length; channel++) {
-            output[channel].set(input[channel]);
-          }
-          return true;
-        }
-        
-        // Calculate quantization levels for bit reduction.
-        const quantizationLevels = Math.pow(2, this.bitDepth) - 1;
-        // Compute the one-pole lowpass filter coefficient:
-        const RC = 1 / (2 * Math.PI * this.cutoff);
-        const dt = 1 / sampleRate;
-        const alpha = dt / (RC + dt);
-        
-        for (let channel = 0; channel < input.length; channel++) {
-          const inputChannel = input[channel];
-          const outputChannel = output[channel];
-          // Initialize per-channel filter state if needed.
-          if (this.prevFiltered[channel] === undefined) {
-            this.prevFiltered[channel] = 0;
-          }
-          if (this.lastSamples[channel] === undefined) {
-            this.lastSamples[channel] = 0;
-          }
-          
-          for (let i = 0; i < inputChannel.length; i++) {
-            // Bit crusher processing: update the held sample every "step" samples.
-            let processedSample;
-            if ((this.counter + i) % this.step === 0) {
-              let sampleVal = inputChannel[i] + (Math.random() * 2 - 1) * this.noiseAmp;
-              let quantized = Math.round(sampleVal * quantizationLevels) / quantizationLevels;
-              this.lastSamples[channel] = quantized;
-              processedSample = quantized;
-            } else {
-              processedSample = this.lastSamples[channel];
-            }
-            // Apply the one-pole lowpass filter:
-            this.prevFiltered[channel] = this.prevFiltered[channel] + alpha * (processedSample - this.prevFiltered[channel]);
-            outputChannel[i] = this.prevFiltered[channel];
-          }
-        }
-        this.counter += input[0].length;
-        return true;
-      }
+  async function createCassetteNode(ctx) {
+    if (!ctx.audioWorklet) {
+      throw new Error("AudioWorklet not supported in this browser.");
     }
-    registerProcessor('cassette-processor', CassetteProcessor);
-  `;
-  
-  // Create a Blob URL from the processor code.
-  const blob = new Blob([workletCode], { type: "application/javascript" });
-  const blobURL = URL.createObjectURL(blob);
-  
-  // Load the module into the AudioWorklet.
-  await ctx.audioWorklet.addModule(blobURL);
-  // Clean up the Blob URL.
-  URL.revokeObjectURL(blobURL);
-  
-  // Create the AudioWorkletNode using our processor.
-  const node = new AudioWorkletNode(ctx, 'cassette-processor', {
-    numberOfInputs: 1,
-    numberOfOutputs: 1,
-    outputChannelCount: [2]  // stereo output
-  });
-  
-  // Initialize the processor's parameters.
-  node.port.postMessage({
-    active: false, 
-    bitDepth: 12, 
-    targetSampleRate: 22000,
-    cutoff: 5000,
-    noiseAmp: 0.0002
-  });
-  return node;
-}
 
-async function createLoopRecorderNode(ctx) {
-  if (!ctx.audioWorklet) {
-    throw new Error("AudioWorklet not supported in this browser.");
+    const moduleUrl = chrome.runtime.getURL("worklets/cassette-processor-worklet.js");
+    await ctx.audioWorklet.addModule(moduleUrl);
+
+    // Create the AudioWorkletNode using our processor.
+    const node = new AudioWorkletNode(ctx, 'cassette-processor', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [2]  // stereo output
+    });
+
+    // Initialize the processor's parameters.
+    node.port.postMessage({
+      active: false,
+      bitDepth: 12,
+      targetSampleRate: 22000,
+      cutoff: 5000,
+      noiseAmp: 0.0002
+    });
+    return node;
   }
 
-  const code = `
-    class LoopRecorder extends AudioWorkletProcessor {
-      constructor() {
-        super();
-        this.recording = false;
-        this.buffers = [];
-        this.port.onmessage = (e) => {
-          if (e.data === 'start') {
-            this.recording = true;
-            this.buffers = [];
-          } else if (e.data === 'stop') {
-            this.recording = false;
-            this.port.postMessage(this.buffers);
-            this.buffers = [];
-          }
-        };
-      }
-
-      process(inputs) {
-        const input = inputs[0];
-        if (this.recording && input && input.length) {
-          const frame = [];
-          for (let c = 0; c < input.length; c++) {
-            frame[c] = new Float32Array(input[c]);
-          }
-          this.buffers.push(frame);
-        }
-        return true;
-      }
+  async function createLoopRecorderNode(ctx) {
+    if (!ctx.audioWorklet) {
+      throw new Error("AudioWorklet not supported in this browser.");
     }
-    registerProcessor('loop-recorder', LoopRecorder);
-  `;
 
-  const blob = new Blob([code], { type: 'application/javascript' });
-  const url = URL.createObjectURL(blob);
-  await ctx.audioWorklet.addModule(url);
-  URL.revokeObjectURL(url);
+    const moduleUrl = chrome.runtime.getURL("worklets/loop-recorder-worklet.js");
+    await ctx.audioWorklet.addModule(moduleUrl);
 
-  return new AudioWorkletNode(ctx, 'loop-recorder');
-}
+    return new AudioWorkletNode(ctx, 'loop-recorder');
+  }
 
-async function createVinylBreakNode(ctx) {
-  const code = `
-    class VinylBreakProc extends AudioWorkletProcessor {
-      constructor(){
-        super();
-        this.speed = 1;
-        this.len = sampleRate * 2;
-        this.buf = [new Float32Array(this.len), new Float32Array(this.len)];
-        this.w = 0; this.r = 0;
-        this.port.onmessage = e=>{ if(e.data.speed!==undefined) this.speed=e.data.speed; };
-      }
-      process(inputs,outputs){
-        const i=inputs[0],o=outputs[0];
-        if(!i.length) return true;
-        for(let n=0;n<i[0].length;n++){
-          for(let c=0;c<i.length;c++){
-            this.buf[c][this.w]=i[c][n];
-            const ri = this.r|0;
-            o[c][n]=this.buf[c][ri];
-          }
-          this.w=(this.w+1)%this.len;
-          this.r+=this.speed;
-          if(this.r>=this.len) this.r-=this.len;
-        }
-        return true;
-      }
-    }
-    registerProcessor('vinyl-break', VinylBreakProc);
-  `;
-  const url = URL.createObjectURL(new Blob([code],{type:'application/javascript'}));
-  await ctx.audioWorklet.addModule(url); URL.revokeObjectURL(url);
-  return new AudioWorkletNode(ctx,'vinyl-break');
-}
+  async function createVinylBreakNode(ctx) {
+    const moduleUrl = chrome.runtime.getURL("worklets/vinyl-break-worklet.js");
+    await ctx.audioWorklet.addModule(moduleUrl);
+    return new AudioWorkletNode(ctx,'vinyl-break');
+  }
 
-async function createStutterNode(ctx) {
-  const code = `
-    class StutterProc extends AudioWorkletProcessor {
-      constructor(){
-        super();
-        this.loop=false; this.length=2048; this.bufLen=sampleRate; this.buf=[new Float32Array(this.bufLen),new Float32Array(this.bufLen)]; this.pos=0;
-        this.port.onmessage=e=>{ if(e.data.loop!==undefined) this.loop=e.data.loop; if(e.data.length) this.length=Math.min(this.bufLen,e.data.length); };
-      }
-      process(inputs,outputs){
-        const i=inputs[0],o=outputs[0];
-        if(!i.length) return true;
-        for(let n=0;n<i[0].length;n++){
-          for(let c=0;c<i.length;c++){
-            if(!this.loop) this.buf[c][this.pos]=i[c][n];
-            o[c][n]=this.buf[c][(this.pos)%this.length];
-          }
-          this.pos=(this.pos+1)%this.bufLen;
-          if(this.loop) this.pos%=this.length;
-        }
-        return true;
-      }
-    }
-    registerProcessor('stutter-proc', StutterProc);
-  `;
-  const url=URL.createObjectURL(new Blob([code],{type:'application/javascript'}));
-  await ctx.audioWorklet.addModule(url); URL.revokeObjectURL(url);
-  return new AudioWorkletNode(ctx,'stutter-proc');
-}
+  async function createStutterNode(ctx) {
+    const moduleUrl = chrome.runtime.getURL("worklets/stutter-proc-worklet.js");
+    await ctx.audioWorklet.addModule(moduleUrl);
+    return new AudioWorkletNode(ctx,'stutter-proc');
+  }
 
-async function createPhaserNode(ctx) {
-  const code = `
-    class PhaserProc extends AudioWorkletProcessor {
-      constructor(){ super(); this.phase=0; this.rate=0.5; this.state=[]; }
-      process(inputs,outputs){
-        const i=inputs[0],o=outputs[0]; if(!i.length) return true;
-        for(let c=0;c<i.length;c++) if(!this.state[c]) this.state[c]=new Array(8).fill(0);
-        const len=i[0].length;
-        for(let n=0;n<len;n++){
-          const f=1000+800*Math.sin(this.phase); this.phase+=this.rate/sampleRate*2*Math.PI; const w=2*Math.PI*f/sampleRate; const a=(Math.sin(w)-1)/(Math.sin(w)+1);
-          for(let c=0;c<i.length;c++){
-            let x=i[c][n];
-            for(let s=0;s<4;s++){ const y=-a*x+this.state[c][s*2]; this.state[c][s*2]=x; this.state[c][s*2+1]=y; x=y; }
-            o[c][n]=x;
-          }
-        }
-        return true;
-      }
-    }
-    registerProcessor('phaser-proc', PhaserProc);
-  `;
-  const url=URL.createObjectURL(new Blob([code],{type:'application/javascript'}));
-  await ctx.audioWorklet.addModule(url); URL.revokeObjectURL(url);
-  return new AudioWorkletNode(ctx,'phaser-proc');
-}
+  async function createPhaserNode(ctx) {
+    const moduleUrl = chrome.runtime.getURL("worklets/phaser-proc-worklet.js");
+    await ctx.audioWorklet.addModule(moduleUrl);
+    return new AudioWorkletNode(ctx,'phaser-proc');
+  }
 
 function createEchoBreakEffect(ctx){
   const input=ctx.createGain(); const delay=ctx.createDelay(); delay.delayTime.value=0.2; const fb=ctx.createGain(); fb.gain.value=0.3; input.connect(delay); delay.connect(fb).connect(delay); const out=ctx.createGain(); delay.connect(out); return {in:input,out,out,update(x,y){delay.delayTime.value=0.05+0.45*y; fb.gain.value=x;}};
@@ -4678,20 +4464,18 @@ function createJagFilterEffect(ctx){
   return {in:input,out,out,update(x,y){lpf.frequency.value=300+3000*y; lfo.frequency.value=1+9*x;}};
 }
 
-async function createBitDecimatorEffect(ctx){
-  const code=`class BitDec extends AudioWorkletProcessor{constructor(){super();this.bits=4;this.port.onmessage=e=>{if(e.data.bits) this.bits=e.data.bits;};}process(i,o){const input=i[0],out=o[0];if(!input) return true;for(let c=0;c<input.length;c++){for(let n=0;n<input[c].length;n++){let v=input[c][n];const step=1/((1<<this.bits)-1);out[c][n]=Math.round(v/step)*step;}}return true;} }registerProcessor('bit-dec',BitDec);`;
-  const url=URL.createObjectURL(new Blob([code],{type:'application/javascript'}));
-  await ctx.audioWorklet.addModule(url); URL.revokeObjectURL(url);
-  const node=new AudioWorkletNode(ctx,'bit-dec');
-  return {in:node,out:node,update(x,y){node.port.postMessage({bits:4+Math.round(8*(1-x))});}};
-}
-async function createTwelveBitEffect(ctx){
-  const code=`class Bit12Proc extends AudioWorkletProcessor{process(i,o){const input=i[0],out=o[0];if(!input) return true;const step=1/((1<<12)-1);for(let c=0;c<input.length;c++){for(let n=0;n<input[c].length;n++){out[c][n]=Math.round(input[c][n]/step)*step;}}return true;}}registerProcessor("bit12-proc",Bit12Proc);`;
-  const url=URL.createObjectURL(new Blob([code],{type:"application/javascript"}));
-  await ctx.audioWorklet.addModule(url); URL.revokeObjectURL(url);
-  const node=new AudioWorkletNode(ctx,"bit12-proc");
-  return {in:node,out:node,update(){}};
-}
+  async function createBitDecimatorEffect(ctx){
+    const moduleUrl = chrome.runtime.getURL("worklets/bit-dec-worklet.js");
+    await ctx.audioWorklet.addModule(moduleUrl);
+    const node=new AudioWorkletNode(ctx,'bit-dec');
+    return {in:node,out:node,update(x,y){node.port.postMessage({bits:4+Math.round(8*(1-x))});}};
+  }
+  async function createTwelveBitEffect(ctx){
+    const moduleUrl = chrome.runtime.getURL("worklets/bit12-proc-worklet.js");
+    await ctx.audioWorklet.addModule(moduleUrl);
+    const node=new AudioWorkletNode(ctx,"bit12-proc");
+    return {in:node,out:node,update(){}};
+  }
 
 
 function createCenterCancelEffect(ctx){
