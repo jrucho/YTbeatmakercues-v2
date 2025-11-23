@@ -672,7 +672,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       sidechainSeqIndex = 0,
       sidechainSeqRunning = false,
       sidechainCurve = null,
-      sidechainPresetName = 'daftpunk',
+      sidechainPresetName = 'pump',
       sidechainEnvelopeDuration = 0.6,
       sidechainCustomCurve = null,
       sidechainCustomName = 'Custom',
@@ -1512,8 +1512,15 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
 
   const SIDECHAIN_STATE_KEY = 'ytbm_sidechain_state';
   const SIDECHAIN_CURVE_POINTS = 16;
-  const SIDECHAIN_DEFAULT_PRESET = 'daftpunk';
+  const SIDECHAIN_DEFAULT_PRESET = 'pump';
   const SIDECHAIN_PRESETS = {
+    chop: [
+      { t: 0, g: 0 },
+      { t: 0.06, g: 0.05 },
+      { t: 0.18, g: 0.65 },
+      { t: 0.32, g: 0.9 },
+      { t: 1, g: 1 }
+    ],
     daftpunk: [
       { t: 0, g: 0.2 },
       { t: 0.12, g: 0.32 },
@@ -1537,6 +1544,7 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
     ]
   };
   const SIDECHAIN_PRESET_LABELS = {
+    chop: 'Vocal chop',
     daftpunk: 'Daft Punk feel',
     pump: 'House pump',
     ultracut: 'Ultra cut',
@@ -5402,7 +5410,7 @@ function buildSidechainWindow() {
   sidechainWindowContainer.appendChild(sidechainContentWrap);
 
   const intro = document.createElement('p');
-  intro.textContent = 'Ducks the video audio only. Tap manually, follow drum hits, or run the 2x16 step pattern.';
+  intro.textContent = 'Video ducking: tap, follow kick, or use the 2x16 grid.';
   intro.className = 'sidechain-intro';
   sidechainContentWrap.appendChild(intro);
 
@@ -5424,8 +5432,8 @@ function buildSidechainWindow() {
   const previewRow = document.createElement('div');
   previewRow.className = 'sidechain-preview-row';
   sidechainPreviewCanvas = document.createElement('canvas');
-  sidechainPreviewCanvas.width = 200;
-  sidechainPreviewCanvas.height = 80;
+  sidechainPreviewCanvas.width = 180;
+  sidechainPreviewCanvas.height = 72;
   sidechainPreviewCanvas.addEventListener('mousedown', startSidechainDraw);
   sidechainPreviewCanvas.addEventListener('mousemove', continueSidechainDraw);
   sidechainPreviewCanvas.addEventListener('mouseleave', stopSidechainDraw);
@@ -5437,13 +5445,13 @@ function buildSidechainWindow() {
   previewRow.appendChild(resetBtn);
   const drawHint = document.createElement('span');
   drawHint.className = 'sidechain-draw-hint';
-  drawHint.textContent = 'Click/drag the curve to sculpt your own ducking shape.';
+  drawHint.textContent = 'Draw to shape. Save to keep.';
   previewRow.appendChild(drawHint);
   sidechainContentWrap.appendChild(previewRow);
 
   sidechainPresetWrap = document.createElement('div');
   sidechainPresetWrap.className = 'sidechain-preset-wrap';
-  ['daftpunk', 'pump', 'ultracut', 'custom'].forEach(name => {
+  ['pump', 'daftpunk', 'chop', 'ultracut', 'custom'].forEach(name => {
     const btn = document.createElement('button');
     btn.className = 'looper-btn sidechain-preset-btn';
     btn.setAttribute('data-preset', name);
@@ -5466,7 +5474,7 @@ function buildSidechainWindow() {
   const customRow = document.createElement('div');
   customRow.className = 'sidechain-control-row';
   const customLabel = document.createElement('span');
-  customLabel.textContent = 'Name + store your curve';
+  customLabel.textContent = 'Save custom curve';
   customRow.appendChild(customLabel);
   sidechainCustomNameInput = document.createElement('input');
   sidechainCustomNameInput.type = 'text';
@@ -5516,7 +5524,7 @@ function buildSidechainWindow() {
   durationRow.appendChild(sidechainDurationReadout);
   sidechainAdvancedPanel.appendChild(durationRow);
 
-  sidechainAdvancedPanel.appendChild(document.createTextNode('Advanced mode keeps knobs visible for deep control.'));
+  sidechainAdvancedPanel.appendChild(document.createTextNode('Advanced controls'));
   sidechainContentWrap.appendChild(sidechainAdvancedPanel);
 
   const seqWrap = document.createElement('div');
@@ -5543,7 +5551,7 @@ function buildSidechainWindow() {
   sidechainSeqToggleBtn.addEventListener('click', toggleSidechainSequencer);
   seqControls.appendChild(sidechainSeqToggleBtn);
   const seqNote = document.createElement('span');
-  seqNote.textContent = '32-step ducking (2 rows of 16; 8th-note rate).';
+  seqNote.textContent = '32-step ducking (2x16, 8th-note).';
   seqControls.appendChild(seqNote);
   sidechainContentWrap.appendChild(seqControls);
 
@@ -12006,19 +12014,19 @@ function injectCustomCSS() {
       font-size: 13px;
       text-align: center;
     }
-    .sidechain-container { max-width: 640px; }
-    .sidechain-control-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .sidechain-container { max-width: 560px; }
+    .sidechain-control-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
     .sidechain-control-row.split { justify-content: space-between; }
-    .sidechain-grid { display: grid; grid-template-columns: repeat(16, minmax(18px, 1fr)); grid-auto-rows: 28px; gap: 4px; margin-top: 6px; }
-    .sidechain-step { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16); color: #fff; border-radius: 8px; height: 28px; cursor: pointer; font-size: 11px; }
-    .sidechain-step.active { background: rgba(255,179,71,0.24); border-color: rgba(255,179,71,0.52); }
-    .sidechain-preview-row, .sidechain-preset-wrap { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    .sidechain-preset-btn { flex-direction: column; align-items: flex-start; }
+    .sidechain-grid { display: grid; grid-template-columns: repeat(16, minmax(14px, 1fr)); grid-auto-rows: 24px; gap: 3px; margin-top: 6px; }
+    .sidechain-step { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14); color: #fff; border-radius: 7px; height: 24px; cursor: pointer; font-size: 10px; }
+    .sidechain-step.active { background: rgba(255,179,71,0.28); border-color: rgba(255,179,71,0.56); }
+    .sidechain-preview-row, .sidechain-preset-wrap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .sidechain-preset-btn { flex-direction: column; align-items: flex-start; padding: 8px 10px; }
     .sidechain-preset-btn canvas, .sidechain-preview-row canvas { background: #0f0f0f; border-radius: 10px; }
     .sidechain-preset-btn.active { background: rgba(255,179,71,0.18); border-color: rgba(255,179,71,0.42); }
-    .sidechain-preset-label { font-weight: 600; margin-bottom: 4px; display: block; }
-    .sidechain-draw-hint { color: #ccc; font-size: 12px; max-width: 220px; line-height: 1.3; }
-    .sidechain-advanced-panel { display: none; flex-direction: column; gap: 8px; padding: 8px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; }
+    .sidechain-preset-label { font-weight: 600; margin-bottom: 2px; display: block; }
+    .sidechain-draw-hint { color: #ccc; font-size: 12px; max-width: 190px; line-height: 1.3; }
+    .sidechain-advanced-panel { display: none; flex-direction: column; gap: 6px; padding: 8px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; }
     .sidechain-advanced-panel.open { display: flex; }
     .sidechain-duration-readout { font-variant-numeric: tabular-nums; opacity: 0.85; }
     .looper-btn.ghost { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.2); }
