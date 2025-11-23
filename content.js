@@ -646,6 +646,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       sidechainFollowSelect = null,
       sidechainPreviewCanvas = null,
       sidechainTapButton = null,
+      sidechainAdvancedOpenBtn = null,
+      sidechainCloseButton = null,
       sidechainDurationSlider = null,
       sidechainDurationReadout = null,
       sidechainSeqToggleBtn = null,
@@ -5248,6 +5250,10 @@ function refreshSidechainUI() {
   if (sidechainTapButton) {
     sidechainTapButton.textContent = buildSidechainTapLabel();
   }
+  if (sidechainAdvancedOpenBtn) {
+    sidechainAdvancedOpenBtn.disabled = sidechainAdvancedMode;
+    sidechainAdvancedOpenBtn.textContent = sidechainAdvancedMode ? 'Advanced open' : 'Advanced view';
+  }
   if (sidechainAdvancedToggle) {
     sidechainAdvancedToggle.textContent = sidechainAdvancedMode ? 'Hide advanced' : 'Show advanced';
   }
@@ -5481,6 +5487,29 @@ function stopSidechainSequencer() {
   refreshSidechainUI();
 }
 
+function closeSidechainWindow() {
+  if (!sidechainWindowContainer) return;
+  sidechainWindowContainer.style.display = 'none';
+  stopSidechainSequencer();
+}
+
+function openSidechainAdvancedView() {
+  if (!sidechainWindowContainer) {
+    buildSidechainWindow();
+  }
+  if (sidechainWindowContainer && sidechainWindowContainer.style.display !== 'block') {
+    sidechainWindowContainer.style.display = 'block';
+  }
+  if (!sidechainAdvancedMode) {
+    sidechainAdvancedMode = true;
+    saveSidechainState();
+  }
+  refreshSidechainUI();
+  if (sidechainAdvancedPanel) {
+    sidechainAdvancedPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+}
+
 function toggleSidechainSequencer() {
   if (sidechainSeqRunning) stopSidechainSequencer(); else startSidechainSequencer();
 }
@@ -5490,8 +5519,7 @@ function toggleSidechainWindow() {
     buildSidechainWindow();
   }
   if (sidechainWindowContainer.style.display === 'block') {
-    sidechainWindowContainer.style.display = 'none';
-    stopSidechainSequencer();
+    closeSidechainWindow();
   } else {
     sidechainWindowContainer.style.display = 'block';
     refreshSidechainUI();
@@ -5517,6 +5545,25 @@ function buildSidechainWindow() {
   title.className = 'sidechain-title';
   title.textContent = 'Sidechain';
   header.appendChild(title);
+
+  const headerActions = document.createElement('div');
+  headerActions.className = 'sidechain-header-actions';
+
+  sidechainAdvancedOpenBtn = document.createElement('button');
+  sidechainAdvancedOpenBtn.className = 'looper-btn ghost compact sidechain-adv-open-btn';
+  sidechainAdvancedOpenBtn.textContent = 'Advanced view';
+  sidechainAdvancedOpenBtn.title = 'Open the sidechain with advanced controls visible';
+  sidechainAdvancedOpenBtn.addEventListener('click', openSidechainAdvancedView);
+  headerActions.appendChild(sidechainAdvancedOpenBtn);
+
+  sidechainCloseButton = document.createElement('button');
+  sidechainCloseButton.className = 'looper-btn ghost compact sidechain-close-btn';
+  sidechainCloseButton.title = 'Close sidechain window';
+  sidechainCloseButton.textContent = '✕';
+  sidechainCloseButton.addEventListener('click', closeSidechainWindow);
+  headerActions.appendChild(sidechainCloseButton);
+
+  header.appendChild(headerActions);
   sidechainContentWrap.appendChild(header);
 
   const controlRow = document.createElement('div');
@@ -12153,8 +12200,11 @@ function injectCustomCSS() {
     }
     .sidechain-shell { background: #0f0f0f; border-radius: 14px; box-shadow: 0 8px 22px rgba(0,0,0,0.28); }
     .sidechain-container { max-width: 600px; width: min(600px, 90vw); }
-    .sidechain-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; justify-content: flex-start; }
+    .sidechain-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; justify-content: space-between; }
     .sidechain-title { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: #fff; }
+    .sidechain-header-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+    .sidechain-adv-open-btn { padding-inline: 10px; }
+    .sidechain-close-btn { font-weight: 700; padding-inline: 8px; min-width: 34px; }
     .sidechain-shortcut { font-size: 12px; color: #aaa; background: rgba(255,255,255,0.06); padding: 4px 10px; border-radius: 999px; }
     .sidechain-control-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
     .sidechain-control-row.split { justify-content: space-between; }
