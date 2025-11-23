@@ -1498,7 +1498,22 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   // progressively quicker for rapid cue movement.
 const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   updateSuperKnobStep();
-  loadSidechainState();
+
+  const SIDECHAIN_STATE_KEY = 'ytbm_sidechain_state';
+  const SIDECHAIN_PRESETS = {
+    gentle: [
+      { t: 0, g: 0.25 },
+      { t: 0.18, g: 0.55 },
+      { t: 0.4, g: 0.82 },
+      { t: 1, g: 1 }
+    ],
+    punch: [
+      { t: 0, g: 0.08 },
+      { t: 0.12, g: 0.25 },
+      { t: 0.3, g: 0.65 },
+      { t: 1, g: 1 }
+    ]
+  };
 
   // When the instrument is active, the number row becomes a mini keyboard
   // using twelve keys for chromatic notes starting from the selected octave.
@@ -1516,22 +1531,6 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   function getInstBaseMidi() {
     return instrumentOctave * 12 + instrumentTranspose;
   }
-
-  const SIDECHAIN_STATE_KEY = 'ytbm_sidechain_state';
-  const SIDECHAIN_PRESETS = {
-    gentle: [
-      { t: 0, g: 0.25 },
-      { t: 0.18, g: 0.55 },
-      { t: 0.4, g: 0.82 },
-      { t: 1, g: 1 }
-    ],
-    punch: [
-      { t: 0, g: 0.08 },
-      { t: 0.12, g: 0.25 },
-      { t: 0.3, g: 0.65 },
-      { t: 1, g: 1 }
-    ]
-  };
 
   function ensureSidechainDefaults() {
     sidechainCurve = sidechainCurve || SIDECHAIN_PRESETS[sidechainPresetName].map(p => ({ ...p }));
@@ -1568,6 +1567,8 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
       ensureSidechainDefaults();
     }
   }
+
+  loadSidechainState();
 
   // ---- Load saved keyboard / MIDI mappings from chrome.storage ----
   if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
