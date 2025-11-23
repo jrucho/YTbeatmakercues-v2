@@ -645,6 +645,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       sidechainPresetWrap = null,
       sidechainFollowCheckbox = null,
       sidechainPreviewCanvas = null,
+      sidechainTapButton = null,
       sidechainDurationSlider = null,
       sidechainDurationReadout = null,
       sidechainSeqToggleBtn = null,
@@ -671,7 +672,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       sidechainSeqIndex = 0,
       sidechainSeqRunning = false,
       sidechainCurve = null,
-      sidechainPresetName = SIDECHAIN_DEFAULT_PRESET,
+      sidechainPresetName = 'daftpunk',
       sidechainEnvelopeDuration = 0.6,
       sidechainCustomCurve = null,
       sidechainCustomName = 'Custom',
@@ -5201,11 +5202,23 @@ function drawSidechainPreview(canvas, curve, active) {
   });
 }
 
+function buildSidechainTapLabel() {
+  const keyLabel = (extensionKeys?.sidechainTap || 'J').toUpperCase();
+  const midiVal = midiNotes?.sidechainTap;
+  const midiLabel = typeof midiVal === 'number' && !Number.isNaN(midiVal) ? `MIDI ${midiVal}` : '';
+  const parts = [`Key ${keyLabel}`];
+  if (midiLabel) parts.push(midiLabel);
+  return parts.length ? `Tap Sidechain (${parts.join(' / ')})` : 'Tap Sidechain';
+}
+
 function refreshSidechainUI() {
   if (!sidechainContentWrap) return;
   sidechainStepButtons.forEach((btn, idx) => {
     btn.classList.toggle('active', Boolean(sidechainSteps[idx]));
   });
+  if (sidechainTapButton) {
+    sidechainTapButton.textContent = buildSidechainTapLabel();
+  }
   if (sidechainAdvancedToggle) {
     sidechainAdvancedToggle.textContent = sidechainAdvancedMode ? 'Hide advanced' : 'Show advanced';
   }
@@ -5395,11 +5408,11 @@ function buildSidechainWindow() {
 
   const controlRow = document.createElement('div');
   controlRow.className = 'sidechain-control-row split';
-  const tapBtn = document.createElement('button');
-  tapBtn.className = 'looper-btn';
-  tapBtn.textContent = 'Tap Sidechain (J)';
-  tapBtn.addEventListener('click', () => triggerSidechainEnvelope('tap'));
-  controlRow.appendChild(tapBtn);
+  sidechainTapButton = document.createElement('button');
+  sidechainTapButton.className = 'looper-btn';
+  sidechainTapButton.textContent = buildSidechainTapLabel();
+  sidechainTapButton.addEventListener('click', () => triggerSidechainEnvelope('tap'));
+  controlRow.appendChild(sidechainTapButton);
 
   sidechainAdvancedToggle = document.createElement('button');
   sidechainAdvancedToggle.className = 'looper-btn ghost';
@@ -7736,7 +7749,7 @@ function playSample(n) {
     };
 
     source.start(0);
-    if (sidechainFollowDrums) triggerSidechainEnvelope('drum');
+    if (sidechainFollowDrums && n === 'kick') triggerSidechainEnvelope('drum');
   });
 }
 function playUserSample(us) {
@@ -7751,7 +7764,6 @@ function playUserSample(us) {
     g.gain.value = 1;
     s.connect(g).connect(samplesGain);
     s.start(0);
-    if (sidechainFollowDrums) triggerSidechainEnvelope('drum');
   });
 }
 
@@ -9883,6 +9895,7 @@ function buildKeyMapWindow() {
       userSamples[i].key = inp.value.trim() || userSamples[i].key;
     });
     saveMappingsToLocalStorage();
+    refreshSidechainUI();
     alert("QWERTY KeyMap saved!");
     keyMapWindowContainer.style.display = "none";
   });
@@ -10152,6 +10165,7 @@ function buildMIDIMapWindow() {
       updateSuperKnobStep();
     }
     saveMappingsToLocalStorage();
+    refreshSidechainUI();
     alert("MIDI Map saved!");
     midiMapWindowContainer.style.display = "none";
   });
