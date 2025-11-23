@@ -651,6 +651,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       sidechainSeqToggleBtn = null,
       sidechainAdvancedToggle = null,
       sidechainAdvancedPanel = null,
+      sidechainSnapToggle = null,
       sidechainCustomNameInput = null,
       sidechainCustomSaveBtn = null,
       eqButton = null,
@@ -675,6 +676,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       sidechainCurve = null,
       sidechainPresetName = 'pump',
       sidechainEnvelopeDuration = 0.6,
+      sidechainSnapEditing = true,
       sidechainCustomCurve = null,
       sidechainCustomName = 'Custom',
       sidechainAdvancedMode = false,
@@ -1630,6 +1632,7 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
         steps: sidechainSteps,
         preset: sidechainPresetName,
         duration: sidechainEnvelopeDuration,
+        snap: sidechainSnapEditing,
         customCurve: sidechainCustomCurve,
         customName: sidechainCustomName,
         advanced: sidechainAdvancedMode,
@@ -1650,6 +1653,7 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
       if (data.preset && SIDECHAIN_PRESETS[data.preset]) sidechainPresetName = data.preset;
       if (data.preset === 'custom') sidechainPresetName = 'custom';
       sidechainEnvelopeDuration = Number(data.duration) || sidechainEnvelopeDuration;
+      if (typeof data.snap === 'boolean') sidechainSnapEditing = data.snap;
       if (Array.isArray(data.customCurve)) sidechainCustomCurve = data.customCurve;
       if (typeof data.customName === 'string') sidechainCustomName = data.customName || sidechainCustomName;
       if (Array.isArray(data.curve)) sidechainCurve = data.curve;
@@ -5236,6 +5240,10 @@ function refreshSidechainUI() {
   if (sidechainAdvancedPanel) {
     sidechainAdvancedPanel.classList.toggle('open', sidechainAdvancedMode);
   }
+  if (sidechainSnapToggle) {
+    sidechainSnapToggle.textContent = sidechainSnapEditing ? 'Snap edits on' : 'Free draw';
+    sidechainSnapToggle.classList.toggle('active', sidechainSnapEditing);
+  }
   if (sidechainFollowCheckbox) {
     sidechainFollowCheckbox.checked = sidechainFollowDrums;
   }
@@ -5246,7 +5254,7 @@ function refreshSidechainUI() {
     sidechainDurationReadout.textContent = `${sidechainEnvelopeDuration.toFixed(2)}s`;
   }
   if (sidechainSeqToggleBtn) {
-    sidechainSeqToggleBtn.textContent = sidechainSeqRunning ? 'Stop 32-Step' : 'Start 32-Step';
+    sidechainSeqToggleBtn.textContent = sidechainSeqRunning ? 'Stop pattern' : 'Play pattern';
   }
   sidechainPresetButtons.forEach(btn => {
     const preset = btn.getAttribute('data-preset');
@@ -5299,8 +5307,13 @@ function saveCustomSidechainCurve() {
 function applyCanvasPointToCurve(evt) {
   if (!sidechainPreviewCanvas) return;
   const rect = sidechainPreviewCanvas.getBoundingClientRect();
-  const x = clamp01((evt.clientX - rect.left) / rect.width);
-  const y = clamp01((evt.clientY - rect.top) / rect.height);
+  let x = clamp01((evt.clientX - rect.left) / rect.width);
+  let y = clamp01((evt.clientY - rect.top) / rect.height);
+  const snap = sidechainSnapEditing || evt.shiftKey;
+  if (snap) {
+    const snapStep = 0.05;
+    y = Math.round(y / snapStep) * snapStep;
+  }
   const idx = Math.round(x * (SIDECHAIN_CURVE_POINTS - 1));
   const gain = clamp01(1 - y);
   const curve = resampleSidechainCurve(sidechainCurve);
@@ -5355,6 +5368,12 @@ function toggleSidechainAdvanced(forceValue) {
   } else {
     sidechainAdvancedMode = !sidechainAdvancedMode;
   }
+  saveSidechainState();
+  refreshSidechainUI();
+}
+
+function toggleSidechainSnap() {
+  sidechainSnapEditing = !sidechainSnapEditing;
   saveSidechainState();
   refreshSidechainUI();
 }
@@ -5425,18 +5444,30 @@ function buildSidechainWindow() {
   sidechainWindowContainer.appendChild(sidechainDragHandle);
 
   sidechainContentWrap = document.createElement('div');
-  sidechainContentWrap.className = 'looper-midimap-content';
+  sidechainContentWrap.className = 'looper-midimap-content sidechain-shell';
   sidechainWindowContainer.appendChild(sidechainContentWrap);
 
+  const header = document.createElement('div');
+  header.className = 'sidechain-header';
+  const title = document.createElement('div');
+  title.className = 'sidechain-title';
+  title.textContent = 'Video sidechain';
+  header.appendChild(title);
+  const shortcut = document.createElement('span');
+  shortcut.className = 'sidechain-shortcut';
+  shortcut.textContent = 'Cmd/Ctrl + J';
+  header.appendChild(shortcut);
+  sidechainContentWrap.appendChild(header);
+
   const intro = document.createElement('p');
-  intro.textContent = 'Video ducking: tap, follow kick, or use the 2x16 grid.';
+  intro.textContent = 'Tap, follow the kick, or run the 2×16 grid to duck video audio. Draw or pick a curve.';
   intro.className = 'sidechain-intro';
   sidechainContentWrap.appendChild(intro);
 
   const controlRow = document.createElement('div');
   controlRow.className = 'sidechain-control-row split';
   sidechainTapButton = document.createElement('button');
-  sidechainTapButton.className = 'looper-btn';
+  sidechainTapButton.className = 'looper-btn accent';
   sidechainTapButton.textContent = buildSidechainTapLabel();
   sidechainTapButton.addEventListener('click', () => triggerSidechainEnvelope('tap'));
   controlRow.appendChild(sidechainTapButton);
@@ -5451,20 +5482,20 @@ function buildSidechainWindow() {
   const previewRow = document.createElement('div');
   previewRow.className = 'sidechain-preview-row';
   sidechainPreviewCanvas = document.createElement('canvas');
-  sidechainPreviewCanvas.width = 180;
-  sidechainPreviewCanvas.height = 72;
+  sidechainPreviewCanvas.width = 220;
+  sidechainPreviewCanvas.height = 84;
   sidechainPreviewCanvas.addEventListener('mousedown', startSidechainDraw);
   sidechainPreviewCanvas.addEventListener('mousemove', continueSidechainDraw);
   sidechainPreviewCanvas.addEventListener('mouseleave', stopSidechainDraw);
   previewRow.appendChild(sidechainPreviewCanvas);
   const resetBtn = document.createElement('button');
-  resetBtn.className = 'looper-btn';
-  resetBtn.textContent = 'Reset curve';
+  resetBtn.className = 'looper-btn ghost';
+  resetBtn.textContent = 'Reset to default';
   resetBtn.addEventListener('click', resetSidechainCurve);
   previewRow.appendChild(resetBtn);
   const drawHint = document.createElement('span');
   drawHint.className = 'sidechain-draw-hint';
-  drawHint.textContent = 'Draw to shape. Save to keep.';
+  drawHint.textContent = 'Click to sculpt the envelope. Hold Shift to snap for tight chops.';
   previewRow.appendChild(drawHint);
   sidechainContentWrap.appendChild(previewRow);
 
@@ -5510,6 +5541,11 @@ function buildSidechainWindow() {
   sidechainAdvancedPanel = document.createElement('div');
   sidechainAdvancedPanel.className = 'sidechain-advanced-panel';
 
+  const advTitle = document.createElement('div');
+  advTitle.className = 'sidechain-adv-title';
+  advTitle.textContent = 'Advanced controls';
+  sidechainAdvancedPanel.appendChild(advTitle);
+
   const followLabel = document.createElement('label');
   followLabel.className = 'sidechain-follow-label';
   sidechainFollowCheckbox = document.createElement('input');
@@ -5517,9 +5553,20 @@ function buildSidechainWindow() {
   sidechainFollowCheckbox.addEventListener('change', () => toggleSidechainFollowDrums(sidechainFollowCheckbox.checked));
   followLabel.appendChild(sidechainFollowCheckbox);
   const span = document.createElement('span');
-  span.textContent = 'Follow drum samples';
+  span.textContent = 'Follow kick hits (video only)';
   followLabel.appendChild(span);
   sidechainAdvancedPanel.appendChild(followLabel);
+
+  const snapRow = document.createElement('div');
+  snapRow.className = 'sidechain-control-row';
+  const snapLabel = document.createElement('span');
+  snapLabel.textContent = 'Curve editing';
+  snapRow.appendChild(snapLabel);
+  sidechainSnapToggle = document.createElement('button');
+  sidechainSnapToggle.className = 'looper-btn ghost compact';
+  sidechainSnapToggle.addEventListener('click', toggleSidechainSnap);
+  snapRow.appendChild(sidechainSnapToggle);
+  sidechainAdvancedPanel.appendChild(snapRow);
 
   const durationRow = document.createElement('div');
   durationRow.className = 'sidechain-control-row';
@@ -5542,9 +5589,18 @@ function buildSidechainWindow() {
   sidechainDurationReadout.textContent = `${sidechainEnvelopeDuration.toFixed(2)}s`;
   durationRow.appendChild(sidechainDurationReadout);
   sidechainAdvancedPanel.appendChild(durationRow);
-
-  sidechainAdvancedPanel.appendChild(document.createTextNode('Advanced controls'));
   sidechainContentWrap.appendChild(sidechainAdvancedPanel);
+
+  const seqHeader = document.createElement('div');
+  seqHeader.className = 'sidechain-control-row';
+  const seqTitle = document.createElement('span');
+  seqTitle.textContent = '2×16 ducking pattern';
+  seqHeader.appendChild(seqTitle);
+  const seqLegend = document.createElement('span');
+  seqLegend.className = 'sidechain-draw-hint';
+  seqLegend.textContent = 'Eighth notes with live playhead';
+  seqHeader.appendChild(seqLegend);
+  sidechainContentWrap.appendChild(seqHeader);
 
   const seqWrap = document.createElement('div');
   seqWrap.className = 'sidechain-grid two-row-grid';
@@ -5570,7 +5626,7 @@ function buildSidechainWindow() {
   sidechainSeqToggleBtn.addEventListener('click', toggleSidechainSequencer);
   seqControls.appendChild(sidechainSeqToggleBtn);
   const seqNote = document.createElement('span');
-  seqNote.textContent = '32-step ducking (2x16, 8th-note).';
+  seqNote.textContent = 'Pattern ducks the video on every lit eighth note.';
   seqControls.appendChild(seqNote);
   sidechainContentWrap.appendChild(seqControls);
 
@@ -12033,23 +12089,32 @@ function injectCustomCSS() {
       font-size: 13px;
       text-align: center;
     }
-    .sidechain-container { max-width: 560px; }
+    .sidechain-shell { background: #0f0f0f; border-radius: 14px; box-shadow: 0 8px 22px rgba(0,0,0,0.28); }
+    .sidechain-container { max-width: 640px; }
+    .sidechain-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+    .sidechain-title { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: #fff; }
+    .sidechain-shortcut { font-size: 12px; color: #aaa; background: rgba(255,255,255,0.06); padding: 4px 10px; border-radius: 999px; }
     .sidechain-control-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
     .sidechain-control-row.split { justify-content: space-between; }
-    .sidechain-grid { display: grid; grid-template-columns: repeat(16, minmax(14px, 1fr)); grid-auto-rows: 24px; gap: 3px; margin-top: 6px; }
-    .sidechain-step { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14); color: #fff; border-radius: 7px; height: 24px; cursor: pointer; font-size: 10px; }
-    .sidechain-step.active { background: rgba(255,179,71,0.28); border-color: rgba(255,179,71,0.56); }
-    .sidechain-step.playing { box-shadow: 0 0 0 2px rgba(255,179,71,0.24); border-color: rgba(255,179,71,0.9); animation: sidechain-scan 0.3s ease; }
-    @keyframes sidechain-scan { from { transform: translateY(0); } to { transform: translateY(-1px); } }
-    .sidechain-preview-row, .sidechain-preset-wrap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .sidechain-preset-btn { flex-direction: column; align-items: flex-start; padding: 8px 10px; }
-    .sidechain-preset-btn canvas, .sidechain-preview-row canvas { background: #0f0f0f; border-radius: 10px; }
-    .sidechain-preset-btn.active { background: rgba(255,179,71,0.18); border-color: rgba(255,179,71,0.42); }
-    .sidechain-preset-label { font-weight: 600; margin-bottom: 2px; display: block; }
-    .sidechain-draw-hint { color: #ccc; font-size: 12px; max-width: 190px; line-height: 1.3; }
-    .sidechain-advanced-panel { display: none; flex-direction: column; gap: 6px; padding: 8px 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; }
+    .sidechain-preview-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; margin-bottom: 8px; }
+    .sidechain-grid { display: grid; grid-template-columns: repeat(16, minmax(14px, 1fr)); grid-auto-rows: 22px; gap: 3px; margin: 6px 0 2px; }
+    .sidechain-step { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12); color: #fff; border-radius: 6px; height: 22px; cursor: pointer; font-size: 10px; transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease; }
+    .sidechain-step:hover { border-color: rgba(255,255,255,0.32); }
+    .sidechain-step.active { background: rgba(255,179,71,0.24); border-color: rgba(255,179,71,0.56); }
+    .sidechain-step.playing { box-shadow: 0 0 0 2px rgba(255,179,71,0.24); border-color: rgba(255,179,71,0.9); animation: sidechain-scan 0.35s ease; transform: translateY(-1px); }
+    @keyframes sidechain-scan { from { opacity: 0.85; } to { opacity: 1; } }
+    .sidechain-preset-wrap { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 6px 0 10px; }
+    .sidechain-preset-btn { flex-direction: column; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); transition: border-color 0.2s ease, background 0.2s ease; }
+    .sidechain-preset-btn canvas, .sidechain-preview-row canvas { background: #111; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); }
+    .sidechain-preset-btn.active { background: rgba(255,179,71,0.16); border-color: rgba(255,179,71,0.46); }
+    .sidechain-preset-label { font-weight: 600; margin-bottom: 4px; display: block; color: #f1f1f1; }
+    .sidechain-draw-hint { color: #b1b1b1; font-size: 12px; max-width: 220px; line-height: 1.3; }
+    .sidechain-advanced-panel { display: none; flex-direction: column; gap: 6px; padding: 10px 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; margin-top: 4px; }
     .sidechain-advanced-panel.open { display: flex; }
-    .sidechain-duration-readout { font-variant-numeric: tabular-nums; opacity: 0.85; }
+    .sidechain-adv-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: #ccc; }
+    .sidechain-duration-readout { font-variant-numeric: tabular-nums; opacity: 0.9; font-weight: 600; }
+    .looper-btn.accent { background: #ffba53; color: #1a1a1a; border-color: rgba(255,255,255,0.08); font-weight: 700; }
+    .looper-btn.ghost.compact { padding: 6px 10px; }
     .looper-btn.ghost { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.2); }
   `;
   let st = document.createElement("style");
