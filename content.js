@@ -524,6 +524,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         videoLooper: "v",
         compressor: "c",
         eq: "e",
+        sidechainTap: "j",
         undo: "u",
         pitchDown: ",",
         pitchUp: ".",
@@ -542,18 +543,19 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       currentSamplePackName = null,
       activeSamplePackNames = [],
       sampleOrigin = { kick: [], hihat: [], snare: [] },
-      midiNotes = {
-        kick: 37,
-        hihat: 38,
-        snare: 39,
-        shift: 36,
-        pitchDown: 42,
-        pitchUp: 43,
-        cues: { 1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40, 0: 41 },
-        looperA: 34,
-        looperB: 60,
-        looperC: 61,
-        looperD: 62,
+        midiNotes = {
+          kick: 37,
+          hihat: 38,
+          snare: 39,
+          shift: 36,
+          pitchDown: 42,
+          pitchUp: 43,
+          sidechainTap: 25,
+          cues: { 1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40, 0: 41 },
+          looperA: 34,
+          looperB: 60,
+          looperC: 61,
+          looperD: 62,
         undo: 35,
         eqToggle: 33,   // MIDI note to toggle EQ
         compToggle: 32, // MIDI note to toggle Compressor
@@ -635,6 +637,24 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       manualButton = null,
       keyMapButton = null,
       midiMapButton = null,
+      sidechainWindowContainer = null,
+      sidechainDragHandle = null,
+      sidechainContentWrap = null,
+      sidechainStepButtons = [],
+      sidechainPresetButtons = [],
+      sidechainPresetWrap = null,
+      sidechainFollowSelect = null,
+      sidechainPreviewCanvas = null,
+      sidechainTapButton = null,
+      sidechainCloseButton = null,
+      sidechainDurationSlider = null,
+      sidechainDurationReadout = null,
+      sidechainSeqToggleBtn = null,
+      sidechainAdvancedToggle = null,
+      sidechainAdvancedPanel = null,
+      sidechainSnapToggle = null,
+      sidechainCustomNameInput = null,
+      sidechainCustomSaveBtn = null,
       eqButton = null,
       loFiCompButton = null,
       fxPadButton = null,
@@ -647,6 +667,21 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       loFiCompFaderValueLabel = null,
       loFiCompDefaultValue = 150,
       loFiCompActive = false,
+      sidechainGain = null,
+      sidechainFollowMode = 'off',
+      sidechainSteps = new Array(32).fill(false),
+      sidechainSeqInterval = null,
+      sidechainSeqIndex = 0,
+      sidechainSeqRunning = false,
+      sidechainSeqPlayhead = null,
+      sidechainCurve = null,
+      sidechainPresetName = 'pump',
+      sidechainEnvelopeDuration = 0.6,
+      sidechainSnapEditing = true,
+      sidechainCustomCurve = null,
+      sidechainCustomName = 'Custom',
+      sidechainAdvancedMode = false,
+      sidechainIsDrawing = false,
       // Minimal UI elements
       minimalUIContainer = null,
       randomCuesButtonMin = null,
@@ -1479,6 +1514,95 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
 const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   updateSuperKnobStep();
 
+  const SIDECHAIN_STATE_KEY = 'ytbm_sidechain_state';
+  const SIDECHAIN_FOLLOW_TARGETS = ['kick', 'snare', 'hihat'];
+  const SIDECHAIN_CURVE_POINTS = 16;
+  const SIDECHAIN_DEFAULT_PRESET = 'pump';
+  const SIDECHAIN_PRESETS = {
+    pump: [
+      { t: 0, g: 0 },
+      { t: 0.18, g: 0.35 },
+      { t: 0.45, g: 0.82 },
+      { t: 1, g: 1 }
+    ],
+    soft: [
+      { t: 0, g: 0.25 },
+      { t: 0.35, g: 0.45 },
+      { t: 0.75, g: 0.9 },
+      { t: 1, g: 1 }
+    ],
+    chop: [
+      { t: 0, g: 0 },
+      { t: 0.08, g: 0.1 },
+      { t: 0.22, g: 0.8 },
+      { t: 1, g: 1 }
+    ],
+    gate: [
+      { t: 0, g: 0 },
+      { t: 0.68, g: 0 },
+      { t: 0.82, g: 0.6 },
+      { t: 1, g: 1 }
+    ]
+  };
+  const SIDECHAIN_PRESET_LABELS = {
+    pump: 'Pump',
+    soft: 'Soft open',
+    chop: 'Chop',
+    gate: 'Hard gate',
+    custom: 'My curve'
+  };
+
+  function clamp01(v) { return Math.min(1, Math.max(0, v)); }
+
+  function sampleSidechainCurve(curve, t) {
+    if (!curve || !curve.length) return 1;
+    const clampedT = clamp01(t);
+    const last = curve[curve.length - 1];
+    if (clampedT >= last.t) return last.g;
+    for (let i = 0; i < curve.length - 1; i++) {
+      const a = curve[i];
+      const b = curve[i + 1];
+      if (clampedT >= a.t && clampedT <= b.t) {
+        const lerp = (clampedT - a.t) / Math.max(0.0001, (b.t - a.t));
+        return a.g + (b.g - a.g) * lerp;
+      }
+    }
+    return curve[0].g;
+  }
+
+  function normalizeSidechainCurve(curve) {
+    const safe = Array.isArray(curve) ? curve : [];
+    const cleaned = safe
+      .map(p => ({ t: clamp01(p.t ?? 0), g: clamp01(p.g ?? 0) }))
+      .filter(p => Number.isFinite(p.t) && Number.isFinite(p.g))
+      .sort((a, b) => a.t - b.t);
+    if (!cleaned.length) cleaned.push({ t: 0, g: 0 }, { t: 1, g: 1 });
+    const first = cleaned[0];
+    if (first.t !== 0) cleaned.unshift({ t: 0, g: first.g });
+    const last = cleaned[cleaned.length - 1];
+    if (last.t !== 1) cleaned.push({ t: 1, g: last.g });
+    return cleaned;
+  }
+
+  function resampleSidechainCurve(curve) {
+    const norm = normalizeSidechainCurve(curve);
+    const resampled = [];
+    for (let i = 0; i < SIDECHAIN_CURVE_POINTS; i++) {
+      const t = i / (SIDECHAIN_CURVE_POINTS - 1);
+      resampled.push({ t, g: sampleSidechainCurve(norm, t) });
+    }
+    resampled[resampled.length - 1] = { t: 1, g: resampled[resampled.length - 1].g };
+    return resampled;
+  }
+
+  function getPresetCurve(name) {
+    if (name === 'custom' && Array.isArray(sidechainCustomCurve)) {
+      return normalizeSidechainCurve(sidechainCustomCurve);
+    }
+    if (SIDECHAIN_PRESETS[name]) return normalizeSidechainCurve(SIDECHAIN_PRESETS[name]);
+    return normalizeSidechainCurve(SIDECHAIN_PRESETS[SIDECHAIN_DEFAULT_PRESET]);
+  }
+
   // When the instrument is active, the number row becomes a mini keyboard
   // using twelve keys for chromatic notes starting from the selected octave.
   const KEYBOARD_INST_KEYS = ['1','2','3','4','5','6','7','8','9','0','-','='];
@@ -1495,6 +1619,80 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   function getInstBaseMidi() {
     return instrumentOctave * 12 + instrumentTranspose;
   }
+
+  function ensureSidechainDefaults() {
+    if (sidechainPresetName !== 'custom' && !SIDECHAIN_PRESETS[sidechainPresetName]) {
+      sidechainPresetName = SIDECHAIN_DEFAULT_PRESET;
+    }
+    if (sidechainPresetName === 'custom' && !sidechainCustomCurve) {
+      sidechainPresetName = SIDECHAIN_DEFAULT_PRESET;
+    }
+    sidechainCurve = normalizeSidechainCurve(sidechainCurve || getPresetCurve(sidechainPresetName));
+    const allowedFollow = ['off', 'kick', 'all'];
+    if (!allowedFollow.includes(sidechainFollowMode)) sidechainFollowMode = 'off';
+    if (!Array.isArray(sidechainSteps) || sidechainSteps.length !== 32) {
+      sidechainSteps = new Array(32).fill(false).map((_, i) => i % 4 === 0);
+    }
+  }
+
+  function getActiveSidechainCurve() {
+    if (sidechainPresetName === 'custom' && Array.isArray(sidechainCustomCurve)) {
+      sidechainCurve = normalizeSidechainCurve(sidechainCustomCurve);
+    } else if (!sidechainCurve || !sidechainCurve.length || !SIDECHAIN_PRESETS[sidechainPresetName]) {
+      sidechainCurve = getPresetCurve(SIDECHAIN_DEFAULT_PRESET);
+      sidechainPresetName = SIDECHAIN_DEFAULT_PRESET;
+    } else {
+      sidechainCurve = normalizeSidechainCurve(sidechainCurve);
+    }
+    return sidechainCurve;
+  }
+
+  function saveSidechainState() {
+    try {
+      localStorage.setItem(SIDECHAIN_STATE_KEY, JSON.stringify({
+        followDrums: sidechainFollowMode !== 'off',
+        followMode: sidechainFollowMode,
+        steps: sidechainSteps,
+        preset: sidechainPresetName,
+        duration: sidechainEnvelopeDuration,
+        snap: sidechainSnapEditing,
+        customCurve: sidechainCustomCurve,
+        customName: sidechainCustomName,
+        advanced: sidechainAdvancedMode,
+        curve: sidechainCurve
+      }));
+    } catch (err) {
+      console.warn('Failed saving sidechain state', err);
+    }
+  }
+
+  function loadSidechainState() {
+    try {
+      const raw = localStorage.getItem(SIDECHAIN_STATE_KEY);
+      if (!raw) { ensureSidechainDefaults(); return; }
+      const data = JSON.parse(raw);
+      if (typeof data.followMode === 'string') {
+        sidechainFollowMode = data.followMode;
+      } else {
+        sidechainFollowMode = data.followDrums ? 'kick' : 'off';
+      }
+      if (Array.isArray(data.steps) && data.steps.length === 32) sidechainSteps = data.steps.slice();
+      if (data.preset && SIDECHAIN_PRESETS[data.preset]) sidechainPresetName = data.preset;
+      if (data.preset === 'custom') sidechainPresetName = 'custom';
+      sidechainEnvelopeDuration = Number(data.duration) || sidechainEnvelopeDuration;
+      if (typeof data.snap === 'boolean') sidechainSnapEditing = data.snap;
+      if (Array.isArray(data.customCurve)) sidechainCustomCurve = data.customCurve;
+      if (typeof data.customName === 'string') sidechainCustomName = data.customName || sidechainCustomName;
+      if (Array.isArray(data.curve)) sidechainCurve = data.curve;
+      sidechainAdvancedMode = Boolean(data.advanced);
+    } catch (err) {
+      console.warn('Failed loading sidechain state', err);
+    } finally {
+      ensureSidechainDefaults();
+    }
+  }
+
+  loadSidechainState();
 
   // ---- Load saved keyboard / MIDI mappings from chrome.storage ----
   if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
@@ -4197,6 +4395,8 @@ cleanupFunctions.push(() => clearInterval(videoCheckInterval));
 
 async function setupAudioNodes() {
   videoGain = audioContext.createGain();
+  sidechainGain = audioContext.createGain();
+  sidechainGain.gain.value = 1;
   antiClickGain = audioContext.createGain();
   antiClickGain.gain.setValueAtTime(1, audioContext.currentTime);
   samplesGain = audioContext.createGain();
@@ -4868,6 +5068,7 @@ function applyAllFXRouting() {
   if (!fxPadLeveler) fxPadLeveler = createLevelComp(audioContext);
   // First, disconnect everything that may have been connected:
   videoGain.disconnect();
+  if (sidechainGain) sidechainGain.disconnect();
   if (antiClickGain) antiClickGain.disconnect();
   loopAudioGain.disconnect();
   bus1Gain.disconnect();
@@ -4893,13 +5094,15 @@ function applyAllFXRouting() {
 
   // Decide how to chain the "video" path:
   // videoGain -> antiClickGain? -> (optionally eq->reverb->cassette) -> bus1Gain
-  let currentVidNode;
+  let currentVidNode = videoGain;
+  if (sidechainGain) {
+    videoGain.connect(sidechainGain);
+    currentVidNode = sidechainGain;
+  }
   if (antiClickGain) {
     // Always feed the anti‑click gain from the video element
-    videoGain.connect(antiClickGain);
+    currentVidNode.connect(antiClickGain);
     currentVidNode = antiClickGain;
-  } else {
-    currentVidNode = videoGain;
   }
   if (eqFilterActive && eqFilterApplyTarget === "video") {
     currentVidNode.connect(eqFilterNode);
@@ -5000,6 +5203,551 @@ function applyAllFXRouting() {
   bus3RecGain.connect(mainRecorderMix);
   bus4RecGain.connect(mainRecorderMix);
   mainRecorderMix.connect(destinationNode);
+}
+
+
+/**************************************
+ * Video Sidechain Ducking
+ **************************************/
+function drawSidechainPreview(canvas, curve, active) {
+  if (!canvas || !curve) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = active ? '#ffb347' : '#888';
+  ctx.fillStyle = 'rgba(255,179,71,0.1)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, h);
+  curve.forEach((p, idx) => {
+    const x = p.t * w;
+    const y = h - p.g * h;
+    ctx.lineTo(x, y);
+    if (idx === curve.length - 1) ctx.lineTo(w, h - curve[curve.length - 1].g * h);
+  });
+  ctx.lineTo(w, h);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#ffb347';
+  curve.forEach(p => {
+    const x = p.t * w;
+    const y = h - p.g * h;
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+  function buildSidechainTapLabel() {
+  const keyLabel = (extensionKeys?.sidechainTap || 'J').toUpperCase();
+  const midiVal = midiNotes?.sidechainTap;
+  const midiLabel = typeof midiVal === 'number' && !Number.isNaN(midiVal) ? `MIDI ${midiVal}` : '';
+  const parts = [`Key ${keyLabel}`];
+  if (midiLabel) parts.push(midiLabel);
+  return parts.length ? `Tap Sidechain (${parts.join(' / ')})` : 'Tap Sidechain';
+}
+
+function refreshSidechainUI() {
+  if (!sidechainContentWrap) return;
+  sidechainStepButtons.forEach((btn, idx) => {
+    btn.classList.toggle('active', Boolean(sidechainSteps[idx]));
+    const isPlayhead = sidechainSeqRunning && sidechainSeqPlayhead === idx;
+    btn.classList.toggle('playing', isPlayhead);
+  });
+  if (sidechainTapButton) {
+    sidechainTapButton.textContent = buildSidechainTapLabel();
+  }
+  if (sidechainAdvancedToggle) {
+    sidechainAdvancedToggle.textContent = sidechainAdvancedMode ? 'Hide advanced' : 'Show advanced';
+  }
+  if (sidechainAdvancedPanel) {
+    sidechainAdvancedPanel.classList.toggle('open', sidechainAdvancedMode);
+  }
+  if (sidechainSnapToggle) {
+    sidechainSnapToggle.textContent = sidechainSnapEditing ? 'Grid snaps on' : 'Grid snaps off';
+    sidechainSnapToggle.classList.toggle('active', sidechainSnapEditing);
+  }
+  if (sidechainFollowSelect) {
+    sidechainFollowSelect.value = sidechainFollowMode;
+  }
+  if (sidechainDurationSlider) {
+    sidechainDurationSlider.value = sidechainEnvelopeDuration;
+  }
+  if (sidechainDurationReadout) {
+    sidechainDurationReadout.textContent = `${sidechainEnvelopeDuration.toFixed(2)}s`;
+  }
+  if (sidechainSeqToggleBtn) {
+    sidechainSeqToggleBtn.textContent = sidechainSeqRunning ? 'Stop pattern' : 'Play pattern';
+  }
+  sidechainPresetButtons.forEach(btn => {
+    const preset = btn.getAttribute('data-preset');
+    const isCustom = preset === 'custom';
+    const hasCustom = Boolean(sidechainCustomCurve);
+    btn.disabled = isCustom && !hasCustom;
+    btn.classList.toggle('active', preset === sidechainPresetName);
+    if (btn._curveCanvas) {
+      const curve = preset === 'custom' ? (hasCustom ? sidechainCustomCurve : sidechainCurve) : getPresetCurve(preset);
+      drawSidechainPreview(btn._curveCanvas, curve, preset === sidechainPresetName);
+    }
+    if (isCustom) {
+      if (btn._label) btn._label.textContent = hasCustom ? `${sidechainCustomName} (custom)` : 'Save a curve to use it';
+    }
+    if (!isCustom && btn._label) {
+      btn._label.textContent = SIDECHAIN_PRESET_LABELS[preset] || preset;
+    }
+  });
+  if (sidechainPreviewCanvas) {
+    drawSidechainPreview(sidechainPreviewCanvas, sidechainCurve, true);
+  }
+  if (sidechainCustomNameInput) {
+    sidechainCustomNameInput.value = sidechainCustomName;
+  }
+}
+
+function setSidechainPreset(name) {
+  if (name === 'custom' && !sidechainCustomCurve) return;
+  sidechainPresetName = name;
+  sidechainCurve = getPresetCurve(name).map(p => ({ ...p }));
+  saveSidechainState();
+  refreshSidechainUI();
+}
+
+function resetSidechainCurve() {
+  sidechainPresetName = SIDECHAIN_DEFAULT_PRESET;
+  sidechainCurve = getPresetCurve(SIDECHAIN_DEFAULT_PRESET);
+  saveSidechainState();
+  refreshSidechainUI();
+}
+
+function saveCustomSidechainCurve() {
+  sidechainCustomName = (sidechainCustomNameInput?.value || sidechainCustomName || 'Custom').trim() || 'Custom';
+  sidechainCustomCurve = sidechainCurve.map(p => ({ ...p }));
+  sidechainPresetName = 'custom';
+  saveSidechainState();
+  refreshSidechainUI();
+}
+
+function applyCanvasPointToCurve(evt) {
+  if (!sidechainPreviewCanvas) return;
+  const rect = sidechainPreviewCanvas.getBoundingClientRect();
+  let x = clamp01((evt.clientX - rect.left) / rect.width);
+  let y = clamp01((evt.clientY - rect.top) / rect.height);
+  const snap = sidechainSnapEditing || evt.shiftKey;
+  const gain = clamp01(1 - y);
+  const gridStep = 1 / (SIDECHAIN_CURVE_POINTS - 1);
+  let curve = normalizeSidechainCurve(sidechainCurve).map(p => ({ ...p }));
+
+  if (snap) {
+    const snapStep = 0.05;
+    const snappedY = Math.round(y / snapStep) * snapStep;
+    const idx = Math.round(x * (SIDECHAIN_CURVE_POINTS - 1));
+    const snappedT = clamp01(idx * gridStep);
+    const tValue = Number.isFinite(snappedT) ? snappedT : 0;
+    const gValue = clamp01(1 - snappedY);
+    curve = curve.filter((p, i) => {
+      const isAnchor = i === 0 || i === curve.length - 1;
+      return isAnchor || Math.abs(p.t - tValue) > gridStep * 0.25;
+    });
+    curve.push({ t: tValue, g: gValue });
+  } else {
+    const existingIndex = curve.findIndex(p => Math.abs(p.t - x) < 0.02 && p.t !== 0 && p.t !== 1);
+    if (existingIndex >= 0) {
+      curve[existingIndex] = { t: x, g: gain };
+    } else {
+      curve.push({ t: x, g: gain });
+    }
+  }
+
+  sidechainCurve = normalizeSidechainCurve(curve);
+  sidechainPresetName = 'custom';
+  saveCustomSidechainCurve();
+}
+
+function eraseCanvasPoint(evt) {
+  if (!sidechainPreviewCanvas) return;
+  const rect = sidechainPreviewCanvas.getBoundingClientRect();
+  const x = clamp01((evt.clientX - rect.left) / rect.width);
+  const curve = normalizeSidechainCurve(sidechainCurve);
+  if (curve.length <= 2) return;
+  let removeIndex = -1;
+  let closest = Infinity;
+  curve.forEach((p, idx) => {
+    if (idx === 0 || idx === curve.length - 1) return;
+    const dist = Math.abs(p.t - x);
+    if (dist < closest) {
+      closest = dist;
+      removeIndex = idx;
+    }
+  });
+  if (removeIndex === -1) return;
+  curve.splice(removeIndex, 1);
+  sidechainCurve = normalizeSidechainCurve(curve);
+  sidechainPresetName = 'custom';
+  saveCustomSidechainCurve();
+}
+
+function startSidechainDraw(evt) {
+  sidechainIsDrawing = true;
+  applyCanvasPointToCurve(evt);
+}
+
+function continueSidechainDraw(evt) {
+  if (!sidechainIsDrawing) return;
+  applyCanvasPointToCurve(evt);
+}
+
+function stopSidechainDraw() {
+  if (!sidechainIsDrawing) return;
+  sidechainIsDrawing = false;
+}
+
+async function triggerSidechainEnvelope(reason = 'tap') {
+  await ensureAudioContext();
+  ensureSidechainDefaults();
+  if (!sidechainGain || !audioContext) return;
+
+  const now = audioContext.currentTime;
+  const dur = sidechainEnvelopeDuration || 0.6;
+  sidechainGain.gain.cancelScheduledValues(now);
+  sidechainGain.gain.setValueAtTime(sidechainGain.gain.value, now);
+  sidechainGain.gain.linearRampToValueAtTime(1, now);
+  const playableCurve = resampleSidechainCurve(getActiveSidechainCurve());
+  for (const p of playableCurve) {
+    const t = now + Math.max(0, p.t) * dur;
+    const g = Math.max(0, Math.min(1, p.g));
+    sidechainGain.gain.linearRampToValueAtTime(g, t);
+  }
+  sidechainGain.gain.linearRampToValueAtTime(1, now + dur);
+}
+
+function setSidechainFollowMode(mode) {
+  const allowed = ['off', 'kick', 'all'];
+  if (!allowed.includes(mode)) mode = 'off';
+  sidechainFollowMode = mode;
+  saveSidechainState();
+  refreshSidechainUI();
+}
+
+function shouldSidechainFromDrum(name) {
+  if (!name) return false;
+  if (sidechainFollowMode === 'kick') return name === 'kick';
+  if (sidechainFollowMode === 'all') return SIDECHAIN_FOLLOW_TARGETS.includes(name);
+  return false;
+}
+
+function toggleSidechainAdvanced(forceValue) {
+  if (typeof forceValue === 'boolean') {
+    sidechainAdvancedMode = forceValue;
+  } else {
+    sidechainAdvancedMode = !sidechainAdvancedMode;
+  }
+  saveSidechainState();
+  refreshSidechainUI();
+}
+
+function toggleSidechainSnap() {
+  sidechainSnapEditing = !sidechainSnapEditing;
+  saveSidechainState();
+  refreshSidechainUI();
+}
+
+function setSidechainSeqPlayhead(index) {
+  if (!sidechainStepButtons.length) return;
+  if (typeof sidechainSeqPlayhead === 'number' && sidechainStepButtons[sidechainSeqPlayhead]) {
+    sidechainStepButtons[sidechainSeqPlayhead].classList.remove('playing');
+  }
+  if (typeof index === 'number' && sidechainStepButtons[index]) {
+    sidechainStepButtons[index].classList.add('playing');
+    sidechainSeqPlayhead = index;
+  } else {
+    sidechainSeqPlayhead = null;
+  }
+}
+
+function runSidechainSequencerStep() {
+  setSidechainSeqPlayhead(sidechainSeqIndex);
+  if (sidechainSteps[sidechainSeqIndex]) {
+    triggerSidechainEnvelope('sequencer');
+  }
+  sidechainSeqIndex = (sidechainSeqIndex + 1) % sidechainSteps.length;
+}
+
+function startSidechainSequencer() {
+  stopSidechainSequencer();
+  const stepMs = 60000 / (sequencerBPM * 2);
+  sidechainSeqIndex = 0;
+  sidechainSeqRunning = true;
+  setSidechainSeqPlayhead(sidechainSeqIndex);
+  sidechainSeqInterval = setInterval(runSidechainSequencerStep, stepMs);
+  refreshSidechainUI();
+}
+
+function stopSidechainSequencer() {
+  if (sidechainSeqInterval) clearInterval(sidechainSeqInterval);
+  sidechainSeqInterval = null;
+  sidechainSeqRunning = false;
+  setSidechainSeqPlayhead(null);
+  refreshSidechainUI();
+}
+
+function closeSidechainWindow() {
+  if (!sidechainWindowContainer) return;
+  sidechainWindowContainer.style.display = 'none';
+  stopSidechainSequencer();
+}
+
+function openSidechainAdvancedView() {
+  if (!sidechainWindowContainer) {
+    buildSidechainWindow();
+  }
+  if (sidechainWindowContainer && sidechainWindowContainer.style.display !== 'block') {
+    sidechainWindowContainer.style.display = 'block';
+  }
+  if (!sidechainAdvancedMode) {
+    sidechainAdvancedMode = true;
+    saveSidechainState();
+  }
+  refreshSidechainUI();
+  if (sidechainAdvancedPanel) {
+    sidechainAdvancedPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+}
+
+function toggleSidechainSequencer() {
+  if (sidechainSeqRunning) stopSidechainSequencer(); else startSidechainSequencer();
+}
+
+function toggleSidechainWindow() {
+  if (!sidechainWindowContainer) {
+    buildSidechainWindow();
+  }
+  if (sidechainWindowContainer.style.display === 'block') {
+    closeSidechainWindow();
+  } else {
+    sidechainWindowContainer.style.display = 'block';
+    refreshSidechainUI();
+  }
+}
+
+function buildSidechainWindow() {
+  sidechainWindowContainer = document.createElement('div');
+  sidechainWindowContainer.className = 'looper-midimap-container sidechain-container';
+
+  sidechainDragHandle = document.createElement('div');
+  sidechainDragHandle.className = 'looper-midimap-drag-handle';
+  sidechainDragHandle.innerText = 'Video sidechain';
+  sidechainWindowContainer.appendChild(sidechainDragHandle);
+
+  sidechainContentWrap = document.createElement('div');
+  sidechainContentWrap.className = 'looper-midimap-content sidechain-shell';
+  sidechainWindowContainer.appendChild(sidechainContentWrap);
+
+  const header = document.createElement('div');
+  header.className = 'sidechain-header';
+  const title = document.createElement('div');
+  title.className = 'sidechain-title';
+  title.textContent = 'Sidechain';
+  header.appendChild(title);
+
+  const headerActions = document.createElement('div');
+  headerActions.className = 'sidechain-header-actions';
+
+  sidechainCloseButton = document.createElement('button');
+  sidechainCloseButton.className = 'looper-btn ghost compact sidechain-close-btn';
+  sidechainCloseButton.title = 'Close sidechain window';
+  sidechainCloseButton.textContent = '✕';
+  sidechainCloseButton.addEventListener('click', closeSidechainWindow);
+  headerActions.appendChild(sidechainCloseButton);
+
+  header.appendChild(headerActions);
+  sidechainContentWrap.appendChild(header);
+
+  const controlRow = document.createElement('div');
+  controlRow.className = 'sidechain-control-row split';
+  sidechainTapButton = document.createElement('button');
+  sidechainTapButton.className = 'looper-btn accent';
+  sidechainTapButton.textContent = buildSidechainTapLabel();
+  sidechainTapButton.addEventListener('click', () => triggerSidechainEnvelope('tap'));
+  controlRow.appendChild(sidechainTapButton);
+
+  sidechainAdvancedToggle = document.createElement('button');
+  sidechainAdvancedToggle.className = 'looper-btn ghost';
+  sidechainAdvancedToggle.addEventListener('click', () => toggleSidechainAdvanced());
+  controlRow.appendChild(sidechainAdvancedToggle);
+
+  sidechainContentWrap.appendChild(controlRow);
+
+  const previewRow = document.createElement('div');
+  previewRow.className = 'sidechain-preview-row';
+  sidechainPreviewCanvas = document.createElement('canvas');
+  sidechainPreviewCanvas.width = 260;
+  sidechainPreviewCanvas.height = 110;
+  sidechainPreviewCanvas.style.cursor = 'crosshair';
+  sidechainPreviewCanvas.addEventListener('mousedown', startSidechainDraw);
+  sidechainPreviewCanvas.addEventListener('mousemove', continueSidechainDraw);
+  sidechainPreviewCanvas.addEventListener('mouseleave', stopSidechainDraw);
+  sidechainPreviewCanvas.addEventListener('dblclick', eraseCanvasPoint);
+  previewRow.appendChild(sidechainPreviewCanvas);
+  const resetBtn = document.createElement('button');
+  resetBtn.className = 'looper-btn ghost';
+  resetBtn.textContent = 'Reset to default';
+  resetBtn.addEventListener('click', resetSidechainCurve);
+  previewRow.appendChild(resetBtn);
+  const drawHint = document.createElement('span');
+  drawHint.className = 'sidechain-draw-hint';
+  drawHint.textContent = 'Draw freely, double-click to erase, hold Shift for grid snaps when needed.';
+  previewRow.appendChild(drawHint);
+  sidechainContentWrap.appendChild(previewRow);
+
+  sidechainPresetWrap = document.createElement('div');
+  sidechainPresetWrap.className = 'sidechain-preset-wrap compact';
+  ['pump', 'soft', 'chop', 'gate', 'custom'].forEach(name => {
+    const btn = document.createElement('button');
+    btn.className = 'looper-btn sidechain-preset-btn tiny';
+    btn.style.minWidth = '88px';
+    btn.style.padding = '6px 10px';
+    btn.setAttribute('data-preset', name);
+    const label = document.createElement('span');
+    label.className = 'sidechain-preset-label';
+    label.style.fontSize = '12px';
+    label.textContent = SIDECHAIN_PRESET_LABELS[name] || name;
+    btn._label = label;
+    btn.appendChild(label);
+    btn.addEventListener('click', () => setSidechainPreset(name));
+    sidechainPresetButtons.push(btn);
+    sidechainPresetWrap.appendChild(btn);
+  });
+  sidechainContentWrap.appendChild(sidechainPresetWrap);
+
+  const customRow = document.createElement('div');
+  customRow.className = 'sidechain-control-row';
+  const customLabel = document.createElement('span');
+  customLabel.textContent = 'Save custom curve';
+  customRow.appendChild(customLabel);
+  sidechainCustomNameInput = document.createElement('input');
+  sidechainCustomNameInput.type = 'text';
+  sidechainCustomNameInput.maxLength = 24;
+  sidechainCustomNameInput.placeholder = 'My curve';
+  customRow.appendChild(sidechainCustomNameInput);
+  sidechainCustomSaveBtn = document.createElement('button');
+  sidechainCustomSaveBtn.className = 'looper-btn';
+  sidechainCustomSaveBtn.textContent = 'Save preset';
+  sidechainCustomSaveBtn.addEventListener('click', saveCustomSidechainCurve);
+  customRow.appendChild(sidechainCustomSaveBtn);
+  sidechainContentWrap.appendChild(customRow);
+
+  sidechainAdvancedPanel = document.createElement('div');
+  sidechainAdvancedPanel.className = 'sidechain-advanced-panel';
+
+  const advTitle = document.createElement('div');
+  advTitle.className = 'sidechain-adv-title';
+  advTitle.textContent = 'Advanced controls';
+  sidechainAdvancedPanel.appendChild(advTitle);
+
+  const followRow = document.createElement('div');
+  followRow.className = 'sidechain-control-row';
+  const followLabel = document.createElement('span');
+  followLabel.textContent = 'Follow drums';
+  followRow.appendChild(followLabel);
+  sidechainFollowSelect = document.createElement('select');
+  sidechainFollowSelect.className = 'sidechain-follow-select';
+  [
+    { value: 'off', label: 'Off' },
+    { value: 'kick', label: 'Kick only' },
+    { value: 'all', label: 'All drums' },
+  ].forEach(({ value, label }) => {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    sidechainFollowSelect.appendChild(opt);
+  });
+  sidechainFollowSelect.addEventListener('change', () => setSidechainFollowMode(sidechainFollowSelect.value));
+  followRow.appendChild(sidechainFollowSelect);
+  sidechainAdvancedPanel.appendChild(followRow);
+
+  const snapRow = document.createElement('div');
+  snapRow.className = 'sidechain-control-row';
+  const snapLabel = document.createElement('span');
+  snapLabel.textContent = 'Grid snapping';
+  snapRow.appendChild(snapLabel);
+  sidechainSnapToggle = document.createElement('button');
+  sidechainSnapToggle.className = 'looper-btn ghost compact';
+  sidechainSnapToggle.addEventListener('click', toggleSidechainSnap);
+  snapRow.appendChild(sidechainSnapToggle);
+  sidechainAdvancedPanel.appendChild(snapRow);
+
+  const durationRow = document.createElement('div');
+  durationRow.className = 'sidechain-control-row';
+  const durLabel = document.createElement('span');
+  durLabel.textContent = 'Curve length';
+  durationRow.appendChild(durLabel);
+  sidechainDurationSlider = document.createElement('input');
+  sidechainDurationSlider.type = 'range';
+  sidechainDurationSlider.min = 0.2;
+  sidechainDurationSlider.max = 1.2;
+  sidechainDurationSlider.step = 0.05;
+  sidechainDurationSlider.addEventListener('input', () => {
+    sidechainEnvelopeDuration = Number(sidechainDurationSlider.value);
+    saveSidechainState();
+    refreshSidechainUI();
+  });
+  durationRow.appendChild(sidechainDurationSlider);
+  sidechainDurationReadout = document.createElement('span');
+  sidechainDurationReadout.className = 'sidechain-duration-readout';
+  sidechainDurationReadout.textContent = `${sidechainEnvelopeDuration.toFixed(2)}s`;
+  durationRow.appendChild(sidechainDurationReadout);
+  sidechainAdvancedPanel.appendChild(durationRow);
+  sidechainContentWrap.appendChild(sidechainAdvancedPanel);
+
+  const seqHeader = document.createElement('div');
+  seqHeader.className = 'sidechain-control-row';
+  const seqTitle = document.createElement('span');
+  seqTitle.textContent = '2×16 ducking pattern';
+  seqHeader.appendChild(seqTitle);
+  const seqLegend = document.createElement('span');
+  seqLegend.className = 'sidechain-draw-hint';
+  seqLegend.textContent = 'Eighth notes with live playhead';
+  seqHeader.appendChild(seqLegend);
+  sidechainContentWrap.appendChild(seqHeader);
+
+  const seqWrap = document.createElement('div');
+  seqWrap.className = 'sidechain-grid two-row-grid';
+  sidechainStepButtons = [];
+  for (let i = 0; i < 32; i++) {
+    const btn = document.createElement('button');
+    btn.className = 'sidechain-step';
+    btn.textContent = String((i % 16) + 1);
+    btn.addEventListener('click', () => {
+      sidechainSteps[i] = !sidechainSteps[i];
+      saveSidechainState();
+      refreshSidechainUI();
+    });
+    sidechainStepButtons.push(btn);
+    seqWrap.appendChild(btn);
+  }
+  sidechainContentWrap.appendChild(seqWrap);
+
+  const seqControls = document.createElement('div');
+  seqControls.className = 'sidechain-control-row';
+  sidechainSeqToggleBtn = document.createElement('button');
+  sidechainSeqToggleBtn.className = 'looper-btn';
+  sidechainSeqToggleBtn.addEventListener('click', toggleSidechainSequencer);
+  seqControls.appendChild(sidechainSeqToggleBtn);
+  sidechainContentWrap.appendChild(seqControls);
+
+  document.body.appendChild(sidechainWindowContainer);
+  makePanelDraggable(sidechainWindowContainer, sidechainDragHandle, 'ytbm_sidechain_pos');
+  restorePanelPosition(sidechainWindowContainer, 'ytbm_sidechain_pos');
+  if (!window._ytbmSidechainMouseBound) {
+    document.addEventListener('mouseup', stopSidechainDraw);
+    window._ytbmSidechainMouseBound = true;
+  }
+  refreshSidechainUI();
+  sidechainWindowContainer.style.display = 'none';
 }
 
 
@@ -6864,6 +7612,17 @@ function onKeyDown(e) {
     return;
   }
 
+  if (k === extensionKeys.sidechainTap.toLowerCase()) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.metaKey || e.ctrlKey) {
+      toggleSidechainWindow();
+    } else {
+      triggerSidechainEnvelope('tap');
+    }
+    return;
+  }
+
   if (instrumentPreset > 0) {
     const idx = KEYBOARD_INST_KEYS.indexOf(k);
     if (idx !== -1) {
@@ -7182,6 +7941,7 @@ function playSample(n) {
     };
 
     source.start(0);
+    if (shouldSidechainFromDrum(n)) triggerSidechainEnvelope('drum');
   });
 }
 function playUserSample(us) {
@@ -7987,6 +8747,16 @@ function addControls() {
   micUtilityRow.className = "ytbm-panel-row";
   ensureMicButtonInAdvancedUI(micUtilityRow);
   cw.appendChild(micUtilityRow);
+
+  const sidechainRow = document.createElement('div');
+  sidechainRow.className = 'ytbm-panel-row';
+  const sidechainLaunchBtn = document.createElement('button');
+  sidechainLaunchBtn.className = 'looper-btn';
+  sidechainLaunchBtn.textContent = 'Open sidechain (advanced)';
+  sidechainLaunchBtn.title = 'Open the video sidechain window with advanced controls visible';
+  sidechainLaunchBtn.addEventListener('click', openSidechainAdvancedView);
+  sidechainRow.appendChild(sidechainLaunchBtn);
+  cw.appendChild(sidechainRow);
 
   buildInputDeviceDropdown(cw);
   updateMonitorSelectColor();
@@ -8912,11 +9682,15 @@ function handleMIDIMessage(e) {
       }
     }
   } else if (st === 144) {
-	if (Number(note) === Number(midiNotes.randomCues)) {
+        if (Number(note) === Number(midiNotes.randomCues)) {
       randomizeCuesInOneClick();
       return;
     }
-	if (note === midiNotes.undo) {
+    if (note === midiNotes.sidechainTap) {
+      triggerSidechainEnvelope('midi');
+      return;
+    }
+        if (note === midiNotes.undo) {
       if (isModPressed) {
         redoAction();
       } else {
@@ -9258,6 +10032,10 @@ function buildKeyMapWindow() {
       <input data-extkey="eq" value="${escapeHtml(extensionKeys.eq)}" maxlength="1">
     </div>
     <div class="keymap-row">
+      <label>Sidechain Tap/UI:</label>
+      <input data-extkey="sidechainTap" value="${escapeHtml(extensionKeys.sidechainTap)}" maxlength="1">
+    </div>
+    <div class="keymap-row">
       <label>Undo:</label>
       <input data-extkey="undo" value="${escapeHtml(extensionKeys.undo)}" maxlength="1">
     </div>
@@ -9319,6 +10097,7 @@ function buildKeyMapWindow() {
       userSamples[i].key = inp.value.trim() || userSamples[i].key;
     });
     saveMappingsToLocalStorage();
+    refreshSidechainUI();
     alert("QWERTY KeyMap saved!");
     keyMapWindowContainer.style.display = "none";
   });
@@ -9415,6 +10194,12 @@ function buildMIDIMapWindow() {
   <input data-midiname="randomCues" value="${escapeHtml(String(midiNotes.randomCues))}" type="number">
   <button data-detect="randomCues" class="detect-midi-btn">Detect</button>
 </div>
+    <h4>Sidechain</h4>
+    <div class="midimap-row">
+      <label>Sidechain Tap:</label>
+      <input data-midiname="sidechainTap" value="${escapeHtml(String(midiNotes.sidechainTap))}" type="number">
+      <button data-detect="sidechainTap" class="detect-midi-btn">Detect</button>
+    </div>
     <h4>Cues (0..9)</h4>
     <div class="midimap-cues">
   `;
@@ -9582,6 +10367,7 @@ function buildMIDIMapWindow() {
       updateSuperKnobStep();
     }
     saveMappingsToLocalStorage();
+    refreshSidechainUI();
     alert("MIDI Map saved!");
     midiMapWindowContainer.style.display = "none";
   });
@@ -11422,6 +12208,37 @@ function injectCustomCSS() {
       font-size: 13px;
       text-align: center;
     }
+    .sidechain-shell { background: #0f0f0f; border-radius: 14px; box-shadow: 0 8px 22px rgba(0,0,0,0.28); }
+    .sidechain-container { max-width: 600px; width: min(600px, 90vw); }
+    .sidechain-header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; justify-content: space-between; }
+    .sidechain-title { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: #fff; }
+    .sidechain-header-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+    .sidechain-adv-open-btn { padding-inline: 10px; }
+    .sidechain-close-btn { font-weight: 700; padding-inline: 8px; min-width: 34px; }
+    .sidechain-shortcut { font-size: 12px; color: #aaa; background: rgba(255,255,255,0.06); padding: 4px 10px; border-radius: 999px; }
+    .sidechain-control-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+    .sidechain-control-row.split { justify-content: space-between; }
+    .sidechain-preview-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+    .sidechain-grid { display: grid; grid-template-columns: repeat(16, minmax(14px, 1fr)); grid-auto-rows: 22px; gap: 3px; margin: 6px 0 2px; }
+    .sidechain-step { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12); color: #fff; border-radius: 6px; height: 22px; cursor: pointer; font-size: 10px; transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease; }
+    .sidechain-step:hover { border-color: rgba(255,255,255,0.32); }
+    .sidechain-step.active { background: rgba(255,179,71,0.24); border-color: rgba(255,179,71,0.56); }
+    .sidechain-step.playing { box-shadow: 0 0 0 2px rgba(255,179,71,0.24); border-color: rgba(255,179,71,0.9); animation: sidechain-scan 0.35s ease; transform: translateY(-1px); }
+    @keyframes sidechain-scan { from { opacity: 0.85; } to { opacity: 1; } }
+    .sidechain-preset-wrap { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 6px 0 10px; }
+    .sidechain-preset-btn { flex-direction: column; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); transition: border-color 0.2s ease, background 0.2s ease; }
+    .sidechain-preset-btn canvas, .sidechain-preview-row canvas { background: #111; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); }
+    .sidechain-preset-btn.active { background: rgba(255,179,71,0.16); border-color: rgba(255,179,71,0.46); }
+    .sidechain-preset-label { font-weight: 600; margin-bottom: 4px; display: block; color: #f1f1f1; }
+    .sidechain-draw-hint { color: #b1b1b1; font-size: 12px; max-width: 220px; line-height: 1.3; }
+    .sidechain-advanced-panel { display: none; flex-direction: column; gap: 6px; padding: 10px 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; margin-top: 4px; }
+    .sidechain-advanced-panel.open { display: flex; }
+    .sidechain-adv-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: #ccc; }
+    .sidechain-duration-readout { font-variant-numeric: tabular-nums; opacity: 0.9; font-weight: 600; }
+    .sidechain-follow-select { background: rgba(255,255,255,0.06); color: #fff; border: 1px solid rgba(255,255,255,0.16); border-radius: 10px; padding: 6px 10px; min-width: 120px; font-size: 12px; }
+    .looper-btn.accent { background: #ffba53; color: #1a1a1a; border-color: rgba(255,255,255,0.08); font-weight: 700; }
+    .looper-btn.ghost.compact { padding: 6px 10px; }
+    .looper-btn.ghost { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.2); }
   `;
   let st = document.createElement("style");
   st.textContent = css;
