@@ -646,7 +646,6 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       sidechainFollowSelect = null,
       sidechainPreviewCanvas = null,
       sidechainTapButton = null,
-      sidechainAdvancedOpenBtn = null,
       sidechainCloseButton = null,
       sidechainDurationSlider = null,
       sidechainDurationReadout = null,
@@ -1634,6 +1633,18 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
     if (!Array.isArray(sidechainSteps) || sidechainSteps.length !== 32) {
       sidechainSteps = new Array(32).fill(false).map((_, i) => i % 4 === 0);
     }
+  }
+
+  function getActiveSidechainCurve() {
+    if (sidechainPresetName === 'custom' && Array.isArray(sidechainCustomCurve)) {
+      sidechainCurve = normalizeSidechainCurve(sidechainCustomCurve);
+    } else if (!sidechainCurve || !sidechainCurve.length || !SIDECHAIN_PRESETS[sidechainPresetName]) {
+      sidechainCurve = getPresetCurve(SIDECHAIN_DEFAULT_PRESET);
+      sidechainPresetName = SIDECHAIN_DEFAULT_PRESET;
+    } else {
+      sidechainCurve = normalizeSidechainCurve(sidechainCurve);
+    }
+    return sidechainCurve;
   }
 
   function saveSidechainState() {
@@ -5250,10 +5261,6 @@ function refreshSidechainUI() {
   if (sidechainTapButton) {
     sidechainTapButton.textContent = buildSidechainTapLabel();
   }
-  if (sidechainAdvancedOpenBtn) {
-    sidechainAdvancedOpenBtn.disabled = sidechainAdvancedMode;
-    sidechainAdvancedOpenBtn.textContent = sidechainAdvancedMode ? 'Advanced open' : 'Advanced view';
-  }
   if (sidechainAdvancedToggle) {
     sidechainAdvancedToggle.textContent = sidechainAdvancedMode ? 'Hide advanced' : 'Show advanced';
   }
@@ -5408,7 +5415,7 @@ async function triggerSidechainEnvelope(reason = 'tap') {
   sidechainGain.gain.cancelScheduledValues(now);
   sidechainGain.gain.setValueAtTime(sidechainGain.gain.value, now);
   sidechainGain.gain.linearRampToValueAtTime(1, now);
-  const playableCurve = resampleSidechainCurve(sidechainCurve);
+  const playableCurve = resampleSidechainCurve(getActiveSidechainCurve());
   for (const p of playableCurve) {
     const t = now + Math.max(0, p.t) * dur;
     const g = Math.max(0, Math.min(1, p.g));
@@ -5548,13 +5555,6 @@ function buildSidechainWindow() {
 
   const headerActions = document.createElement('div');
   headerActions.className = 'sidechain-header-actions';
-
-  sidechainAdvancedOpenBtn = document.createElement('button');
-  sidechainAdvancedOpenBtn.className = 'looper-btn ghost compact sidechain-adv-open-btn';
-  sidechainAdvancedOpenBtn.textContent = 'Advanced view';
-  sidechainAdvancedOpenBtn.title = 'Open the sidechain with advanced controls visible';
-  sidechainAdvancedOpenBtn.addEventListener('click', openSidechainAdvancedView);
-  headerActions.appendChild(sidechainAdvancedOpenBtn);
 
   sidechainCloseButton = document.createElement('button');
   sidechainCloseButton.className = 'looper-btn ghost compact sidechain-close-btn';
@@ -8747,6 +8747,16 @@ function addControls() {
   micUtilityRow.className = "ytbm-panel-row";
   ensureMicButtonInAdvancedUI(micUtilityRow);
   cw.appendChild(micUtilityRow);
+
+  const sidechainRow = document.createElement('div');
+  sidechainRow.className = 'ytbm-panel-row';
+  const sidechainLaunchBtn = document.createElement('button');
+  sidechainLaunchBtn.className = 'looper-btn';
+  sidechainLaunchBtn.textContent = 'Open sidechain (advanced)';
+  sidechainLaunchBtn.title = 'Open the video sidechain window with advanced controls visible';
+  sidechainLaunchBtn.addEventListener('click', openSidechainAdvancedView);
+  sidechainRow.appendChild(sidechainLaunchBtn);
+  cw.appendChild(sidechainRow);
 
   buildInputDeviceDropdown(cw);
   updateMonitorSelectColor();

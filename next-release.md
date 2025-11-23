@@ -1,7 +1,8 @@
 # Next Release Notes (2.0.2)
 
 ## Highlights
-- Added dedicated close and advanced-view buttons to the sidechain popup header so you can exit quickly or jump straight into detailed controls.
-- Kept the popup layout compact while ensuring advanced mode opens smoothly from the header.
+- Added a sidechain launch button to the Advanced window so you can pop open the ducking controls (with advanced mode enabled) without hunting for shortcuts.
+- Simplified the sidechain popup header to a clean title and close button while keeping everything inside the canvas area.
+- Ensured kick/all-drum sidechaining always uses the currently selected curve—whether triggered from keys or MIDI—so drum-follow ducking matches what you dialed in.
 
-These changes focus on making the sidechain window easier to navigate while preserving the streamlined YouTube-inspired look.
+These changes focus on a cleaner sidechain workflow while maintaining the streamlined YouTube-inspired look.
