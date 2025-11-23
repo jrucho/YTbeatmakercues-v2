@@ -524,6 +524,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         videoLooper: "v",
         compressor: "c",
         eq: "e",
+        sidechainTap: "j",
         undo: "u",
         pitchDown: ",",
         pitchUp: ".",
@@ -542,18 +543,19 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       currentSamplePackName = null,
       activeSamplePackNames = [],
       sampleOrigin = { kick: [], hihat: [], snare: [] },
-      midiNotes = {
-        kick: 37,
-        hihat: 38,
-        snare: 39,
-        shift: 36,
-        pitchDown: 42,
-        pitchUp: 43,
-        cues: { 1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40, 0: 41 },
-        looperA: 34,
-        looperB: 60,
-        looperC: 61,
-        looperD: 62,
+        midiNotes = {
+          kick: 37,
+          hihat: 38,
+          snare: 39,
+          shift: 36,
+          pitchDown: 42,
+          pitchUp: 43,
+          sidechainTap: 25,
+          cues: { 1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40, 0: 41 },
+          looperA: 34,
+          looperB: 60,
+          looperC: 61,
+          looperD: 62,
         undo: 35,
         eqToggle: 33,   // MIDI note to toggle EQ
         compToggle: 32, // MIDI note to toggle Compressor
@@ -635,6 +637,15 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       manualButton = null,
       keyMapButton = null,
       midiMapButton = null,
+      sidechainWindowContainer = null,
+      sidechainDragHandle = null,
+      sidechainContentWrap = null,
+      sidechainStepButtons = [],
+      sidechainPresetButtons = [],
+      sidechainFollowCheckbox = null,
+      sidechainPreviewCanvas = null,
+      sidechainDurationSlider = null,
+      sidechainSeqToggleBtn = null,
       eqButton = null,
       loFiCompButton = null,
       fxPadButton = null,
@@ -647,6 +658,15 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       loFiCompFaderValueLabel = null,
       loFiCompDefaultValue = 150,
       loFiCompActive = false,
+      sidechainGain = null,
+      sidechainFollowDrums = false,
+      sidechainSteps = new Array(32).fill(false),
+      sidechainSeqInterval = null,
+      sidechainSeqIndex = 0,
+      sidechainSeqRunning = false,
+      sidechainCurve = null,
+      sidechainPresetName = "gentle",
+      sidechainEnvelopeDuration = 0.6,
       // Minimal UI elements
       minimalUIContainer = null,
       randomCuesButtonMin = null,
@@ -1478,6 +1498,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   // progressively quicker for rapid cue movement.
 const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   updateSuperKnobStep();
+  loadSidechainState();
 
   // When the instrument is active, the number row becomes a mini keyboard
   // using twelve keys for chromatic notes starting from the selected octave.
@@ -1494,6 +1515,58 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   }
   function getInstBaseMidi() {
     return instrumentOctave * 12 + instrumentTranspose;
+  }
+
+  const SIDECHAIN_STATE_KEY = 'ytbm_sidechain_state';
+  const SIDECHAIN_PRESETS = {
+    gentle: [
+      { t: 0, g: 0.25 },
+      { t: 0.18, g: 0.55 },
+      { t: 0.4, g: 0.82 },
+      { t: 1, g: 1 }
+    ],
+    punch: [
+      { t: 0, g: 0.08 },
+      { t: 0.12, g: 0.25 },
+      { t: 0.3, g: 0.65 },
+      { t: 1, g: 1 }
+    ]
+  };
+
+  function ensureSidechainDefaults() {
+    sidechainCurve = sidechainCurve || SIDECHAIN_PRESETS[sidechainPresetName].map(p => ({ ...p }));
+    if (!Array.isArray(sidechainSteps) || sidechainSteps.length !== 32) {
+      sidechainSteps = new Array(32).fill(false).map((_, i) => i % 4 === 0);
+    }
+  }
+
+  function saveSidechainState() {
+    try {
+      localStorage.setItem(SIDECHAIN_STATE_KEY, JSON.stringify({
+        followDrums: sidechainFollowDrums,
+        steps: sidechainSteps,
+        preset: sidechainPresetName,
+        duration: sidechainEnvelopeDuration
+      }));
+    } catch (err) {
+      console.warn('Failed saving sidechain state', err);
+    }
+  }
+
+  function loadSidechainState() {
+    try {
+      const raw = localStorage.getItem(SIDECHAIN_STATE_KEY);
+      if (!raw) { ensureSidechainDefaults(); return; }
+      const data = JSON.parse(raw);
+      sidechainFollowDrums = Boolean(data.followDrums);
+      if (Array.isArray(data.steps) && data.steps.length === 32) sidechainSteps = data.steps.slice();
+      if (data.preset && SIDECHAIN_PRESETS[data.preset]) sidechainPresetName = data.preset;
+      sidechainEnvelopeDuration = Number(data.duration) || sidechainEnvelopeDuration;
+    } catch (err) {
+      console.warn('Failed loading sidechain state', err);
+    } finally {
+      ensureSidechainDefaults();
+    }
   }
 
   // ---- Load saved keyboard / MIDI mappings from chrome.storage ----
@@ -4197,6 +4270,8 @@ cleanupFunctions.push(() => clearInterval(videoCheckInterval));
 
 async function setupAudioNodes() {
   videoGain = audioContext.createGain();
+  sidechainGain = audioContext.createGain();
+  sidechainGain.gain.value = 1;
   antiClickGain = audioContext.createGain();
   antiClickGain.gain.setValueAtTime(1, audioContext.currentTime);
   samplesGain = audioContext.createGain();
@@ -4868,6 +4943,7 @@ function applyAllFXRouting() {
   if (!fxPadLeveler) fxPadLeveler = createLevelComp(audioContext);
   // First, disconnect everything that may have been connected:
   videoGain.disconnect();
+  if (sidechainGain) sidechainGain.disconnect();
   if (antiClickGain) antiClickGain.disconnect();
   loopAudioGain.disconnect();
   bus1Gain.disconnect();
@@ -4893,13 +4969,15 @@ function applyAllFXRouting() {
 
   // Decide how to chain the "video" path:
   // videoGain -> antiClickGain? -> (optionally eq->reverb->cassette) -> bus1Gain
-  let currentVidNode;
+  let currentVidNode = videoGain;
+  if (sidechainGain) {
+    videoGain.connect(sidechainGain);
+    currentVidNode = sidechainGain;
+  }
   if (antiClickGain) {
     // Always feed the anti‑click gain from the video element
-    videoGain.connect(antiClickGain);
+    currentVidNode.connect(antiClickGain);
     currentVidNode = antiClickGain;
-  } else {
-    currentVidNode = videoGain;
   }
   if (eqFilterActive && eqFilterApplyTarget === "video") {
     currentVidNode.connect(eqFilterNode);
@@ -5000,6 +5078,253 @@ function applyAllFXRouting() {
   bus3RecGain.connect(mainRecorderMix);
   bus4RecGain.connect(mainRecorderMix);
   mainRecorderMix.connect(destinationNode);
+}
+
+
+/**************************************
+ * Video Sidechain Ducking
+ **************************************/
+function drawSidechainPreview(canvas, curve, active) {
+  if (!canvas || !curve) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = active ? '#ffb347' : '#888';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, h);
+  curve.forEach((p, idx) => {
+    const x = p.t * w;
+    const y = h - p.g * h;
+    ctx.lineTo(x, y);
+    if (idx === curve.length - 1) ctx.lineTo(w, h - curve[curve.length - 1].g * h);
+  });
+  ctx.stroke();
+}
+
+function refreshSidechainUI() {
+  if (!sidechainContentWrap) return;
+  sidechainStepButtons.forEach((btn, idx) => {
+    btn.classList.toggle('active', Boolean(sidechainSteps[idx]));
+  });
+  if (sidechainFollowCheckbox) {
+    sidechainFollowCheckbox.checked = sidechainFollowDrums;
+  }
+  if (sidechainDurationSlider) {
+    sidechainDurationSlider.value = sidechainEnvelopeDuration;
+  }
+  if (sidechainSeqToggleBtn) {
+    sidechainSeqToggleBtn.textContent = sidechainSeqRunning ? 'Stop 32-Step' : 'Start 32-Step';
+  }
+  sidechainPresetButtons.forEach(btn => {
+    const preset = btn.getAttribute('data-preset');
+    btn.classList.toggle('active', preset === sidechainPresetName);
+  });
+  if (sidechainPreviewCanvas) {
+    drawSidechainPreview(sidechainPreviewCanvas, sidechainCurve, true);
+  }
+}
+
+function setSidechainPreset(name) {
+  if (!SIDECHAIN_PRESETS[name]) return;
+  sidechainPresetName = name;
+  sidechainCurve = SIDECHAIN_PRESETS[name].map(p => ({ ...p }));
+  saveSidechainState();
+  refreshSidechainUI();
+}
+
+function resetSidechainCurve() {
+  setSidechainPreset('gentle');
+}
+
+async function triggerSidechainEnvelope(reason = 'tap') {
+  await ensureAudioContext();
+  ensureSidechainDefaults();
+  if (!sidechainGain || !audioContext) return;
+
+  const now = audioContext.currentTime;
+  const dur = sidechainEnvelopeDuration || 0.6;
+  sidechainGain.gain.cancelScheduledValues(now);
+  sidechainGain.gain.setValueAtTime(sidechainGain.gain.value, now);
+  sidechainGain.gain.linearRampToValueAtTime(1, now);
+  for (const p of sidechainCurve) {
+    const t = now + Math.max(0, p.t) * dur;
+    const g = Math.max(0, Math.min(1, p.g));
+    sidechainGain.gain.linearRampToValueAtTime(g, t);
+  }
+  sidechainGain.gain.linearRampToValueAtTime(1, now + dur);
+}
+
+function toggleSidechainFollowDrums(enabled) {
+  sidechainFollowDrums = enabled;
+  saveSidechainState();
+  refreshSidechainUI();
+}
+
+function runSidechainSequencerStep() {
+  if (sidechainSteps[sidechainSeqIndex]) {
+    triggerSidechainEnvelope('sequencer');
+  }
+  sidechainSeqIndex = (sidechainSeqIndex + 1) % sidechainSteps.length;
+}
+
+function startSidechainSequencer() {
+  stopSidechainSequencer();
+  const stepMs = 60000 / (sequencerBPM * 2);
+  sidechainSeqIndex = 0;
+  sidechainSeqRunning = true;
+  sidechainSeqInterval = setInterval(runSidechainSequencerStep, stepMs);
+  refreshSidechainUI();
+}
+
+function stopSidechainSequencer() {
+  if (sidechainSeqInterval) clearInterval(sidechainSeqInterval);
+  sidechainSeqInterval = null;
+  sidechainSeqRunning = false;
+  refreshSidechainUI();
+}
+
+function toggleSidechainSequencer() {
+  if (sidechainSeqRunning) stopSidechainSequencer(); else startSidechainSequencer();
+}
+
+function toggleSidechainWindow() {
+  if (!sidechainWindowContainer) {
+    buildSidechainWindow();
+  }
+  if (sidechainWindowContainer.style.display === 'block') {
+    sidechainWindowContainer.style.display = 'none';
+    stopSidechainSequencer();
+  } else {
+    sidechainWindowContainer.style.display = 'block';
+    refreshSidechainUI();
+  }
+}
+
+function buildSidechainWindow() {
+  sidechainWindowContainer = document.createElement('div');
+  sidechainWindowContainer.className = 'looper-midimap-container sidechain-container';
+
+  sidechainDragHandle = document.createElement('div');
+  sidechainDragHandle.className = 'looper-midimap-drag-handle';
+  sidechainDragHandle.innerText = 'Video Sidechain (Cmd+J)';
+  sidechainWindowContainer.appendChild(sidechainDragHandle);
+
+  sidechainContentWrap = document.createElement('div');
+  sidechainContentWrap.className = 'looper-midimap-content';
+  sidechainWindowContainer.appendChild(sidechainContentWrap);
+
+  const intro = document.createElement('p');
+  intro.textContent = 'Ducks the video audio only. Tap manually, follow drum hits, or run the 32-step pattern.';
+  intro.className = 'sidechain-intro';
+  sidechainContentWrap.appendChild(intro);
+
+  const controlRow = document.createElement('div');
+  controlRow.className = 'sidechain-control-row';
+  const tapBtn = document.createElement('button');
+  tapBtn.className = 'looper-btn';
+  tapBtn.textContent = 'Tap Sidechain (J)';
+  tapBtn.addEventListener('click', () => triggerSidechainEnvelope('tap'));
+  controlRow.appendChild(tapBtn);
+
+  const followLabel = document.createElement('label');
+  followLabel.className = 'sidechain-follow-label';
+  sidechainFollowCheckbox = document.createElement('input');
+  sidechainFollowCheckbox.type = 'checkbox';
+  sidechainFollowCheckbox.addEventListener('change', () => toggleSidechainFollowDrums(sidechainFollowCheckbox.checked));
+  followLabel.appendChild(sidechainFollowCheckbox);
+  const span = document.createElement('span');
+  span.textContent = 'Follow drum samples';
+  followLabel.appendChild(span);
+  controlRow.appendChild(followLabel);
+
+  sidechainContentWrap.appendChild(controlRow);
+
+  const durationRow = document.createElement('div');
+  durationRow.className = 'sidechain-control-row';
+  const durLabel = document.createElement('span');
+  durLabel.textContent = 'Curve length';
+  durationRow.appendChild(durLabel);
+  sidechainDurationSlider = document.createElement('input');
+  sidechainDurationSlider.type = 'range';
+  sidechainDurationSlider.min = 0.2;
+  sidechainDurationSlider.max = 1.2;
+  sidechainDurationSlider.step = 0.05;
+  sidechainDurationSlider.addEventListener('input', () => {
+    sidechainEnvelopeDuration = Number(sidechainDurationSlider.value);
+    saveSidechainState();
+    refreshSidechainUI();
+  });
+  durationRow.appendChild(sidechainDurationSlider);
+  sidechainContentWrap.appendChild(durationRow);
+
+  const previewRow = document.createElement('div');
+  previewRow.className = 'sidechain-preview-row';
+  sidechainPreviewCanvas = document.createElement('canvas');
+  sidechainPreviewCanvas.width = 200;
+  sidechainPreviewCanvas.height = 80;
+  previewRow.appendChild(sidechainPreviewCanvas);
+  const resetBtn = document.createElement('button');
+  resetBtn.className = 'looper-btn';
+  resetBtn.textContent = 'Reset curve';
+  resetBtn.addEventListener('click', resetSidechainCurve);
+  previewRow.appendChild(resetBtn);
+  sidechainContentWrap.appendChild(previewRow);
+
+  const presetWrap = document.createElement('div');
+  presetWrap.className = 'sidechain-preset-wrap';
+  ['gentle', 'punch'].forEach(name => {
+    const btn = document.createElement('button');
+    btn.className = 'looper-btn sidechain-preset-btn';
+    btn.setAttribute('data-preset', name);
+    btn.textContent = name === 'gentle' ? 'Gentle curve' : 'Punchy curve';
+    const canvas = document.createElement('canvas');
+    canvas.width = 120;
+    canvas.height = 50;
+    btn.appendChild(canvas);
+    btn.addEventListener('click', () => setSidechainPreset(name));
+    sidechainPresetButtons.push(btn);
+    presetWrap.appendChild(btn);
+    drawSidechainPreview(canvas, SIDECHAIN_PRESETS[name], false);
+  });
+  sidechainContentWrap.appendChild(presetWrap);
+
+  const seqWrap = document.createElement('div');
+  seqWrap.className = 'sidechain-grid';
+  sidechainStepButtons = [];
+  for (let i = 0; i < 32; i++) {
+    const btn = document.createElement('button');
+    btn.className = 'sidechain-step';
+    btn.textContent = String(i + 1);
+    btn.addEventListener('click', () => {
+      sidechainSteps[i] = !sidechainSteps[i];
+      saveSidechainState();
+      refreshSidechainUI();
+    });
+    sidechainStepButtons.push(btn);
+    seqWrap.appendChild(btn);
+  }
+  sidechainContentWrap.appendChild(seqWrap);
+
+  const seqControls = document.createElement('div');
+  seqControls.className = 'sidechain-control-row';
+  sidechainSeqToggleBtn = document.createElement('button');
+  sidechainSeqToggleBtn.className = 'looper-btn';
+  sidechainSeqToggleBtn.addEventListener('click', toggleSidechainSequencer);
+  seqControls.appendChild(sidechainSeqToggleBtn);
+  const seqNote = document.createElement('span');
+  seqNote.textContent = '32-step ducking (8th-note rate).';
+  seqControls.appendChild(seqNote);
+  sidechainContentWrap.appendChild(seqControls);
+
+  document.body.appendChild(sidechainWindowContainer);
+  makePanelDraggable(sidechainWindowContainer, sidechainDragHandle, 'ytbm_sidechain_pos');
+  restorePanelPosition(sidechainWindowContainer, 'ytbm_sidechain_pos');
+  refreshSidechainUI();
+  sidechainWindowContainer.style.display = 'none';
 }
 
 
@@ -6864,6 +7189,17 @@ function onKeyDown(e) {
     return;
   }
 
+  if (k === extensionKeys.sidechainTap.toLowerCase()) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.metaKey || e.ctrlKey) {
+      toggleSidechainWindow();
+    } else {
+      triggerSidechainEnvelope('tap');
+    }
+    return;
+  }
+
   if (instrumentPreset > 0) {
     const idx = KEYBOARD_INST_KEYS.indexOf(k);
     if (idx !== -1) {
@@ -7182,6 +7518,7 @@ function playSample(n) {
     };
 
     source.start(0);
+    if (sidechainFollowDrums) triggerSidechainEnvelope('drum');
   });
 }
 function playUserSample(us) {
@@ -7196,6 +7533,7 @@ function playUserSample(us) {
     g.gain.value = 1;
     s.connect(g).connect(samplesGain);
     s.start(0);
+    if (sidechainFollowDrums) triggerSidechainEnvelope('drum');
   });
 }
 
@@ -8912,11 +9250,15 @@ function handleMIDIMessage(e) {
       }
     }
   } else if (st === 144) {
-	if (Number(note) === Number(midiNotes.randomCues)) {
+        if (Number(note) === Number(midiNotes.randomCues)) {
       randomizeCuesInOneClick();
       return;
     }
-	if (note === midiNotes.undo) {
+    if (note === midiNotes.sidechainTap) {
+      triggerSidechainEnvelope('midi');
+      return;
+    }
+        if (note === midiNotes.undo) {
       if (isModPressed) {
         redoAction();
       } else {
@@ -9258,6 +9600,10 @@ function buildKeyMapWindow() {
       <input data-extkey="eq" value="${escapeHtml(extensionKeys.eq)}" maxlength="1">
     </div>
     <div class="keymap-row">
+      <label>Sidechain Tap/UI:</label>
+      <input data-extkey="sidechainTap" value="${escapeHtml(extensionKeys.sidechainTap)}" maxlength="1">
+    </div>
+    <div class="keymap-row">
       <label>Undo:</label>
       <input data-extkey="undo" value="${escapeHtml(extensionKeys.undo)}" maxlength="1">
     </div>
@@ -9415,6 +9761,12 @@ function buildMIDIMapWindow() {
   <input data-midiname="randomCues" value="${escapeHtml(String(midiNotes.randomCues))}" type="number">
   <button data-detect="randomCues" class="detect-midi-btn">Detect</button>
 </div>
+    <h4>Sidechain</h4>
+    <div class="midimap-row">
+      <label>Sidechain Tap:</label>
+      <input data-midiname="sidechainTap" value="${escapeHtml(String(midiNotes.sidechainTap))}" type="number">
+      <button data-detect="sidechainTap" class="detect-midi-btn">Detect</button>
+    </div>
     <h4>Cues (0..9)</h4>
     <div class="midimap-cues">
   `;
@@ -11422,6 +11774,15 @@ function injectCustomCSS() {
       font-size: 13px;
       text-align: center;
     }
+    .sidechain-container { max-width: 540px; }
+    .sidechain-control-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .sidechain-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(44px, 1fr)); gap: 6px; margin-top: 6px; }
+    .sidechain-step { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16); color: #fff; border-radius: 10px; height: 38px; cursor: pointer; }
+    .sidechain-step.active { background: rgba(255,179,71,0.24); border-color: rgba(255,179,71,0.52); }
+    .sidechain-preview-row, .sidechain-preset-wrap { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .sidechain-preset-btn { flex-direction: column; align-items: flex-start; }
+    .sidechain-preset-btn canvas, .sidechain-preview-row canvas { background: #0f0f0f; border-radius: 10px; }
+    .sidechain-preset-btn.active { background: rgba(255,179,71,0.18); border-color: rgba(255,179,71,0.42); }
   `;
   let st = document.createElement("style");
   st.textContent = css;
