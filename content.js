@@ -671,6 +671,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       sidechainSeqInterval = null,
       sidechainSeqIndex = 0,
       sidechainSeqRunning = false,
+      sidechainSeqPlayhead = null,
       sidechainCurve = null,
       sidechainPresetName = 'pump',
       sidechainEnvelopeDuration = 0.6,
@@ -5223,6 +5224,8 @@ function refreshSidechainUI() {
   if (!sidechainContentWrap) return;
   sidechainStepButtons.forEach((btn, idx) => {
     btn.classList.toggle('active', Boolean(sidechainSteps[idx]));
+    const isPlayhead = sidechainSeqRunning && sidechainSeqPlayhead === idx;
+    btn.classList.toggle('playing', isPlayhead);
   });
   if (sidechainTapButton) {
     sidechainTapButton.textContent = buildSidechainTapLabel();
@@ -5356,7 +5359,21 @@ function toggleSidechainAdvanced(forceValue) {
   refreshSidechainUI();
 }
 
+function setSidechainSeqPlayhead(index) {
+  if (!sidechainStepButtons.length) return;
+  if (typeof sidechainSeqPlayhead === 'number' && sidechainStepButtons[sidechainSeqPlayhead]) {
+    sidechainStepButtons[sidechainSeqPlayhead].classList.remove('playing');
+  }
+  if (typeof index === 'number' && sidechainStepButtons[index]) {
+    sidechainStepButtons[index].classList.add('playing');
+    sidechainSeqPlayhead = index;
+  } else {
+    sidechainSeqPlayhead = null;
+  }
+}
+
 function runSidechainSequencerStep() {
+  setSidechainSeqPlayhead(sidechainSeqIndex);
   if (sidechainSteps[sidechainSeqIndex]) {
     triggerSidechainEnvelope('sequencer');
   }
@@ -5368,6 +5385,7 @@ function startSidechainSequencer() {
   const stepMs = 60000 / (sequencerBPM * 2);
   sidechainSeqIndex = 0;
   sidechainSeqRunning = true;
+  setSidechainSeqPlayhead(sidechainSeqIndex);
   sidechainSeqInterval = setInterval(runSidechainSequencerStep, stepMs);
   refreshSidechainUI();
 }
@@ -5376,6 +5394,7 @@ function stopSidechainSequencer() {
   if (sidechainSeqInterval) clearInterval(sidechainSeqInterval);
   sidechainSeqInterval = null;
   sidechainSeqRunning = false;
+  setSidechainSeqPlayhead(null);
   refreshSidechainUI();
 }
 
@@ -12020,6 +12039,8 @@ function injectCustomCSS() {
     .sidechain-grid { display: grid; grid-template-columns: repeat(16, minmax(14px, 1fr)); grid-auto-rows: 24px; gap: 3px; margin-top: 6px; }
     .sidechain-step { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14); color: #fff; border-radius: 7px; height: 24px; cursor: pointer; font-size: 10px; }
     .sidechain-step.active { background: rgba(255,179,71,0.28); border-color: rgba(255,179,71,0.56); }
+    .sidechain-step.playing { box-shadow: 0 0 0 2px rgba(255,179,71,0.24); border-color: rgba(255,179,71,0.9); animation: sidechain-scan 0.3s ease; }
+    @keyframes sidechain-scan { from { transform: translateY(0); } to { transform: translateY(-1px); } }
     .sidechain-preview-row, .sidechain-preset-wrap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .sidechain-preset-btn { flex-direction: column; align-items: flex-start; padding: 8px 10px; }
     .sidechain-preset-btn canvas, .sidechain-preview-row canvas { background: #0f0f0f; border-radius: 10px; }
