@@ -12,7 +12,7 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 
 ## New in 2.0.2
 * New sidechain module
-* There’s now a dedicated “Open sidechain (advanced)” button in the Advanced window so you can jump straight into the ducking controls without remembering shortcuts.
+* There’s now a dedicated “Open sidechain (advanced)” button in the Advanced window so you can jump straight into the ducking controls without remembering shortcuts. (J for trigger, cmd+J to open the pannel)
 * Kick/Drum Follow Modes: In the sidechain panel’s Advanced section you can choose whether the video ducking follows nothing, only the kick, or all drum hits; the selector lives alongside the other advanced controls.
 * Whether you trigger ducking from keyboard, MIDI, or drum follow, the sidechain always reuses the curve you’ve selected or drawn, so kick/all-drum sidechaining matches the shape you hear in the preview.
 
