@@ -1517,40 +1517,36 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   const SIDECHAIN_CURVE_POINTS = 16;
   const SIDECHAIN_DEFAULT_PRESET = 'pump';
   const SIDECHAIN_PRESETS = {
+    pump: [
+      { t: 0, g: 0 },
+      { t: 0.18, g: 0.35 },
+      { t: 0.45, g: 0.82 },
+      { t: 1, g: 1 }
+    ],
+    soft: [
+      { t: 0, g: 0.25 },
+      { t: 0.35, g: 0.45 },
+      { t: 0.75, g: 0.9 },
+      { t: 1, g: 1 }
+    ],
     chop: [
       { t: 0, g: 0 },
-      { t: 0.06, g: 0.05 },
-      { t: 0.18, g: 0.65 },
-      { t: 0.32, g: 0.9 },
+      { t: 0.08, g: 0.1 },
+      { t: 0.22, g: 0.8 },
       { t: 1, g: 1 }
     ],
-    daftpunk: [
-      { t: 0, g: 0.2 },
-      { t: 0.12, g: 0.32 },
-      { t: 0.28, g: 0.72 },
-      { t: 0.46, g: 0.9 },
-      { t: 1, g: 1 }
-    ],
-    pump: [
-      { t: 0, g: 0.04 },
-      { t: 0.08, g: 0.16 },
-      { t: 0.18, g: 0.5 },
-      { t: 0.38, g: 0.86 },
-      { t: 1, g: 1 }
-    ],
-    ultracut: [
-      { t: 0, g: 0.01 },
-      { t: 0.05, g: 0.05 },
-      { t: 0.14, g: 0.32 },
-      { t: 0.32, g: 0.78 },
+    gate: [
+      { t: 0, g: 0 },
+      { t: 0.68, g: 0 },
+      { t: 0.82, g: 0.6 },
       { t: 1, g: 1 }
     ]
   };
   const SIDECHAIN_PRESET_LABELS = {
-    chop: 'Vocal chop',
-    daftpunk: 'Daft Punk feel',
-    pump: 'House pump',
-    ultracut: 'Ultra cut',
+    pump: 'Pump',
+    soft: 'Soft open',
+    chop: 'Chop',
+    gate: 'Hard gate',
     custom: 'My curve'
   };
 
@@ -1572,27 +1568,37 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
     return curve[0].g;
   }
 
-  function resampleSidechainCurve(curve) {
-    const safeCurve = Array.isArray(curve) && curve.length ? curve : SIDECHAIN_PRESETS[SIDECHAIN_DEFAULT_PRESET];
-    const norm = safeCurve
-      .map(p => ({ t: clamp01(p.t), g: clamp01(p.g) }))
+  function normalizeSidechainCurve(curve) {
+    const safe = Array.isArray(curve) ? curve : [];
+    const cleaned = safe
+      .map(p => ({ t: clamp01(p.t ?? 0), g: clamp01(p.g ?? 0) }))
+      .filter(p => Number.isFinite(p.t) && Number.isFinite(p.g))
       .sort((a, b) => a.t - b.t);
+    if (!cleaned.length) cleaned.push({ t: 0, g: 0 }, { t: 1, g: 1 });
+    const first = cleaned[0];
+    if (first.t !== 0) cleaned.unshift({ t: 0, g: first.g });
+    const last = cleaned[cleaned.length - 1];
+    if (last.t !== 1) cleaned.push({ t: 1, g: last.g });
+    return cleaned;
+  }
+
+  function resampleSidechainCurve(curve) {
+    const norm = normalizeSidechainCurve(curve);
     const resampled = [];
     for (let i = 0; i < SIDECHAIN_CURVE_POINTS; i++) {
       const t = i / (SIDECHAIN_CURVE_POINTS - 1);
       resampled.push({ t, g: sampleSidechainCurve(norm, t) });
     }
-    // Ensure last point is exactly 1
     resampled[resampled.length - 1] = { t: 1, g: resampled[resampled.length - 1].g };
     return resampled;
   }
 
   function getPresetCurve(name) {
     if (name === 'custom' && Array.isArray(sidechainCustomCurve)) {
-      return resampleSidechainCurve(sidechainCustomCurve);
+      return normalizeSidechainCurve(sidechainCustomCurve);
     }
-    if (SIDECHAIN_PRESETS[name]) return resampleSidechainCurve(SIDECHAIN_PRESETS[name]);
-    return resampleSidechainCurve(SIDECHAIN_PRESETS[SIDECHAIN_DEFAULT_PRESET]);
+    if (SIDECHAIN_PRESETS[name]) return normalizeSidechainCurve(SIDECHAIN_PRESETS[name]);
+    return normalizeSidechainCurve(SIDECHAIN_PRESETS[SIDECHAIN_DEFAULT_PRESET]);
   }
 
   // When the instrument is active, the number row becomes a mini keyboard
@@ -1619,7 +1625,7 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
     if (sidechainPresetName === 'custom' && !sidechainCustomCurve) {
       sidechainPresetName = SIDECHAIN_DEFAULT_PRESET;
     }
-    sidechainCurve = resampleSidechainCurve(sidechainCurve || getPresetCurve(sidechainPresetName));
+    sidechainCurve = normalizeSidechainCurve(sidechainCurve || getPresetCurve(sidechainPresetName));
     if (!Array.isArray(sidechainSteps) || sidechainSteps.length !== 32) {
       sidechainSteps = new Array(32).fill(false).map((_, i) => i % 4 === 0);
     }
@@ -5215,7 +5221,7 @@ function drawSidechainPreview(canvas, curve, active) {
   });
 }
 
-function buildSidechainTapLabel() {
+  function buildSidechainTapLabel() {
   const keyLabel = (extensionKeys?.sidechainTap || 'J').toUpperCase();
   const midiVal = midiNotes?.sidechainTap;
   const midiLabel = typeof midiVal === 'number' && !Number.isNaN(midiVal) ? `MIDI ${midiVal}` : '';
@@ -5241,7 +5247,7 @@ function refreshSidechainUI() {
     sidechainAdvancedPanel.classList.toggle('open', sidechainAdvancedMode);
   }
   if (sidechainSnapToggle) {
-    sidechainSnapToggle.textContent = sidechainSnapEditing ? 'Snap edits on' : 'Free draw';
+    sidechainSnapToggle.textContent = sidechainSnapEditing ? 'Grid snaps on' : 'Grid snaps off';
     sidechainSnapToggle.classList.toggle('active', sidechainSnapEditing);
   }
   if (sidechainFollowCheckbox) {
@@ -5310,15 +5316,55 @@ function applyCanvasPointToCurve(evt) {
   let x = clamp01((evt.clientX - rect.left) / rect.width);
   let y = clamp01((evt.clientY - rect.top) / rect.height);
   const snap = sidechainSnapEditing || evt.shiftKey;
+  const gain = clamp01(1 - y);
+  const gridStep = 1 / (SIDECHAIN_CURVE_POINTS - 1);
+  let curve = normalizeSidechainCurve(sidechainCurve).map(p => ({ ...p }));
+
   if (snap) {
     const snapStep = 0.05;
-    y = Math.round(y / snapStep) * snapStep;
+    const snappedY = Math.round(y / snapStep) * snapStep;
+    const idx = Math.round(x * (SIDECHAIN_CURVE_POINTS - 1));
+    const snappedT = clamp01(idx * gridStep);
+    const tValue = Number.isFinite(snappedT) ? snappedT : 0;
+    const gValue = clamp01(1 - snappedY);
+    curve = curve.filter((p, i) => {
+      const isAnchor = i === 0 || i === curve.length - 1;
+      return isAnchor || Math.abs(p.t - tValue) > gridStep * 0.25;
+    });
+    curve.push({ t: tValue, g: gValue });
+  } else {
+    const existingIndex = curve.findIndex(p => Math.abs(p.t - x) < 0.02 && p.t !== 0 && p.t !== 1);
+    if (existingIndex >= 0) {
+      curve[existingIndex] = { t: x, g: gain };
+    } else {
+      curve.push({ t: x, g: gain });
+    }
   }
-  const idx = Math.round(x * (SIDECHAIN_CURVE_POINTS - 1));
-  const gain = clamp01(1 - y);
-  const curve = resampleSidechainCurve(sidechainCurve);
-  curve[idx] = { t: idx / (SIDECHAIN_CURVE_POINTS - 1), g: gain };
-  sidechainCurve = curve;
+
+  sidechainCurve = normalizeSidechainCurve(curve);
+  sidechainPresetName = 'custom';
+  saveCustomSidechainCurve();
+}
+
+function eraseCanvasPoint(evt) {
+  if (!sidechainPreviewCanvas) return;
+  const rect = sidechainPreviewCanvas.getBoundingClientRect();
+  const x = clamp01((evt.clientX - rect.left) / rect.width);
+  const curve = normalizeSidechainCurve(sidechainCurve);
+  if (curve.length <= 2) return;
+  let removeIndex = -1;
+  let closest = Infinity;
+  curve.forEach((p, idx) => {
+    if (idx === 0 || idx === curve.length - 1) return;
+    const dist = Math.abs(p.t - x);
+    if (dist < closest) {
+      closest = dist;
+      removeIndex = idx;
+    }
+  });
+  if (removeIndex === -1) return;
+  curve.splice(removeIndex, 1);
+  sidechainCurve = normalizeSidechainCurve(curve);
   sidechainPresetName = 'custom';
   saveCustomSidechainCurve();
 }
@@ -5348,7 +5394,8 @@ async function triggerSidechainEnvelope(reason = 'tap') {
   sidechainGain.gain.cancelScheduledValues(now);
   sidechainGain.gain.setValueAtTime(sidechainGain.gain.value, now);
   sidechainGain.gain.linearRampToValueAtTime(1, now);
-  for (const p of sidechainCurve) {
+  const playableCurve = resampleSidechainCurve(sidechainCurve);
+  for (const p of playableCurve) {
     const t = now + Math.max(0, p.t) * dur;
     const g = Math.max(0, Math.min(1, p.g));
     sidechainGain.gain.linearRampToValueAtTime(g, t);
@@ -5482,11 +5529,13 @@ function buildSidechainWindow() {
   const previewRow = document.createElement('div');
   previewRow.className = 'sidechain-preview-row';
   sidechainPreviewCanvas = document.createElement('canvas');
-  sidechainPreviewCanvas.width = 220;
-  sidechainPreviewCanvas.height = 84;
+  sidechainPreviewCanvas.width = 260;
+  sidechainPreviewCanvas.height = 110;
+  sidechainPreviewCanvas.style.cursor = 'crosshair';
   sidechainPreviewCanvas.addEventListener('mousedown', startSidechainDraw);
   sidechainPreviewCanvas.addEventListener('mousemove', continueSidechainDraw);
   sidechainPreviewCanvas.addEventListener('mouseleave', stopSidechainDraw);
+  sidechainPreviewCanvas.addEventListener('dblclick', eraseCanvasPoint);
   previewRow.appendChild(sidechainPreviewCanvas);
   const resetBtn = document.createElement('button');
   resetBtn.className = 'looper-btn ghost';
@@ -5495,26 +5544,24 @@ function buildSidechainWindow() {
   previewRow.appendChild(resetBtn);
   const drawHint = document.createElement('span');
   drawHint.className = 'sidechain-draw-hint';
-  drawHint.textContent = 'Click to sculpt the envelope. Hold Shift to snap for tight chops.';
+  drawHint.textContent = 'Draw freely, double-click to erase, hold Shift for grid snaps when needed.';
   previewRow.appendChild(drawHint);
   sidechainContentWrap.appendChild(previewRow);
 
   sidechainPresetWrap = document.createElement('div');
-  sidechainPresetWrap.className = 'sidechain-preset-wrap';
-  ['pump', 'daftpunk', 'chop', 'ultracut', 'custom'].forEach(name => {
+  sidechainPresetWrap.className = 'sidechain-preset-wrap compact';
+  ['pump', 'soft', 'chop', 'gate', 'custom'].forEach(name => {
     const btn = document.createElement('button');
-    btn.className = 'looper-btn sidechain-preset-btn';
+    btn.className = 'looper-btn sidechain-preset-btn tiny';
+    btn.style.minWidth = '88px';
+    btn.style.padding = '6px 10px';
     btn.setAttribute('data-preset', name);
     const label = document.createElement('span');
     label.className = 'sidechain-preset-label';
+    label.style.fontSize = '12px';
     label.textContent = SIDECHAIN_PRESET_LABELS[name] || name;
     btn._label = label;
     btn.appendChild(label);
-    const canvas = document.createElement('canvas');
-    canvas.width = 120;
-    canvas.height = 50;
-    btn._curveCanvas = canvas;
-    btn.appendChild(canvas);
     btn.addEventListener('click', () => setSidechainPreset(name));
     sidechainPresetButtons.push(btn);
     sidechainPresetWrap.appendChild(btn);
@@ -5560,7 +5607,7 @@ function buildSidechainWindow() {
   const snapRow = document.createElement('div');
   snapRow.className = 'sidechain-control-row';
   const snapLabel = document.createElement('span');
-  snapLabel.textContent = 'Curve editing';
+  snapLabel.textContent = 'Grid snapping';
   snapRow.appendChild(snapLabel);
   sidechainSnapToggle = document.createElement('button');
   sidechainSnapToggle.className = 'looper-btn ghost compact';
