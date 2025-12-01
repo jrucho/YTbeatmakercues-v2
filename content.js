@@ -879,6 +879,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       cassetteButtonMin = null,
       pitchTargetButton = null,
       pitchModeButton = null,
+      pitchModeButtonMin = null,
       pitchTargetButtonMin = null,
       fxPadContainer = null,
       fxPadCanvas = null,
@@ -4113,7 +4114,7 @@ function onMinimalPointerUp(e) {
   minimalPitchSlider.step = 1;
   minimalPitchSlider.value = getPitchDisplayValue();
   minimalPitchSlider.className = "ytbm-pitch-slider ytbm-range";
-  minimalPitchSlider.title = "Pitch (%)";
+  minimalPitchSlider.title = pitchSemitoneMode ? "Pitch (st)" : "Pitch (%)";
   minimalPitchSlider.style.width = "84px";
   minimalPitchSlider.style.maxWidth = "84px";
   minimalPitchSlider.style.flex = "0 0 84px";
@@ -4128,8 +4129,28 @@ function onMinimalPointerUp(e) {
 
   minimalPitchLabel = document.createElement("span");
   minimalPitchLabel.className = "ytbm-pitch-value";
-  minimalPitchLabel.textContent = `${pitchPercentage}%`;
+  minimalPitchLabel.textContent = pitchSemitoneMode ? `${Math.round(pitchSemitone)} st` : `${pitchPercentage}%`;
   pitchCluster.appendChild(minimalPitchLabel);
+
+  pitchModeButtonMin = document.createElement("button");
+  pitchModeButtonMin.className = "ytbm-minimal-btn";
+  pitchModeButtonMin.innerText = pitchSemitoneMode ? "Semitones" : "Percent";
+  pitchModeButtonMin.title = "Toggle pitch fader between percent and semitones";
+  pitchModeButtonMin.addEventListener("click", () => {
+    pushUndoState();
+    togglePitchMode();
+  });
+  pitchCluster.appendChild(pitchModeButtonMin);
+
+  pitchTargetButtonMin = document.createElement("button");
+  pitchTargetButtonMin.className = "ytbm-minimal-btn";
+  pitchTargetButtonMin.innerText = (pitchTarget === "video") ? "Video" : "Loop";
+  pitchTargetButtonMin.title = "Choose whether pitch applies to the video or the loop";
+  pitchTargetButtonMin.addEventListener("click", () => {
+    pushUndoState();
+    togglePitchTarget();
+  });
+  pitchCluster.appendChild(pitchTargetButtonMin);
 
   minimalUIContainer.appendChild(pitchCluster);
 
@@ -9451,6 +9472,10 @@ function refreshPitchUI() {
   if (advancedPitchLabel) advancedPitchLabel.innerText = labelText;
   if (minimalPitchLabel) minimalPitchLabel.innerText = labelText;
   if (pitchModeButton) pitchModeButton.innerText = pitchSemitoneMode ? "Semitones" : "Percent";
+  if (pitchModeButtonMin) pitchModeButtonMin.innerText = pitchSemitoneMode ? "Semitones" : "Percent";
+  const targetLabel = (pitchTarget === "video") ? "Video" : "Loop";
+  if (pitchTargetButton) pitchTargetButton.innerText = targetLabel;
+  if (pitchTargetButtonMin) pitchTargetButtonMin.innerText = targetLabel;
 }
 
 function updatePitch(v) {
