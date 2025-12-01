@@ -879,8 +879,6 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       cassetteButtonMin = null,
       pitchTargetButton = null,
       pitchModeButton = null,
-      pitchModeButtonMin = null,
-      pitchTargetButtonMin = null,
       fxPadContainer = null,
       fxPadCanvas = null,
       fxPadDragHandle = null,
@@ -4129,28 +4127,8 @@ function onMinimalPointerUp(e) {
 
   minimalPitchLabel = document.createElement("span");
   minimalPitchLabel.className = "ytbm-pitch-value";
-  minimalPitchLabel.textContent = pitchSemitoneMode ? `${Math.round(pitchSemitone)} st` : `${pitchPercentage}%`;
+  minimalPitchLabel.textContent = pitchSemitoneMode ? `${Math.round(pitchSemitone)} st` : `${Math.round(pitchPercentage)}%`;
   pitchCluster.appendChild(minimalPitchLabel);
-
-  pitchModeButtonMin = document.createElement("button");
-  pitchModeButtonMin.className = "ytbm-minimal-btn";
-  pitchModeButtonMin.innerText = pitchSemitoneMode ? "Semitones" : "Percent";
-  pitchModeButtonMin.title = "Toggle pitch fader between percent and semitones";
-  pitchModeButtonMin.addEventListener("click", () => {
-    pushUndoState();
-    togglePitchMode();
-  });
-  pitchCluster.appendChild(pitchModeButtonMin);
-
-  pitchTargetButtonMin = document.createElement("button");
-  pitchTargetButtonMin.className = "ytbm-minimal-btn";
-  pitchTargetButtonMin.innerText = (pitchTarget === "video") ? "Video" : "Loop";
-  pitchTargetButtonMin.title = "Choose whether pitch applies to the video or the loop";
-  pitchTargetButtonMin.addEventListener("click", () => {
-    pushUndoState();
-    togglePitchTarget();
-  });
-  pitchCluster.appendChild(pitchTargetButtonMin);
 
   minimalUIContainer.appendChild(pitchCluster);
 
@@ -4258,8 +4236,19 @@ function onMinimalPointerUp(e) {
     if (minimalUIContainer) {
       minimalUIContainer.style.display = (minimalActive && minimalVisible && !blindMode) ? "flex" : "none";
     }
-    if (minimalPitchLabel) minimalPitchLabel.textContent = `${pitchPercentage}%`;
-    if (minimalPitchSlider) minimalPitchSlider.value = pitchPercentage;
+    const sliderMin = pitchSemitoneMode ? PITCH_SEMITONE_MIN : PITCH_PERCENT_MIN;
+    const sliderMax = pitchSemitoneMode ? PITCH_SEMITONE_MAX : PITCH_PERCENT_MAX;
+    const displayVal = getPitchDisplayValue();
+    const labelText = pitchSemitoneMode ? `${Math.round(pitchSemitone)} st` : `${Math.round(pitchPercentage)}%`;
+
+    if (minimalPitchSlider) {
+      minimalPitchSlider.min = sliderMin;
+      minimalPitchSlider.max = sliderMax;
+      minimalPitchSlider.step = 1;
+      minimalPitchSlider.value = displayVal;
+      minimalPitchSlider.title = pitchSemitoneMode ? "Pitch (st)" : "Pitch (%)";
+    }
+    if (minimalPitchLabel) minimalPitchLabel.textContent = labelText;
 
     if (minimalCuesLabel && cuesButtonMin) {
       const cc = Object.keys(cuePoints).length;
@@ -9472,10 +9461,8 @@ function refreshPitchUI() {
   if (advancedPitchLabel) advancedPitchLabel.innerText = labelText;
   if (minimalPitchLabel) minimalPitchLabel.innerText = labelText;
   if (pitchModeButton) pitchModeButton.innerText = pitchSemitoneMode ? "Semitones" : "Percent";
-  if (pitchModeButtonMin) pitchModeButtonMin.innerText = pitchSemitoneMode ? "Semitones" : "Percent";
   const targetLabel = (pitchTarget === "video") ? "Video" : "Loop";
   if (pitchTargetButton) pitchTargetButton.innerText = targetLabel;
-  if (pitchTargetButtonMin) pitchTargetButtonMin.innerText = targetLabel;
 }
 
 function updatePitch(v) {
