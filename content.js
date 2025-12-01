@@ -533,7 +533,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         cassette: "w",
         randomCues: "-",
         instrumentToggle: "n",
-        fxPad: "x"
+        fxPad: "x",
+        pitchMode: "p"
       },
       midiPresets = [],
       presetSelect = null,
@@ -550,6 +551,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
           shift: 36,
           pitchDown: 42,
           pitchUp: 43,
+          pitchMode: 72,
           sidechainTap: 25,
           cues: { 1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40, 0: 41 },
           looperA: 34,
@@ -849,6 +851,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       instLfoGain = null,
       // Pitch
       pitchPercentage = 0,
+      pitchSemitone = 0,
+      pitchSemitoneMode = false,
       pitchTarget = "video", // "video" or "loop"
       videoPitchPercentage = 0,
       loopPitchPercentage = 0,
@@ -874,6 +878,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       reverbButtonMin = null,
       cassetteButtonMin = null,
       pitchTargetButton = null,
+      pitchModeButton = null,
       pitchTargetButtonMin = null,
       fxPadContainer = null,
       fxPadCanvas = null,
@@ -3123,6 +3128,8 @@ function captureAppState() {
     cassetteActive,
 
     pitchPercentage,
+    pitchSemitone,
+    pitchSemitoneMode,
     pitchTarget,
     videoPitchPercentage,
     loopPitchPercentage,
@@ -3174,6 +3181,8 @@ function restoreAppState(st) {
   cassetteActive = st.cassetteActive;
 
   pitchPercentage = st.pitchPercentage;
+  pitchSemitone = typeof st.pitchSemitone === "number" ? st.pitchSemitone : 0;
+  pitchSemitoneMode = !!st.pitchSemitoneMode;
   pitchTarget = st.pitchTarget;
   videoPitchPercentage = st.videoPitchPercentage;
   loopPitchPercentage = st.loopPitchPercentage;
@@ -3212,7 +3221,7 @@ function restoreAppState(st) {
   updateReverbButtonColor();
   updateCassetteButtonColor();
 
-  updatePitch(pitchPercentage);
+  updatePitch(pitchSemitoneMode ? pitchSemitone : pitchPercentage);
 
   for (let i = 0; i < MAX_MIDI_LOOPS; i++) {
     if (midiLoopPlaying[i]) playMidiLoop(i);
@@ -4099,10 +4108,10 @@ function onMinimalPointerUp(e) {
 
   minimalPitchSlider = document.createElement("input");
   minimalPitchSlider.type = "range";
-  minimalPitchSlider.min = -50;
-  minimalPitchSlider.max = 100;
+  minimalPitchSlider.min = pitchSemitoneMode ? PITCH_SEMITONE_MIN : PITCH_PERCENT_MIN;
+  minimalPitchSlider.max = pitchSemitoneMode ? PITCH_SEMITONE_MAX : PITCH_PERCENT_MAX;
   minimalPitchSlider.step = 1;
-  minimalPitchSlider.value = pitchPercentage;
+  minimalPitchSlider.value = getPitchDisplayValue();
   minimalPitchSlider.className = "ytbm-pitch-slider ytbm-range";
   minimalPitchSlider.title = "Pitch (%)";
   minimalPitchSlider.style.width = "84px";
@@ -6939,9 +6948,10 @@ function loadCuePointsAtStartup() {
   }
 
   // --- ADD THESE LINES BELOW ---
-  // Reset pitch to 0% so that when a new video starts, 
+  // Reset pitch to 0% so that when a new video starts,
   // the pitch fader and video playback are back in sync.
   pitchPercentage = 0;      // Our main "percent" variable
+  pitchSemitone = 0;
   videoPitchPercentage = 0; // Optional, if you also want the "video" target to be 0
   loopPitchPercentage = 0;  // Optional, if you want the "loop" pitch to be 0
   updatePitch(0);           // This call updates all UI sliders and playback rates
@@ -7818,11 +7828,16 @@ function onKeyDown(e) {
     return;
   }
   if (k === extensionKeys.pitchDown) {
-    updatePitch(Math.max(pitchPercentage - 1, -50));
+    stepPitch(-1);
     return;
   }
   if (k === extensionKeys.pitchUp) {
-    updatePitch(Math.min(pitchPercentage + 1, 100));
+    stepPitch(1);
+    return;
+  }
+  if (k === extensionKeys.pitchMode.toLowerCase()) {
+    pushUndoState();
+    togglePitchMode();
     return;
   }
 
@@ -8774,9 +8789,9 @@ function addControls() {
 
   pitchSliderElement = document.createElement("input");
   pitchSliderElement.type = "range";
-  pitchSliderElement.min = -50;
-  pitchSliderElement.max = 100;
-  pitchSliderElement.value = pitchPercentage;
+  pitchSliderElement.min = PITCH_PERCENT_MIN;
+  pitchSliderElement.max = PITCH_PERCENT_MAX;
+  pitchSliderElement.value = getPitchDisplayValue();
   pitchSliderElement.step = 1;
   pitchSliderElement.className = "ytbm-range";
   pitchSliderElement.addEventListener("input", e => updatePitch(parseInt(e.target.value, 10)));
@@ -8790,6 +8805,16 @@ function addControls() {
   advancedPitchLabel.className = "ytbm-pitch-value";
   advancedPitchLabel.textContent = `${pitchPercentage}%`;
   pitchWrap.appendChild(advancedPitchLabel);
+
+  pitchModeButton = document.createElement("button");
+  pitchModeButton.className = "looper-btn ytbm-advanced-btn";
+  pitchModeButton.innerText = pitchSemitoneMode ? "Semitones" : "Percent";
+  pitchModeButton.title = "Toggle pitch fader between percent and semitones";
+  pitchModeButton.addEventListener("click", () => {
+    pushUndoState();
+    togglePitchMode();
+  });
+  pitchWrap.appendChild(pitchModeButton);
 
   pitchTargetButton = document.createElement("button");
   pitchTargetButton.className = "looper-btn ytbm-advanced-btn";
@@ -9387,8 +9412,57 @@ function buildEQWindow() {
 /**************************************
  * Pitch
  **************************************/
+const PITCH_PERCENT_MIN = -50;
+const PITCH_PERCENT_MAX = 100;
+const PITCH_SEMITONE_MIN = -24;
+const PITCH_SEMITONE_MAX = 24;
+
+function clampPitchPercent(v) {
+  return Math.min(PITCH_PERCENT_MAX, Math.max(PITCH_PERCENT_MIN, v));
+}
+
+function clampPitchSemitone(v) {
+  return Math.min(PITCH_SEMITONE_MAX, Math.max(PITCH_SEMITONE_MIN, v));
+}
+
+function getPitchDisplayValue() {
+  return pitchSemitoneMode ? pitchSemitone : pitchPercentage;
+}
+
+function refreshPitchUI() {
+  const sliderMin = pitchSemitoneMode ? PITCH_SEMITONE_MIN : PITCH_PERCENT_MIN;
+  const sliderMax = pitchSemitoneMode ? PITCH_SEMITONE_MAX : PITCH_PERCENT_MAX;
+  const displayVal = getPitchDisplayValue();
+  if (pitchSliderElement) {
+    pitchSliderElement.min = sliderMin;
+    pitchSliderElement.max = sliderMax;
+    pitchSliderElement.step = 1;
+    pitchSliderElement.value = displayVal;
+    pitchSliderElement.title = pitchSemitoneMode ? "Pitch (st)" : "Pitch (%)";
+  }
+  if (minimalPitchSlider) {
+    minimalPitchSlider.min = sliderMin;
+    minimalPitchSlider.max = sliderMax;
+    minimalPitchSlider.step = 1;
+    minimalPitchSlider.value = displayVal;
+    minimalPitchSlider.title = pitchSemitoneMode ? "Pitch (st)" : "Pitch (%)";
+  }
+  const labelText = pitchSemitoneMode ? `${Math.round(pitchSemitone)} st` : `${Math.round(pitchPercentage)}%`;
+  if (advancedPitchLabel) advancedPitchLabel.innerText = labelText;
+  if (minimalPitchLabel) minimalPitchLabel.innerText = labelText;
+  if (pitchModeButton) pitchModeButton.innerText = pitchSemitoneMode ? "Semitones" : "Percent";
+}
+
 function updatePitch(v) {
-  pitchPercentage = v;
+  if (pitchSemitoneMode) {
+    pitchSemitone = clampPitchSemitone(v);
+    const rateFromSemitone = Math.pow(2, pitchSemitone / 12);
+    pitchPercentage = (rateFromSemitone - 1) * 100;
+  } else {
+    pitchPercentage = clampPitchPercent(v);
+    pitchSemitone = 12 * Math.log2(getCurrentPitchRate());
+  }
+
   const rate = getCurrentPitchRate();
 
   // Apply pitch even while the video‑looper is recording
@@ -9414,13 +9488,14 @@ function updatePitch(v) {
   }
 
   // Update UI elements
-  if (pitchSliderElement) pitchSliderElement.value = v;
-  if (advancedPitchLabel)  advancedPitchLabel.innerText = v + "%";
-  if (minimalPitchLabel)   minimalPitchLabel.innerText  = v + "%";
+  refreshPitchUI();
   if (window.refreshMinimalState) window.refreshMinimalState();
   applyInstrumentPitchSync();
 }
 function getCurrentPitchRate() {
+  if (pitchSemitoneMode) {
+    return Math.pow(2, pitchSemitone / 12);
+  }
   return 1 + pitchPercentage / 100;
 }
 function togglePitchTarget() {
@@ -9435,6 +9510,23 @@ function togglePitchTarget() {
     pitchPercentage = videoPitchPercentage;
     updatePitch(pitchPercentage);
   }
+}
+
+function togglePitchMode(forceValue = null) {
+  if (typeof forceValue === "boolean") {
+    pitchSemitoneMode = forceValue;
+  } else {
+    pitchSemitoneMode = !pitchSemitoneMode;
+  }
+  updatePitch(pitchSemitoneMode ? pitchSemitone : pitchPercentage);
+}
+
+function stepPitch(delta) {
+  const current = getPitchDisplayValue();
+  const next = pitchSemitoneMode
+    ? clampPitchSemitone(current + delta)
+    : clampPitchPercent(current + delta);
+  updatePitch(next);
 }
 
 function getGlobalPitchSemitone() {
@@ -9700,6 +9792,7 @@ function handleMIDIMessage(e) {
     }
     if (note === midiNotes.pitchDown) startPitchDownRepeat();
     if (note === midiNotes.pitchUp) startPitchUpRepeat();
+    if (note === midiNotes.pitchMode) { pushUndoState(); togglePitchMode(); return; }
     if (note === midiNotes.kick) {
       if (isModPressed) toggleSampleMute("kick"); else playSample("kick");
     }
@@ -9802,7 +9895,7 @@ function handleMIDIMessage(e) {
 
 function startPitchDownRepeat() {
   if (pitchDownInterval) return;
-  pitchDownInterval = setInterval(() => updatePitch(Math.max(pitchPercentage - 1, -50)), 100);
+  pitchDownInterval = setInterval(() => stepPitch(-1), 100);
 }
 function stopPitchDownRepeat() {
   if (pitchDownInterval) {
@@ -9812,7 +9905,7 @@ function stopPitchDownRepeat() {
 }
 function startPitchUpRepeat() {
   if (pitchUpInterval) return;
-  pitchUpInterval = setInterval(() => updatePitch(Math.min(pitchPercentage + 1, 100)), 100);
+  pitchUpInterval = setInterval(() => stepPitch(1), 100);
 }
 function stopPitchUpRepeat() {
   if (pitchUpInterval) {
@@ -9944,7 +10037,7 @@ function buildManualWindow() {
       <li><strong>EQ, Reverb, Cassette, Compressor</strong></li>
       <li><strong>Pitch Control</strong> (keys , and .)</li>
     </ul>
-    <p>Default keys: <em>C</em> toggles Compressor, <em>E</em> toggles EQ, <em>R</em> = audio looper, <em>V</em> = video looper, <em>U</em> = undo, <em>Q</em> = Reverb, <em>W</em> = Cassette, <em>,</em>/<em>.</em> for pitch down/up.</p>
+    <p>Default keys: <em>C</em> toggles Compressor, <em>E</em> toggles EQ, <em>R</em> = audio looper, <em>V</em> = video looper, <em>U</em> = undo, <em>Q</em> = Reverb, <em>W</em> = Cassette, <em>,</em>/<em>.</em> for pitch down/up, <em>P</em> toggles percent vs semitone pitch mode.</p>
     <h3>Contact</h3>
     <p>Instagram <a href="https://instagram.com/owae.ga" target="_blank">@owae.ga</a></p>
     <button class="looper-manual-close-btn looper-btn" style="margin-top:10px;">Close Manual</button>
@@ -10046,6 +10139,10 @@ function buildKeyMapWindow() {
     <div class="keymap-row">
       <label>PitchUp:</label>
       <input data-extkey="pitchUp" value="${escapeHtml(extensionKeys.pitchUp)}" maxlength="1">
+    </div>
+    <div class="keymap-row">
+      <label>Pitch Mode:</label>
+      <input data-extkey="pitchMode" value="${escapeHtml(extensionKeys.pitchMode)}" maxlength="1">
     </div>
     <div class="keymap-row">
       <label>Reverb:</label>
@@ -10188,6 +10285,11 @@ function buildMIDIMapWindow() {
       <label>PitchUp:</label>
       <input data-midiname="pitchUp" value="${escapeHtml(String(midiNotes.pitchUp))}" type="number">
       <button data-detect="pitchUp" class="detect-midi-btn">Detect</button>
+    </div>
+    <div class="midimap-row">
+      <label>Pitch Mode:</label>
+      <input data-midiname="pitchMode" value="${escapeHtml(String(midiNotes.pitchMode))}" type="number">
+      <button data-detect="pitchMode" class="detect-midi-btn">Detect</button>
     </div>
     <div class="midimap-row">
   <label>RandomCues:</label>
