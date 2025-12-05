@@ -2259,7 +2259,21 @@ function toggleBlindMode() {
     seqView.className = "ytbm-touch-view";
     contentWrap.appendChild(samplesView);
     contentWrap.appendChild(seqView);
-    touchPopup.appendChild(contentWrap);
+
+    const mainWrap = document.createElement('div');
+    mainWrap.className = 'ytbm-touch-main';
+    const leftPane = document.createElement('div');
+    leftPane.className = 'ytbm-touch-left';
+    leftPane.appendChild(contentWrap);
+    const padRail = document.createElement('div');
+    padRail.className = 'ytbm-touch-rail';
+    const railTitle = document.createElement('div');
+    railTitle.className = 'ytbm-touch-rail-title';
+    railTitle.textContent = 'Live Pads';
+    padRail.appendChild(railTitle);
+    mainWrap.appendChild(leftPane);
+    mainWrap.appendChild(padRail);
+    touchPopup.appendChild(mainWrap);
 
     function setTab(view) {
       if (view === 'samples') {
@@ -2290,6 +2304,7 @@ function toggleBlindMode() {
       { index: 8, label: 'Pad 9' },
       { index: 9, label: 'Pad 10' }
     ];
+    if (currentPad === null) currentPad = 0;
 
     function getSampleLabel(type) {
       const idx = currentSampleIndex[type] ?? 0;
@@ -2323,6 +2338,15 @@ function toggleBlindMode() {
       padBtn.addEventListener("touchstart", e => { e.preventDefault(); padBtn.dispatchEvent(new MouseEvent('mousedown')); });
       return padBtn;
     }
+
+    const railPadWrap = document.createElement('div');
+    railPadWrap.className = 'ytbm-rail-grid';
+    padRail.appendChild(railPadWrap);
+    padMeta.forEach(meta => {
+      const btn = createPadButton(meta.label, meta.index);
+      btn.classList.add('compact');
+      railPadWrap.appendChild(btn);
+    });
 
     const sampleGrid = document.createElement('div');
     sampleGrid.className = 'ytbm-sample-grid';
@@ -2391,7 +2415,8 @@ function toggleBlindMode() {
     laneLabel.className = 'ytbm-seq-lane-label';
     const updateLaneLabel = () => {
       const meta = padMeta[currentPad] || { label: `Pad ${currentPad + 1}` };
-      laneLabel.textContent = `Editing: ${meta.label}`;
+      const sampleInfo = meta.type ? ` • ${getSampleLabel(meta.type)}` : '';
+      laneLabel.textContent = `Editing: ${meta.label}${sampleInfo}`;
     };
     updateLaneLabel();
     seqHeader.appendChild(laneLabel);
@@ -2466,20 +2491,7 @@ function toggleBlindMode() {
 
     seqMain.appendChild(controlRow);
 
-    const livePadPanel = document.createElement('div');
-    livePadPanel.className = 'ytbm-live-pad-panel';
-    const liveTitle = document.createElement('div');
-    liveTitle.className = 'ytbm-live-pad-title';
-    liveTitle.textContent = 'Live Pads';
-    livePadPanel.appendChild(liveTitle);
-    padMeta.slice(0,6).forEach(meta => {
-      const btn = createPadButton(meta.label, meta.index);
-      btn.classList.add('compact');
-      livePadPanel.appendChild(btn);
-    });
-
     seqLayout.appendChild(seqMain);
-    seqLayout.appendChild(livePadPanel);
     seqView.appendChild(seqLayout);
 
     document.body.appendChild(touchPopup);
@@ -2511,6 +2523,12 @@ function toggleBlindMode() {
     Array.from(stepRow.children).forEach((btn, index) => {
       btn.classList.toggle('active', steps[index]);
     });
+    const laneLabel = document.querySelector('.ytbm-seq-lane-label');
+    if (laneLabel && typeof padMeta !== 'undefined') {
+      const meta = padMeta[currentPad] || { label: `Pad ${currentPad + 1}` };
+      const sampleInfo = meta.type ? ` • ${getSampleLabel(meta.type)}` : '';
+      laneLabel.textContent = `Editing: ${meta.label}${sampleInfo}`;
+    }
   }
   
   // Toggle a step on/off for current pad
@@ -3827,206 +3845,246 @@ let instrumentPresets = [
     name: 'Velvet Sub',
     color: PRESET_COLORS[0],
     oscillator: 'sine',
-    filter: 140,
-    q: 1.4,
-    drive: 0.12,
-    glide: 0.14,
+    filter: 120,
+    q: 1.2,
+    drive: 0.1,
+    glide: 0.12,
     pan: 0,
-    env: { a: 0.006, d: 0.18, s: 0.85, r: 0.32 },
-    filterEnv: { amount: 0.65, attack: 0.01, decay: 0.2 },
+    env: { a: 0.004, d: 0.2, s: 0.9, r: 0.28 },
+    filterEnv: { amount: 0.65, attack: 0.01, decay: 0.24 },
     engine: 'analog',
     mode: 'legato',
     filterType: 'lowpass',
-    subLevel: 0.5,
-    volume: 0.2,
+    subLevel: 0.62,
+    volume: 0.22,
     compThresh: -22,
     limitThresh: -4,
     tune: 0
   },
   {
-    name: 'Tube Saw',
+    name: 'BoomBap Thump',
     color: PRESET_COLORS[1],
     oscillator: 'sawtooth',
-    filter: 220,
-    q: 2,
-    drive: 0.26,
-    glide: 0.07,
-    pan: -0.04,
-    env: { a: 0.008, d: 0.16, s: 0.8, r: 0.3 },
-    filterEnv: { amount: 0.4, attack: 0.006, decay: 0.14 },
+    filter: 180,
+    q: 1.6,
+    drive: 0.34,
+    glide: 0.05,
+    pan: -0.03,
+    env: { a: 0.006, d: 0.18, s: 0.76, r: 0.24 },
+    filterEnv: { amount: 0.45, attack: 0.006, decay: 0.18 },
     engine: 'analog',
     mode: 'mono',
     filterType: 'lowpass',
-    subLevel: 0.25,
-    volume: 0.22,
+    subLevel: 0.38,
+    volume: 0.24,
     compThresh: -18,
     limitThresh: -3,
     tune: 0
   },
   {
-    name: '808 Sculpt',
+    name: 'Trap 808 Glide',
     color: PRESET_COLORS[2],
     oscillator: 'sine',
     filter: 90,
-    q: 0.8,
-    drive: 0.2,
-    glide: 0.22,
+    q: 0.9,
+    drive: 0.24,
+    glide: 0.26,
     pan: 0,
-    env: { a: 0.004, d: 0.34, s: 0.96, r: 0.62 },
-    filterEnv: { amount: 0.55, attack: 0.004, decay: 0.28 },
+    env: { a: 0.003, d: 0.42, s: 0.98, r: 0.66 },
+    filterEnv: { amount: 0.5, attack: 0.004, decay: 0.34 },
     engine: 'analog',
     mode: 'legato',
     filterType: 'lowpass',
-    subLevel: 0.6,
-    volume: 0.18,
+    subLevel: 0.7,
+    volume: 0.21,
     compThresh: -22,
     limitThresh: -4,
     tune: 0
   },
   {
-    name: 'Square Plow',
+    name: 'Square Dirt',
     color: PRESET_COLORS[3],
     oscillator: 'square',
-    filter: 260,
-    q: 1.2,
-    drive: 0.18,
-    glide: 0.05,
-    pan: 0.06,
-    env: { a: 0.01, d: 0.21, s: 0.75, r: 0.3 },
-    filterEnv: { amount: 0.35, attack: 0.008, decay: 0.18 },
+    filter: 240,
+    q: 1.1,
+    drive: 0.22,
+    glide: 0.08,
+    pan: 0.05,
+    env: { a: 0.01, d: 0.2, s: 0.72, r: 0.32 },
+    filterEnv: { amount: 0.42, attack: 0.01, decay: 0.2 },
     engine: 'analog',
     mode: 'mono',
     filterType: 'highpass',
-    subLevel: 0.3,
-    volume: 0.19,
+    subLevel: 0.36,
+    volume: 0.23,
+    compThresh: -19,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: 'IDM Carrier',
+    color: PRESET_COLORS[4],
+    oscillator: 'sine',
+    filter: 310,
+    q: 1.4,
+    drive: 0.18,
+    glide: 0.06,
+    pan: 0,
+    env: { a: 0.01, d: 0.14, s: 0.68, r: 0.32 },
+    filterEnv: { amount: 0.32, attack: 0.01, decay: 0.16 },
+    engine: 'fm',
+    mode: 'mono',
+    fmRatio: 2.5,
+    fmIndex: 126,
+    filterType: 'lowpass',
+    volume: 0.22,
     compThresh: -20,
     limitThresh: -3,
     tune: 0
   },
   {
-    name: 'FM Bite',
-    color: PRESET_COLORS[4],
+    name: 'Metallic Edge',
+    color: PRESET_COLORS[5],
     oscillator: 'sine',
-    filter: 320,
-    q: 1.6,
-    drive: 0.14,
-    glide: 0.06,
-    pan: 0,
-    env: { a: 0.012, d: 0.16, s: 0.7, r: 0.36 },
-    filterEnv: { amount: 0.28, attack: 0.01, decay: 0.16 },
+    filter: 270,
+    q: 1.2,
+    drive: 0.2,
+    glide: 0.04,
+    pan: -0.04,
+    env: { a: 0.009, d: 0.2, s: 0.65, r: 0.38 },
+    filterEnv: { amount: 0.38, attack: 0.012, decay: 0.2 },
     engine: 'fm',
     mode: 'mono',
-    fmRatio: 2.2,
-    fmIndex: 120,
-    filterType: 'lowpass',
+    fmRatio: 3.2,
+    fmIndex: 92,
+    filterType: 'bandpass',
     volume: 0.21,
     compThresh: -20,
     limitThresh: -3,
     tune: 0
   },
   {
-    name: 'FM Hollow',
-    color: PRESET_COLORS[5],
-    oscillator: 'sine',
-    filter: 280,
-    q: 1.3,
-    drive: 0.16,
-    glide: 0.04,
-    pan: -0.03,
-    env: { a: 0.01, d: 0.18, s: 0.68, r: 0.42 },
-    filterEnv: { amount: 0.32, attack: 0.012, decay: 0.2 },
-    engine: 'fm',
-    mode: 'mono',
-    fmRatio: 3,
-    fmIndex: 90,
-    filterType: 'lowpass',
-    volume: 0.2,
-    compThresh: -20,
-    limitThresh: -3,
-    tune: 0
-  },
-  {
-    name: 'Morph Pulse',
+    name: 'Future Glide',
     color: PRESET_COLORS[6],
     oscillator: 'bright',
     wavetableB: 'hollow',
-    wavetableMix: 0.45,
-    filter: 340,
-    q: 1.3,
+    wavetableMix: 0.5,
+    filter: 360,
+    q: 1.5,
     drive: 0.16,
-    glide: 0.06,
+    glide: 0.08,
     pan: 0.02,
-    env: { a: 0.018, d: 0.18, s: 0.7, r: 0.42 },
-    filterEnv: { amount: 0.38, attack: 0.012, decay: 0.18 },
+    env: { a: 0.014, d: 0.18, s: 0.74, r: 0.4 },
+    filterEnv: { amount: 0.44, attack: 0.012, decay: 0.18 },
     engine: 'wavetable',
     mode: 'mono',
     filterType: 'lowpass',
-    volume: 0.19,
-    compThresh: -20,
+    volume: 0.22,
+    compThresh: -19,
     limitThresh: -3,
     tune: 0
   },
   {
-    name: 'Glass Sweep',
+    name: 'IDM Warp',
     color: PRESET_COLORS[7],
     oscillator: 'organ',
     wavetableB: 'grit',
-    wavetableMix: 0.6,
-    filter: 420,
-    q: 1.8,
-    drive: 0.18,
+    wavetableMix: 0.62,
+    filter: 400,
+    q: 1.7,
+    drive: 0.2,
     glide: 0.05,
     pan: -0.02,
-    env: { a: 0.02, d: 0.18, s: 0.65, r: 0.4 },
-    filterEnv: { amount: 0.42, attack: 0.016, decay: 0.22 },
+    env: { a: 0.016, d: 0.18, s: 0.62, r: 0.42 },
+    filterEnv: { amount: 0.5, attack: 0.016, decay: 0.2 },
     engine: 'wavetable',
-    mode: 'mono',
+    mode: 'poly',
     filterType: 'lowpass',
-    volume: 0.2,
-    compThresh: -20,
+    volume: 0.23,
+    compThresh: -18,
     limitThresh: -3,
     tune: 0
   },
   {
-    name: 'Sampler Round',
+    name: 'Sampler Punch',
     color: PRESET_COLORS[8],
     oscillator: 'sine',
     filter: 520,
-    q: 0.7,
-    drive: 0.1,
-    glide: 0.08,
+    q: 0.8,
+    drive: 0.12,
+    glide: 0.06,
     pan: 0,
-    env: { a: 0.01, d: 0.22, s: 0.78, r: 0.45 },
-    filterEnv: { amount: 0.25, attack: 0.01, decay: 0.24 },
+    env: { a: 0.008, d: 0.24, s: 0.78, r: 0.44 },
+    filterEnv: { amount: 0.3, attack: 0.012, decay: 0.22 },
     engine: 'sampler',
     mode: 'mono',
     filterType: 'lowpass',
-    volume: 0.18,
+    volume: 0.2,
     compThresh: -20,
     limitThresh: -3,
     sample: null,
     tune: 0
   },
   {
-    name: 'Grain Drift',
+    name: 'Granular IDM',
     color: PRESET_COLORS[9],
     oscillator: 'sine',
-    filter: 380,
+    filter: 360,
     q: 1.2,
-    drive: 0.16,
-    glide: 0.05,
-    pan: 0,
-    env: { a: 0.012, d: 0.25, s: 0.82, r: 0.4 },
-    filterEnv: { amount: 0.32, attack: 0.01, decay: 0.2 },
+    drive: 0.18,
+    glide: 0.07,
+    pan: 0.01,
+    env: { a: 0.01, d: 0.22, s: 0.82, r: 0.4 },
+    filterEnv: { amount: 0.4, attack: 0.012, decay: 0.22 },
     engine: 'granular',
     mode: 'mono',
-    grainSize: 0.09,
-    grainDensity: 14,
-    grainSpread: 0.18,
-    grainJitter: 0.08,
+    grainSize: 0.08,
+    grainDensity: 16,
+    grainSpread: 0.22,
+    grainJitter: 0.12,
     filterType: 'lowpass',
-    volume: 0.19,
+    volume: 0.21,
     compThresh: -20,
+    limitThresh: -3,
+    sample: null,
+    tune: 0
+  },
+  {
+    name: 'Noise Cutter',
+    color: PRESET_COLORS[0],
+    oscillator: 'triangle',
+    filter: 440,
+    q: 1.6,
+    drive: 0.22,
+    glide: 0.03,
+    pan: 0,
+    env: { a: 0.006, d: 0.14, s: 0.64, r: 0.22 },
+    filterEnv: { amount: 0.36, attack: 0.01, decay: 0.14 },
+    engine: 'analog',
+    mode: 'poly',
+    filterType: 'bandpass',
+    subLevel: 0.28,
+    volume: 0.2,
+    compThresh: -20,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: 'Sampled Bassline',
+    color: PRESET_COLORS[1],
+    oscillator: 'sine',
+    filter: 300,
+    q: 0.9,
+    drive: 0.14,
+    glide: 0.09,
+    pan: 0,
+    env: { a: 0.01, d: 0.2, s: 0.76, r: 0.36 },
+    filterEnv: { amount: 0.32, attack: 0.012, decay: 0.24 },
+    engine: 'sampler',
+    mode: 'poly',
+    filterType: 'lowpass',
+    volume: 0.23,
+    compThresh: -19,
     limitThresh: -3,
     sample: null,
     tune: 0
@@ -4194,7 +4252,9 @@ function scheduleGranular(voice, buffer, midiNote, freqRatio, cfg) {
 function createInstrumentVoice(cfg, midiNote, freqRatio) {
   const env = cfg.env || { a: 0.01, d: 0.2, s: 0.8, r: 0.3 };
   const filter = audioContext.createBiquadFilter();
-  filter.type = cfg.filterType === 'highpass' ? 'highpass' : 'lowpass';
+  if (cfg.filterType === 'highpass') filter.type = 'highpass';
+  else if (cfg.filterType === 'bandpass') filter.type = 'bandpass';
+  else filter.type = 'lowpass';
   const baseCutoff = cfg.filter || 400;
   filter.frequency.value = baseCutoff;
   filter.Q.value = cfg.q || 0.8;
@@ -11160,22 +11220,29 @@ function buildInstrumentWindow() {
   instrumentWindowContainer.appendChild(dh);
 
   const cw = document.createElement("div");
-  cw.className = "looper-midimap-content";
-  cw.style.display = "flex";
-  cw.style.flexDirection = "column";
-  cw.style.gap = "8px";
+  cw.className = "looper-midimap-content nova-shell";
   instrumentWindowContainer.appendChild(cw);
 
   const hero = document.createElement("div");
   hero.className = "nova-hero";
-  hero.innerHTML = `<div class="nova-title">Nova Bass Lab</div><div class="nova-sub">Analog · FM · Wavetable · Sampler · Granular</div>`;
+  hero.innerHTML = `<div class="nova-title">Nova Bass Studio</div><div class="nova-sub">Analog · FM · Wavetable · Sampler · Granular</div>`;
   cw.appendChild(hero);
 
+  const layout = document.createElement("div");
+  layout.className = "nova-layout";
+  cw.appendChild(layout);
+
+  const leftCol = document.createElement("div");
+  leftCol.className = "nova-left";
+  layout.appendChild(leftCol);
+
+  const rightCol = document.createElement("div");
+  rightCol.className = "nova-right";
+  layout.appendChild(rightCol);
+
   const topRow = document.createElement("div");
-  topRow.style.display = "flex";
-  topRow.style.gap = "4px";
-  topRow.style.marginBottom = "8px";
-  cw.appendChild(topRow);
+  topRow.className = "nova-toprow";
+  leftCol.appendChild(topRow);
 
   const powerBtn = document.createElement("button");
   powerBtn.className = "looper-btn";
@@ -11211,7 +11278,7 @@ function buildInstrumentWindow() {
     setInstrumentLayers(indices);
     updateInstrumentPitchUI();
   });
-  cw.appendChild(presetSelect);
+  leftCol.appendChild(presetSelect);
 
   const addPresetBtn = document.createElement("button");
   addPresetBtn.className = "looper-btn";
@@ -11224,7 +11291,7 @@ function buildInstrumentWindow() {
     saveInstrumentStateToLocalStorage();
     refreshPresetSelect();
   });
-  cw.appendChild(addPresetBtn);
+  leftCol.appendChild(addPresetBtn);
 
   const octaveSelect = document.createElement("select");
   for (let o = 1; o <= 7; o++) {
@@ -11235,7 +11302,7 @@ function buildInstrumentWindow() {
     instrumentOctave = parseInt(octaveSelect.value, 10);
     saveInstrumentStateToLocalStorage();
   });
-  cw.appendChild(octaveSelect);
+  leftCol.appendChild(octaveSelect);
 
   const scaleRow = document.createElement("div");
   scaleRow.style.display = "flex";
@@ -11252,14 +11319,14 @@ function buildInstrumentWindow() {
   });
   scaleRow.appendChild(scLbl);
   scaleRow.appendChild(instrumentScaleSelect);
-  cw.appendChild(scaleRow);
+  leftCol.appendChild(scaleRow);
 
   const pitchRow = document.createElement("div");
   pitchRow.style.display = "flex";
   pitchRow.style.alignItems = "center";
   pitchRow.style.gap = "4px";
   pitchRow.style.marginTop = "8px";
-  cw.appendChild(pitchRow);
+  leftCol.appendChild(pitchRow);
 
   const pitchLabel = document.createElement("span");
   pitchLabel.textContent = "Pitch";
@@ -11305,7 +11372,7 @@ function buildInstrumentWindow() {
   transRow.style.alignItems = "center";
   transRow.style.gap = "4px";
   transRow.style.marginTop = "8px";
-  cw.appendChild(transRow);
+  leftCol.appendChild(transRow);
 
   const tLabel = document.createElement("span");
   tLabel.textContent = "Transpose";
@@ -11331,23 +11398,21 @@ function buildInstrumentWindow() {
   });
 
   const advToggle = document.createElement("button");
-  advToggle.className = "looper-btn";
-  advToggle.textContent = "Advanced ▶";
+  advToggle.className = "looper-btn nova-adv-toggle";
+  advToggle.textContent = "Detail ▼";
   let advancedWrap = document.createElement("div");
-  advancedWrap.className = "instrument-advanced";
+  advancedWrap.className = "instrument-advanced nova-advanced";
+  advancedWrap.style.display = "block";
   advToggle.addEventListener("click", () => {
     const open = advancedWrap.style.display === "block";
     advancedWrap.style.display = open ? "none" : "block";
-    advToggle.textContent = open ? "Advanced ▶" : "Advanced ▼";
+    advToggle.textContent = open ? "Detail ▶" : "Detail ▼";
   });
-  cw.appendChild(advToggle);
-  cw.appendChild(advancedWrap);
+  rightCol.appendChild(advToggle);
+  rightCol.appendChild(advancedWrap);
 
   const paramWrap = document.createElement("div");
-  paramWrap.style.marginTop = "8px";
-  paramWrap.style.display = "grid";
-  paramWrap.style.gridTemplateColumns = "80px 1fr 40px";
-  paramWrap.style.rowGap = "4px";
+  paramWrap.className = "nova-grid";
   advancedWrap.appendChild(paramWrap);
 
   function addParamRow(labelText, inputEl, valueEl) {
