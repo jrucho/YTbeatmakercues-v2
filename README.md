@@ -10,6 +10,10 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.0.3
+* Sidechain envelope triggers are now captured in MIDI loops whenever you hit the **J** key, mapped MIDI pad, or let the kick/all-drums follow modes drive the ducking, so recorded loops replay the exact pump you heard.
+* During MIDI loop playback, recorded sidechain events re-trigger the envelope automatically, keeping the same ducking shape you dialed in for kicks or the full kit.
+
 ## New in 2.0.2
 * New sidechain module
 * There’s now a dedicated “Open sidechain (advanced)” button in the Advanced window so you can jump straight into the ducking controls without remembering shortcuts. (J to trigger the sidechain, cmd+J to open the pannel)
