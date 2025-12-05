@@ -784,6 +784,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       samplesGain = null,
       loopAudioGain = null,
       instrumentGain = null,
+      instrumentPan = null,
       bus1Gain = null,
       bus2Gain = null,
       bus3Gain = null,
@@ -803,6 +804,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       instrumentLayers = [1],
       instrumentOctave = 3,
       instrumentVoices = {},
+      instrumentMonoVoices = {},
       instrumentPitchSemitone = 0,
       instrumentPitchFollowVideo = true,
       instrumentTranspose = 0,
@@ -816,6 +818,9 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       instrumentEngineSelect = null,
       instrumentFilterSlider = null,
       instrumentQSlider = null,
+      instrumentDriveSlider = null,
+      instrumentGlideSlider = null,
+      instrumentPanSlider = null,
       instrumentASlider = null,
       instrumentDSlider = null,
       instrumentSSlider = null,
@@ -823,6 +828,9 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       instrumentSampleLabel = null,
       instrumentFilterValue = null,
       instrumentQValue = null,
+      instrumentDriveValue = null,
+      instrumentGlideValue = null,
+      instrumentPanValue = null,
       instrumentAValue = null,
       instrumentDValue = null,
       instrumentSValue = null,
@@ -1508,6 +1516,9 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     if (!audioContext) return;
     WAVETABLES.organ = createWavetable([0, 1, 0.5, 0.25, 0.1]);
     WAVETABLES.bright = createWavetable([1, 0.8, 0.6, 0.4, 0.2]);
+    WAVETABLES.grit = createWavetable([1, 0.6, 0.45, 0.2, 0.12, 0.08]);
+    WAVETABLES.hollow = createWavetable([0, 0.9, 0, 0.55, 0, 0.2]);
+    WAVETABLES.subpulse = createWavetable([1, 0.2, 0.05]);
     defaultSampleBuffer = generateDefaultSample(audioContext);
     instrumentPresets.forEach(p => {
       if (p && p.engine === 'sampler' && !p.sample) p.sample = defaultSampleBuffer;
@@ -2110,267 +2121,283 @@ function toggleBlindMode() {
   function buildTouchPopup() {
     if (touchPopup) {
       touchPopup.style.display = "block";
+      updateSequencerUI();
       return;
     }
-    
+
     touchPopup = document.createElement("div");
     touchPopup.id = "touchPopup";
-    Object.assign(touchPopup.style, {
-      position: "fixed",
-      width: "700px",       // fixed width for two-row pads
-      height: "330px",      // fixed height
-      top: "50px",
-      left: "50px",
-      overflow: "hidden",
-      backgroundColor: "rgba(0, 0, 0, 0.85)",
-      zIndex: "100000",
-      borderRadius: "8px",
-      padding: "15px",
-      color: "#fff",
-      fontFamily: "sans-serif",
-      boxSizing: "border-box"
-    });
-    
-    // Header with title and close button
+    touchPopup.className = "ytbm-touch-popup";
+
     const header = document.createElement("div");
-    header.style.display = "flex";
-    header.style.justifyContent = "space-between";
-    header.style.alignItems = "center";
-    header.style.marginBottom = "10px";
-    header.innerHTML = `
-      <span style="font-size:16px; font-weight:bold;">Touch Sequencer</span>
-      <button id="touchCloseBtn" style="background:#333; color:#fff; border:none; border-radius:4px; padding:4px 8px; cursor:pointer;">Close</button>
-    `;
+    header.className = "ytbm-touch-header";
+    const title = document.createElement("div");
+    title.className = "ytbm-touch-title";
+    title.textContent = "Touch Sequencer";
+    const headerBtns = document.createElement("div");
+
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "ytbm-touch-btn ghost";
+    closeBtn.textContent = "Close";
+    closeBtn.addEventListener("click", () => { touchPopup.style.display = "none"; });
+    headerBtns.appendChild(closeBtn);
+
+    header.appendChild(title);
+    header.appendChild(headerBtns);
     touchPopup.appendChild(header);
-    
-    const touchCloseBtn = header.querySelector("#touchCloseBtn");
-    if (touchCloseBtn) {
-      touchCloseBtn.addEventListener("click", () => {
-        touchPopup.style.display = "none";
-      });
-    }
-    
-    // Utility row: Modifier button and Erase All Steps button
+
     const utilityRow = document.createElement("div");
-    utilityRow.style.display = "flex";
-    utilityRow.style.gap = "8px";
-    utilityRow.style.marginBottom = "10px";
-    touchPopup.appendChild(utilityRow);
-    
-    // Modifier Button
+    utilityRow.className = "ytbm-touch-utility";
     const modifierBtn = document.createElement("button");
-    modifierBtn.innerText = "Mark Cues: Off";
-    modifierBtn.style.padding = "6px 10px";
-    modifierBtn.style.borderRadius = "4px";
-    modifierBtn.style.background = "#444";
-    modifierBtn.style.color = "#fff";
-    modifierBtn.style.cursor = "pointer";
+    modifierBtn.className = "ytbm-touch-btn secondary";
+    modifierBtn.textContent = "Mark Cues: Off";
     modifierBtn.addEventListener("click", () => {
       modTouchActive = !modTouchActive;
-      modifierBtn.innerText = modTouchActive ? "Mark Cues: On" : "Mark Cues: Off";
-      modifierBtn.style.background = modTouchActive ? "darkorange" : "#444";
+      modifierBtn.textContent = modTouchActive ? "Mark Cues: On" : "Mark Cues: Off";
+      modifierBtn.classList.toggle("active", modTouchActive);
     });
     utilityRow.appendChild(modifierBtn);
-    
-    // Erase All Steps Button (no confirmation popup)
+
     const eraseAllStepsBtn = document.createElement("button");
-    eraseAllStepsBtn.innerText = "Erase All Steps";
-    eraseAllStepsBtn.style.padding = "6px 10px";
-    eraseAllStepsBtn.style.borderRadius = "4px";
-    eraseAllStepsBtn.style.background = "#c22";
-    eraseAllStepsBtn.style.color = "#fff";
-    eraseAllStepsBtn.style.cursor = "pointer";
+    eraseAllStepsBtn.className = "ytbm-touch-btn danger";
+    eraseAllStepsBtn.textContent = "Erase All Steps";
     eraseAllStepsBtn.addEventListener("click", () => {
       pushUndoState();
-      for (let i = 0; i < padSequencers.length; i++) {
-        padSequencers[i].fill(false);
-      }
+      for (let i = 0; i < padSequencers.length; i++) padSequencers[i].fill(false);
       updateSequencerUI();
-      console.log("All sequencer steps erased.");
     });
     utilityRow.appendChild(eraseAllStepsBtn);
-    
-    // Pad grid container
-    const padGrid = document.createElement("div");
-    padGrid.style.display = "grid";
-    padGrid.style.gap = "8px";
-    padGrid.style.marginBottom = "15px";
-    // Default layout is 2×5 (no layout toggle button)
-    padGrid.style.gridTemplateColumns = "repeat(5, 1fr)";
-    padGrid.style.gridTemplateRows = "repeat(2, auto)";
-    touchPopup.appendChild(padGrid);
-    
-    // Create 10 pad buttons
-for (let i = 0; i < 10; i++) {
-  const padBtn = document.createElement("button");
-  padBtn.innerText = `Pad ${i + 1}`;
-  padBtn.style.padding = "20px";
-  padBtn.style.fontSize = "14px";
-  padBtn.style.borderRadius = "4px";
-  padBtn.style.background = "#444";
-  padBtn.style.color = "#fff";
-  padBtn.style.cursor = "pointer";
-  // NEW: add a class and a data attribute so we can find it later
-  padBtn.classList.add("touch-pad-btn");
-  padBtn.setAttribute("data-pad-index", i);
-  
-  padBtn.addEventListener("mousedown", () => {
-    currentPad = i;
-    updateSequencerUI();
-    let cueKey = (i + 1) % 10;
-    cueKey = cueKey === 0 ? "0" : String(cueKey);
-    const vid = getVideoElement();
-    if (modTouchActive && vid) {
-      pushUndoState();
-      cuePoints[cueKey] = vid.currentTime;
-      saveCuePointsToURL();
-      updateCueMarkers();
-      refreshCuesButton();
-      console.log(`Modifier active: Pad ${i} marked cue ${cueKey} at time ${vid.currentTime}`);
-    } else {
-      // For normal pad taps, mirror the digit‑key path:
-      triggerPadCue(i);
+
+    touchPopup.appendChild(utilityRow);
+
+    const tabBar = document.createElement("div");
+    tabBar.className = "ytbm-touch-tabs";
+    const samplesTab = document.createElement("button");
+    samplesTab.className = "ytbm-touch-tab active";
+    samplesTab.textContent = "Samples";
+    const seqTab = document.createElement("button");
+    seqTab.className = "ytbm-touch-tab";
+    seqTab.textContent = "Sequencer";
+    tabBar.appendChild(samplesTab);
+    tabBar.appendChild(seqTab);
+    touchPopup.appendChild(tabBar);
+
+    const contentWrap = document.createElement("div");
+    contentWrap.className = "ytbm-touch-content";
+    const samplesView = document.createElement("div");
+    samplesView.className = "ytbm-touch-view active";
+    const seqView = document.createElement("div");
+    seqView.className = "ytbm-touch-view";
+    contentWrap.appendChild(samplesView);
+    contentWrap.appendChild(seqView);
+    touchPopup.appendChild(contentWrap);
+
+    function setTab(view) {
+      if (view === 'samples') {
+        samplesTab.classList.add('active');
+        seqTab.classList.remove('active');
+        samplesView.classList.add('active');
+        seqView.classList.remove('active');
+      } else {
+        seqTab.classList.add('active');
+        samplesTab.classList.remove('active');
+        seqView.classList.add('active');
+        samplesView.classList.remove('active');
+      }
     }
-  });
-  padGrid.appendChild(padBtn);
-}
-    
-    // Sequencer container (16-step row)
-    const seqContainer = document.createElement("div");
-    seqContainer.id = "sequencerContainer";
-    seqContainer.style.display = "flex";
-    seqContainer.style.flexDirection = "column";
-    seqContainer.style.alignItems = "center";
-    seqContainer.style.gap = "8px";
-    touchPopup.appendChild(seqContainer);
-    
-    // 16-step row
+
+    samplesTab.addEventListener('click', () => setTab('samples'));
+    seqTab.addEventListener('click', () => setTab('seq'));
+
+    const padMeta = [
+      { index: 0, label: 'Kick', type: 'kick' },
+      { index: 1, label: 'Snare', type: 'snare' },
+      { index: 2, label: 'Hat', type: 'hihat' },
+      { index: 3, label: 'Pad 4' },
+      { index: 4, label: 'Pad 5' },
+      { index: 5, label: 'Pad 6' },
+      { index: 6, label: 'Pad 7' },
+      { index: 7, label: 'Pad 8' },
+      { index: 8, label: 'Pad 9' },
+      { index: 9, label: 'Pad 10' }
+    ];
+
+    function getSampleLabel(type) {
+      const idx = currentSampleIndex[type] ?? 0;
+      const meta = sampleOrigin[type]?.[idx];
+      if (meta?.packName) return `${meta.packName} #${meta.index + 1}`;
+      return meta ? 'User sample' : 'Loaded';
+    }
+
+    function createPadButton(label, i) {
+      const padBtn = document.createElement("button");
+      padBtn.className = "touch-pad-btn";
+      padBtn.dataset.padIndex = String(i);
+      padBtn.textContent = label;
+      padBtn.addEventListener("mousedown", () => {
+        currentPad = i;
+        updateSequencerUI();
+        let cueKey = (i + 1) % 10;
+        cueKey = cueKey === 0 ? "0" : String(cueKey);
+        const vid = getVideoElement();
+        if (modTouchActive && vid) {
+          pushUndoState();
+          cuePoints[cueKey] = vid.currentTime;
+          saveCuePointsToURL();
+          updateCueMarkers();
+          refreshCuesButton();
+        } else {
+          triggerPadCue(i);
+        }
+      });
+      padBtn.addEventListener("touchstart", e => { e.preventDefault(); padBtn.dispatchEvent(new MouseEvent('mousedown')); });
+      return padBtn;
+    }
+
+    const sampleGrid = document.createElement('div');
+    sampleGrid.className = 'ytbm-sample-grid';
+    padMeta.slice(0,3).forEach(meta => {
+      const card = document.createElement('div');
+      card.className = 'ytbm-sample-card';
+      const head = document.createElement('div');
+      head.className = 'ytbm-sample-card__head';
+      head.textContent = meta.label;
+      card.appendChild(head);
+      const padBtn = createPadButton(meta.label, meta.index);
+      padBtn.classList.add('primary');
+      card.appendChild(padBtn);
+      const sampleLabel = document.createElement('div');
+      sampleLabel.className = 'ytbm-sample-meta';
+      sampleLabel.textContent = meta.type ? getSampleLabel(meta.type) : 'Pad';
+      card.appendChild(sampleLabel);
+      if (meta.type) {
+        const controls = document.createElement('div');
+        controls.className = 'ytbm-sample-controls';
+        const volLabel = document.createElement('span');
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.min = -18;
+        slider.max = 6;
+        slider.step = 0.5;
+        const initialDb = 20 * Math.log10(sampleVolumes[meta.type] || 1);
+        slider.value = isFinite(initialDb) ? initialDb : 0;
+        volLabel.textContent = `${slider.value} dB`;
+        slider.addEventListener('input', () => {
+          volLabel.textContent = `${slider.value} dB`;
+          onSampleVolumeFaderChange(meta.type, parseFloat(slider.value));
+        });
+        const muteBtn = document.createElement('button');
+        muteBtn.className = 'ytbm-touch-btn ghost';
+        muteBtn.textContent = sampleMutes[meta.type] ? 'Unmute' : 'Mute';
+        muteBtn.addEventListener('click', () => {
+          toggleSampleMute(meta.type);
+          muteBtn.textContent = sampleMutes[meta.type] ? 'Unmute' : 'Mute';
+        });
+        controls.appendChild(slider);
+        controls.appendChild(volLabel);
+        controls.appendChild(muteBtn);
+        card.appendChild(controls);
+      }
+      sampleGrid.appendChild(card);
+    });
+
+    const auxPadGrid = document.createElement('div');
+    auxPadGrid.className = 'ytbm-aux-grid';
+    padMeta.slice(3).forEach(meta => {
+      const btn = createPadButton(meta.label, meta.index);
+      auxPadGrid.appendChild(btn);
+    });
+    samplesView.appendChild(sampleGrid);
+    samplesView.appendChild(auxPadGrid);
+
+    const seqHeader = document.createElement('div');
+    seqHeader.className = 'ytbm-seq-header';
+    const laneLabel = document.createElement('div');
+    laneLabel.className = 'ytbm-seq-lane-label';
+    const updateLaneLabel = () => {
+      const meta = padMeta[currentPad] || { label: `Pad ${currentPad + 1}` };
+      laneLabel.textContent = `Editing: ${meta.label}`;
+    };
+    updateLaneLabel();
+    seqHeader.appendChild(laneLabel);
+
+    const padSelectRow = document.createElement('div');
+    padSelectRow.className = 'ytbm-seq-pad-row';
+    padMeta.forEach(meta => {
+      const btn = createPadButton(meta.label, meta.index);
+      btn.classList.add('ghost');
+      btn.addEventListener('click', updateLaneLabel);
+      padSelectRow.appendChild(btn);
+    });
+    seqHeader.appendChild(padSelectRow);
+    seqView.appendChild(seqHeader);
+
     const stepRow = document.createElement("div");
     stepRow.id = "stepRow";
-    stepRow.style.display = "grid";
-    stepRow.style.gridTemplateColumns = "repeat(16, 1fr)";
-    stepRow.style.gap = "4px";
-    seqContainer.appendChild(stepRow);
-    
+    stepRow.className = 'ytbm-step-row';
     for (let s = 0; s < 16; s++) {
       const stepBtn = document.createElement("button");
-      stepBtn.className = "stepBtn";
+      stepBtn.className = "ytbm-step-btn";
       stepBtn.dataset.step = s;
       stepBtn.innerText = s + 1;
-      stepBtn.style.padding = "10px";
-      stepBtn.style.borderRadius = "4px";
-      stepBtn.style.background = "#222";
-      stepBtn.style.color = "#fff";
-      stepBtn.style.cursor = "pointer";
       stepBtn.addEventListener("click", () => { toggleStep(s); });
       stepBtn.addEventListener("touchstart", e => { e.preventDefault(); toggleStep(s); });
       stepRow.appendChild(stepBtn);
     }
-    
-    // Control row for BPM and start/stop
-    const controlRow = document.createElement("div");
-    controlRow.style.display = "flex";
-    controlRow.style.justifyContent = "space-around";
-    controlRow.style.alignItems = "center";
-    controlRow.style.width = "100%";
-    
-    const tapBpmBtn = document.createElement("button");
-tapBpmBtn.innerText = "Tap BPM";
-tapBpmBtn.style.padding = "10px";
-tapBpmBtn.style.borderRadius = "4px";
-tapBpmBtn.style.background = "#444";
-tapBpmBtn.style.color = "#fff";
-tapBpmBtn.style.cursor = "pointer";
-tapBpmBtn.addEventListener("click", () => {
-  let now = performance.now();
-  tapTimes.push(now);
-  if (tapTimes.length > 8) tapTimes.shift();
-  if (tapTimes.length >= 4) {
-    let intervals = [];
-    for (let i = 1; i < tapTimes.length; i++) {
-      intervals.push(tapTimes[i] - tapTimes[i - 1]);
-    }
-    let avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-    sequencerBPM = Math.round(60000 / avgInterval);
-    if (bpmInput) bpmInput.value = sequencerBPM;
-    console.log("New BPM:", sequencerBPM);
-    // If sequencer is running, restart it with the new BPM:
-    if (sequencerPlaying) {
-      stopAllSequencers();
-      startAllSequencers();
-    }
-  }
+    seqView.appendChild(stepRow);
 
-  // Ensure the Touch Sequencer button exists in the Advanced UI.
-  // Safe no-op if already present. Called from initialize().
-  function addTouchSequencerButtonToAdvancedUI() {
-    if (!panelContainer) return;
-    if (panelContainer.querySelector('.ytbm-touch-sequencer-btn')) return;
-    const btn = document.createElement('button');
-    btn.className = 'looper-btn ytbm-touch-sequencer-btn';
-    btn.textContent = 'Touch Sequencer';
-    btn.title = 'Toggle Touch Sequencer (MIDI: Note 27)';
-    btn.addEventListener('click', () => {
-      if (touchPopup && touchPopup.style.display !== 'none') {
-        touchPopup.style.display = 'none';
-      } else {
-        buildTouchPopup();
+    const controlRow = document.createElement("div");
+    controlRow.className = 'ytbm-touch-controls';
+
+    const tapBpmBtn = document.createElement("button");
+    tapBpmBtn.className = 'ytbm-touch-btn';
+    tapBpmBtn.innerText = "Tap BPM";
+    tapBpmBtn.addEventListener("click", () => {
+      let now = performance.now();
+      tapTimes.push(now);
+      if (tapTimes.length > 8) tapTimes.shift();
+      if (tapTimes.length >= 4) {
+        let intervals = [];
+        for (let i = 1; i < tapTimes.length; i++) intervals.push(tapTimes[i] - tapTimes[i - 1]);
+        let avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        sequencerBPM = Math.round(60000 / avgInterval);
+        if (bpmInput) bpmInput.value = sequencerBPM;
+        if (sequencerPlaying) { stopAllSequencers(); startAllSequencers(); }
       }
     });
-    const contentWrap = panelContainer.querySelector('.looper-content-wrap');
-    if (contentWrap) {
-      const rows = contentWrap.querySelectorAll('.ytbm-panel-row');
-      if (rows.length) rows[rows.length - 1].appendChild(btn);
-      else contentWrap.appendChild(btn);
-    } else {
-      panelContainer.appendChild(btn);
-    }
-  }
-});
-controlRow.appendChild(tapBpmBtn);
+    controlRow.appendChild(tapBpmBtn);
 
-    
     const bpmInput = document.createElement("input");
-bpmInput.type = "number";
-bpmInput.value = sequencerBPM;
-bpmInput.style.width = "50px";
-bpmInput.style.marginLeft = "5px";
-bpmInput.addEventListener("input", () => {
-  const newBpm = parseInt(bpmInput.value, 10) || 120;
-  if (newBpm !== sequencerBPM) {
-    sequencerBPM = newBpm;
-    console.log("Manual BPM change:", sequencerBPM);
-    // If the sequencer is running, update it immediately:
-    if (sequencerPlaying) {
-      stopAllSequencers();
-      startAllSequencers();
-    }
-  }
-});
-controlRow.appendChild(bpmInput);
-    
+    bpmInput.type = "number";
+    bpmInput.value = sequencerBPM;
+    bpmInput.className = 'ytbm-touch-input';
+    bpmInput.addEventListener("input", () => {
+      const newBpm = parseInt(bpmInput.value, 10) || 120;
+      if (newBpm !== sequencerBPM) {
+        sequencerBPM = newBpm;
+        if (sequencerPlaying) { stopAllSequencers(); startAllSequencers(); }
+      }
+    });
+    controlRow.appendChild(bpmInput);
+
     const startStopBtn = document.createElement("button");
+    startStopBtn.className = 'ytbm-touch-btn primary';
     startStopBtn.innerText = "Start";
-    startStopBtn.style.padding = "10px";
-    startStopBtn.style.borderRadius = "4px";
-    startStopBtn.style.background = "#444";
-    startStopBtn.style.color = "#fff";
-    startStopBtn.style.cursor = "pointer";
     startStopBtn.addEventListener("click", () => {
       if (sequencerPlaying) { stopSequencer(); startStopBtn.innerText = "Start"; }
       else { startSequencer(); startStopBtn.innerText = "Stop"; }
     });
     controlRow.appendChild(startStopBtn);
-    
-    seqContainer.appendChild(controlRow);
-    
+
+    seqView.appendChild(controlRow);
+
     document.body.appendChild(touchPopup);
     makeOverlayDraggable(touchPopup, header);
     currentPad = 0;
     updateSequencerUI();
   }
-  
-  // Helper to make overlays draggable
+
+// Helper to make overlays draggable
   function makeOverlayDraggable(overlay, handle) {
     let offsetX = 0, offsetY = 0, dragging = false;
     handle.addEventListener("mousedown", e => {
@@ -2390,7 +2417,7 @@ controlRow.appendChild(bpmInput);
     if (!stepRow) return;
     const steps = padSequencers[currentPad];
     Array.from(stepRow.children).forEach((btn, index) => {
-      btn.style.background = steps[index] ? "#0a0" : "#222";
+      btn.classList.toggle('active', steps[index]);
     });
   }
   
@@ -3625,6 +3652,7 @@ function setInstrumentPreset(idx) {
     if (instVolumeNode && typeof cfg.volume === 'number') instVolumeNode.gain.value = cfg.volume;
     if (instCompNode && typeof cfg.compThresh === 'number') instCompNode.threshold.value = cfg.compThresh;
     if (instLimiterNode && typeof cfg.limitThresh === 'number') instLimiterNode.threshold.value = cfg.limitThresh;
+    if (instrumentPan && typeof cfg.pan === 'number') instrumentPan.pan.value = cfg.pan;
   }
   updateInstrumentButtonColor();
   refreshInstrumentEditFields();
@@ -3655,6 +3683,7 @@ function deactivateInstrument() {
   }
   Object.values(instrumentVoices).flat().forEach(v => stopInstrumentVoiceInstant(v));
   instrumentVoices = {};
+  instrumentMonoVoices = {};
   setInstrumentPreset(0);
   if (instDelayNode) instDelayNode.delayTime.value = 0;
   if (instDelayMix) instDelayMix.gain.value = 0;
@@ -3691,19 +3720,235 @@ function updateInstrumentButtonColor() {
 
 let instrumentPresets = [
   null,
-  { name: 'Resonate', color: PRESET_COLORS[0], oscillator: 'sawtooth', filter: 120, q: 4, env: { a: 0.005, d: 0.1, s: 0.8, r: 0.3 }, engine: 'analog', mode: 'mono', filterType: 'lowpass', volume: 0.15, compThresh: -20, limitThresh: -3, tune: 0 },
-  { name: 'Precision', color: PRESET_COLORS[1], oscillator: 'triangle', filter: 250, q: 2, env: { a: 0.005, d: 0.15, s: 0.9, r: 0.25 }, engine: 'analog', mode: 'poly', filterType: 'lowpass', volume: 0.15, compThresh: -20, limitThresh: -3, tune: 0 },
-  { name: '808 Boom', color: PRESET_COLORS[2], oscillator: 'sine', filter: 80, q: 0, env: { a: 0.005, d: 0.25, s: 1.0, r: 0.5 }, engine: 'analog', mode: 'mono', filterType: 'lowpass', volume: 0.15, compThresh: -20, limitThresh: -3, tune: 0 },
-  { name: 'Warm Organ', color: PRESET_COLORS[3], oscillator: 'square', filter: 400, q: 2, env: { a: 0.01, d: 0.3, s: 0.7, r: 0.3 }, engine: 'analog', mode: 'poly', filterType: 'lowpass', volume: 0.15, compThresh: -20, limitThresh: -3, tune: 0 },
-  { name: 'Moog Thump', color: PRESET_COLORS[4], oscillator: 'sawtooth', filter: 300, q: 2.5, env: { a: 0.005, d: 0.2, s: 0.8, r: 0.4 }, engine: 'analog', mode: 'poly', filterType: 'lowpass', volume: 0.15, compThresh: -20, limitThresh: -3, tune: 0 },
-  { name: 'Soft Pad', color: PRESET_COLORS[5], oscillator: 'organ', filter: 600, q: 1, env: { a: 0.05, d: 0.4, s: 0.7, r: 0.8 }, engine: 'wavetable', mode: 'poly', filterType: 'lowpass', volume: 0.15, compThresh: -20, limitThresh: -3, tune: 0 },
-  { name: 'String Ensemble', color: PRESET_COLORS[6], oscillator: 'bright', filter: 900, q: 1.5, env: { a: 0.05, d: 0.3, s: 0.9, r: 0.6 }, engine: 'wavetable', mode: 'poly', filterType: 'lowpass', volume: 0.15, compThresh: -20, limitThresh: -3, tune: 0 },
-  { name: 'FM Keys', color: PRESET_COLORS[7], oscillator: 'sine', filter: 500, q: 0.5, env: { a: 0.005, d: 0.25, s: 0.8, r: 0.4 }, engine: 'fm', mode: 'poly', filterType: 'lowpass', volume: 0.15, compThresh: -20, limitThresh: -3, tune: 0 },
-  { name: 'Pluck', color: PRESET_COLORS[8], oscillator: 'square', filter: 1200, q: 6, env: { a: 0.005, d: 0.2, s: 0, r: 0.2 }, engine: 'fm', mode: 'poly', filterType: 'lowpass', volume: 0.15, compThresh: -20, limitThresh: -3, tune: 0 },
-  { name: 'Sweep Lead', color: PRESET_COLORS[9], oscillator: 'sawtooth', filter: 1500, q: 5, env: { a: 0.05, d: 0.3, s: 0.4, r: 0.7 }, engine: 'fm', mode: 'poly', filterType: 'lowpass', volume: 0.15, compThresh: -20, limitThresh: -3, tune: 0 },
-  { name: 'Bass Cut', color: PRESET_COLORS[10], oscillator: 'sine', filter: 150, q: 0, env: { a: 0.005, d: 0.2, s: 0.9, r: 0.3 }, engine: 'analog', mode: 'poly', filterType: 'highpass', volume: 0.15, compThresh: -20, limitThresh: -3, tune: 0 },
-  { name: 'Sample Tone', color: PRESET_COLORS[11], oscillator: 'sine', filter: 800, q: 0, env: { a: 0.01, d: 0.2, s: 0.8, r: 0.4 }, engine: 'sampler', mode: 'mono', filterType: 'lowpass', volume: 0.15, compThresh: -20, limitThresh: -3, sample: null, tune: 0 },
+  {
+    name: 'Sub Glide',
+    color: PRESET_COLORS[0],
+    oscillator: 'sawtooth',
+    filter: 140,
+    q: 1.8,
+    drive: 0.18,
+    glide: 0.12,
+    pan: 0,
+    env: { a: 0.01, d: 0.12, s: 0.8, r: 0.25 },
+    engine: 'analog',
+    mode: 'legato',
+    filterType: 'lowpass',
+    volume: 0.18,
+    compThresh: -22,
+    limitThresh: -4,
+    tune: 0
+  },
+  {
+    name: 'Thick Analog',
+    color: PRESET_COLORS[1],
+    oscillator: 'sawtooth',
+    filter: 220,
+    q: 2.8,
+    drive: 0.22,
+    glide: 0.08,
+    pan: -0.05,
+    env: { a: 0.008, d: 0.14, s: 0.82, r: 0.28 },
+    engine: 'analog',
+    mode: 'mono',
+    filterType: 'lowpass',
+    volume: 0.2,
+    compThresh: -18,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: '808 Sculpt',
+    color: PRESET_COLORS[2],
+    oscillator: 'sine',
+    filter: 90,
+    q: 0.7,
+    drive: 0.2,
+    glide: 0.2,
+    pan: 0,
+    env: { a: 0.005, d: 0.32, s: 0.95, r: 0.6 },
+    engine: 'analog',
+    mode: 'legato',
+    filterType: 'lowpass',
+    volume: 0.16,
+    compThresh: -22,
+    limitThresh: -4,
+    tune: 0
+  },
+  {
+    name: 'Warm Square',
+    color: PRESET_COLORS[3],
+    oscillator: 'square',
+    filter: 320,
+    q: 2.2,
+    drive: 0.15,
+    glide: 0.05,
+    pan: 0.05,
+    env: { a: 0.01, d: 0.2, s: 0.75, r: 0.32 },
+    engine: 'analog',
+    mode: 'mono',
+    filterType: 'lowpass',
+    volume: 0.18,
+    compThresh: -20,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: 'Moog Punch',
+    color: PRESET_COLORS[4],
+    oscillator: 'sawtooth',
+    filter: 260,
+    q: 2.6,
+    drive: 0.24,
+    glide: 0.07,
+    pan: -0.08,
+    env: { a: 0.008, d: 0.18, s: 0.78, r: 0.35 },
+    engine: 'analog',
+    mode: 'mono',
+    filterType: 'lowpass',
+    volume: 0.22,
+    compThresh: -20,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: 'Morph Bass',
+    color: PRESET_COLORS[5],
+    oscillator: 'bright',
+    wavetableB: 'hollow',
+    wavetableMix: 0.4,
+    filter: 340,
+    q: 1.2,
+    drive: 0.14,
+    glide: 0.06,
+    pan: 0.02,
+    env: { a: 0.02, d: 0.18, s: 0.7, r: 0.45 },
+    engine: 'wavetable',
+    mode: 'mono',
+    filterType: 'lowpass',
+    volume: 0.19,
+    compThresh: -20,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: 'Digital Sweep',
+    color: PRESET_COLORS[6],
+    oscillator: 'organ',
+    wavetableB: 'grit',
+    wavetableMix: 0.65,
+    filter: 420,
+    q: 1.6,
+    drive: 0.18,
+    glide: 0.04,
+    pan: -0.02,
+    env: { a: 0.012, d: 0.24, s: 0.65, r: 0.4 },
+    engine: 'wavetable',
+    mode: 'mono',
+    filterType: 'lowpass',
+    volume: 0.2,
+    compThresh: -18,
+    limitThresh: -2,
+    tune: 0
+  },
+  {
+    name: 'FM Razor',
+    color: PRESET_COLORS[7],
+    oscillator: 'sine',
+    fmRatio: 1.6,
+    fmIndex: 95,
+    filter: 420,
+    q: 1,
+    drive: 0.12,
+    glide: 0.05,
+    pan: 0,
+    env: { a: 0.006, d: 0.15, s: 0.7, r: 0.35 },
+    engine: 'fm',
+    mode: 'mono',
+    filterType: 'lowpass',
+    volume: 0.18,
+    compThresh: -22,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: 'FM Metallic',
+    color: PRESET_COLORS[8],
+    oscillator: 'square',
+    fmRatio: 2.2,
+    fmIndex: 140,
+    filter: 520,
+    q: 1.8,
+    drive: 0.16,
+    glide: 0.03,
+    pan: 0.1,
+    env: { a: 0.004, d: 0.18, s: 0.6, r: 0.28 },
+    engine: 'fm',
+    mode: 'mono',
+    filterType: 'lowpass',
+    volume: 0.17,
+    compThresh: -18,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: 'Sweep Lead',
+    color: PRESET_COLORS[9],
+    oscillator: 'sawtooth',
+    fmRatio: 0.8,
+    fmIndex: 60,
+    filter: 680,
+    q: 2.4,
+    drive: 0.12,
+    glide: 0.02,
+    pan: -0.1,
+    env: { a: 0.02, d: 0.22, s: 0.55, r: 0.55 },
+    engine: 'fm',
+    mode: 'mono',
+    filterType: 'lowpass',
+    volume: 0.19,
+    compThresh: -18,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: 'Low Cut',
+    color: PRESET_COLORS[10],
+    oscillator: 'sine',
+    filter: 170,
+    q: 0.4,
+    drive: 0.08,
+    glide: 0.05,
+    pan: 0,
+    env: { a: 0.006, d: 0.18, s: 0.82, r: 0.28 },
+    engine: 'analog',
+    mode: 'mono',
+    filterType: 'highpass',
+    volume: 0.17,
+    compThresh: -18,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: 'Sampler Bass',
+    color: PRESET_COLORS[11],
+    oscillator: 'sine',
+    filter: 520,
+    q: 0.6,
+    drive: 0.1,
+    glide: 0.08,
+    pan: 0,
+    env: { a: 0.01, d: 0.22, s: 0.78, r: 0.45 },
+    engine: 'sampler',
+    mode: 'mono',
+    filterType: 'lowpass',
+    volume: 0.18,
+    compThresh: -20,
+    limitThresh: -3,
+    sample: null,
+    tune: 0
+  }
 ];
+
 
 function randomizeInstrumentPreset() {
   const oscTypes = ['sine','square','sawtooth','triangle','organ','bright'];
@@ -3715,6 +3960,9 @@ function randomizeInstrumentPreset() {
   p.filter = 200 + Math.random()*2000;
   p.q = Math.random()*4;
   p.tune = [-24,-12,0,12,24][Math.floor(Math.random()*5)];
+  p.drive = Math.random()*0.3;
+  p.glide = Math.random()*0.15;
+  p.pan = Math.max(-0.5, Math.min(0.5, (Math.random()-0.5))); 
   p.env = { a: Math.random()*0.2, d: 0.1+Math.random()*0.3, s: 0.5+Math.random()*0.5, r: 0.2+Math.random()*0.6 };
   if (instDelayNode) instDelayNode.delayTime.value = Math.random()*0.5;
   if (instDelayMix) instDelayMix.gain.value = Math.random()*0.5;
@@ -3732,95 +3980,208 @@ function instrumentSettings() {
   return instrumentPresets[instrumentPreset];
 }
 
+function midiToHz(midi) {
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+function createSaturationCurve(amount) {
+  const k = Math.max(1, amount * 50);
+  const n = 256;
+  const curve = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    curve[i] = Math.tanh(k * x) / Math.tanh(k);
+  }
+  return curve;
+}
+
+function createDriveStage(amount = 0) {
+  const driveAmount = Math.max(0, amount || 0);
+  const pre = audioContext.createGain();
+  const shaper = audioContext.createWaveShaper();
+  const post = audioContext.createGain();
+  shaper.curve = createSaturationCurve(driveAmount);
+  pre.gain.value = 1 + driveAmount * 3;
+  post.gain.value = 1;
+  pre.connect(shaper).connect(post);
+  return { input: pre, output: post };
+}
+
+function registerVoice(midi, voice) {
+  if (!instrumentVoices[midi]) instrumentVoices[midi] = [];
+  instrumentVoices[midi].push(voice);
+  voice.activeMidi = midi;
+}
+
+function moveVoiceToMidi(voice, midi) {
+  if (voice.activeMidi === midi) return;
+  const arr = instrumentVoices[voice.activeMidi];
+  if (arr) {
+    instrumentVoices[voice.activeMidi] = arr.filter(v => v !== voice);
+    if (!instrumentVoices[voice.activeMidi].length) delete instrumentVoices[voice.activeMidi];
+  }
+  registerVoice(midi, voice);
+}
+
+function triggerEnvelope(voice, env) {
+  const e = env || { a: 0.01, d: 0.2, s: 0.8, r: 0.3 };
+  const now = audioContext.currentTime;
+  voice.g.gain.cancelScheduledValues(now);
+  voice.g.gain.setValueAtTime(0, now);
+  voice.g.gain.linearRampToValueAtTime(1, now + e.a);
+  voice.g.gain.linearRampToValueAtTime(e.s ?? 0.8, now + e.a + e.d);
+  voice.env = e;
+}
+
+function holdLegato(voice, env) {
+  const now = audioContext.currentTime;
+  voice.g.gain.cancelScheduledValues(now);
+  voice.g.gain.setTargetAtTime(env?.s ?? 0.8, now, 0.02);
+  voice.env = env;
+}
+
+function glideVoiceFrequency(voice, targetHz, glideSeconds) {
+  const glide = Math.max(0, glideSeconds || 0);
+  const t = audioContext.currentTime;
+  (voice.oscillators || []).forEach(o => {
+    if (o.frequency) {
+      o.frequency.cancelScheduledValues(t);
+      o.frequency.linearRampToValueAtTime(targetHz, t + glide);
+    }
+  });
+  if (voice.modOsc && voice.fmRatio) {
+    voice.modOsc.frequency.cancelScheduledValues(t);
+    voice.modOsc.frequency.linearRampToValueAtTime(targetHz * voice.fmRatio, t + glide);
+  }
+}
+
+function createInstrumentVoice(cfg, midiNote, freqRatio) {
+  const env = cfg.env || { a: 0.01, d: 0.2, s: 0.8, r: 0.3 };
+  const filter = audioContext.createBiquadFilter();
+  filter.type = cfg.filterType === 'highpass' ? 'highpass' : 'lowpass';
+  filter.frequency.value = cfg.filter || 400;
+  filter.Q.value = cfg.q || 0.8;
+  const driveStage = createDriveStage(cfg.drive || 0);
+  const g = audioContext.createGain();
+  g.gain.value = 0;
+  filter.connect(driveStage.input);
+  driveStage.output.connect(g).connect(instrumentGain);
+
+  const voice = {
+    filter,
+    g,
+    env,
+    engine: cfg.engine,
+    oscillators: [],
+    sources: [],
+    fmRatio: cfg.fmRatio || 0,
+    glide: cfg.glide || 0,
+    preset: null
+  };
+
+  const targetHz = midiToHz(midiNote) * freqRatio;
+
+  if (cfg.engine === 'sampler' && cfg.sample) {
+    const src = audioContext.createBufferSource();
+    src.buffer = cfg.sample;
+    src.playbackRate.value = Math.pow(2, (midiNote - 60) / 12) * freqRatio;
+    src.connect(filter);
+    src.start();
+    voice.sources.push(src);
+  } else if (cfg.engine === 'fm') {
+    const carrier = audioContext.createOscillator();
+    carrier.type = cfg.oscillator || 'sine';
+    carrier.frequency.value = targetHz;
+    instLfoGain.connect(carrier.frequency);
+    const mod = audioContext.createOscillator();
+    const modGain = audioContext.createGain();
+    const ratio = cfg.fmRatio || 2;
+    const idx = cfg.fmIndex || 80;
+    mod.frequency.value = targetHz * ratio;
+    modGain.gain.value = idx;
+    mod.connect(modGain).connect(carrier.frequency);
+    mod.start();
+    carrier.connect(filter);
+    carrier.start();
+    voice.modOsc = mod;
+    voice.oscillators.push(carrier);
+    voice.fmRatio = ratio;
+  } else if (cfg.engine === 'wavetable') {
+    const mix = cfg.wavetableMix ?? 0.5;
+    const oscA = audioContext.createOscillator();
+    if (WAVETABLES[cfg.oscillator]) oscA.setPeriodicWave(WAVETABLES[cfg.oscillator]);
+    else oscA.type = cfg.oscillator || 'sawtooth';
+    oscA.frequency.value = targetHz;
+    instLfoGain.connect(oscA.frequency);
+    const gainA = audioContext.createGain();
+    gainA.gain.value = 1 - mix;
+    oscA.connect(gainA).connect(filter);
+
+    const oscB = audioContext.createOscillator();
+    if (cfg.wavetableB && WAVETABLES[cfg.wavetableB]) oscB.setPeriodicWave(WAVETABLES[cfg.wavetableB]);
+    else oscB.type = 'sawtooth';
+    oscB.frequency.value = targetHz;
+    instLfoGain.connect(oscB.frequency);
+    const gainB = audioContext.createGain();
+    gainB.gain.value = mix;
+    oscB.connect(gainB).connect(filter);
+
+    oscA.start();
+    oscB.start();
+    voice.oscillators.push(oscA, oscB);
+    voice.crossfade = { a: gainA, b: gainB };
+  } else {
+    const main = audioContext.createOscillator();
+    main.type = cfg.oscillator || 'sawtooth';
+    main.frequency.value = targetHz;
+    instLfoGain.connect(main.frequency);
+    const sub = audioContext.createOscillator();
+    sub.type = 'square';
+    sub.frequency.value = targetHz / 2;
+    instLfoGain.connect(sub.frequency);
+    const subGain = audioContext.createGain();
+    subGain.gain.value = 0.35;
+    main.connect(filter);
+    sub.connect(subGain).connect(filter);
+    main.start();
+    sub.start();
+    voice.oscillators.push(main, sub);
+  }
+
+  triggerEnvelope(voice, env);
+  return voice;
+}
+
 function playInstrumentNote(midi) {
   if (!audioContext || instrumentLayers.length === 0) return;
   recordMidiEvent('instrument', midi);
   const baseMidi = midi + instrumentTranspose;
   const freqRatio = instrumentPitchRatio;
-  const noteForPreset = (cfg) => baseMidi + (cfg.tune || 0);
-  if (!instrumentVoices[midi]) instrumentVoices[midi] = [];
 
   instrumentLayers.forEach(idx => {
     const cfg = instrumentPresets[idx];
     if (!cfg) return;
-    const noteMidi = noteForPreset(cfg);
+    const targetMidi = baseMidi + (cfg.tune || 0);
+    const mode = cfg.mode || 'poly';
 
-    if (cfg.mode === 'legato') {
-      let found = null, foundKey = null;
-      for (const [k, arr] of Object.entries(instrumentVoices)) {
-        for (const v of arr) {
-          if (v.preset === idx) { found = v; foundKey = k; break; }
+    if ((mode === 'mono' || mode === 'legato') && cfg.engine !== 'sampler') {
+      const existing = instrumentMonoVoices[idx];
+      if (existing) {
+        moveVoiceToMidi(existing, midi);
+        glideVoiceFrequency(existing, midiToHz(targetMidi) * freqRatio, cfg.glide);
+        if (mode === 'legato') {
+          holdLegato(existing, cfg.env);
+        } else {
+          triggerEnvelope(existing, cfg.env);
         }
-        if (found) break;
-      }
-      if (found) {
-        const freq = 440 * Math.pow(2, (noteMidi - 69) / 12) * freqRatio;
-        if (found.osc) found.osc.frequency.setValueAtTime(freq, audioContext.currentTime);
-        if (found.mod) found.mod.frequency.setValueAtTime((cfg.modFreq || 2) * Math.pow(2, (noteMidi - 69) / 12) * freqRatio, audioContext.currentTime);
-        instrumentVoices[foundKey] = instrumentVoices[foundKey].filter(v => v !== found);
-        if (!instrumentVoices[foundKey].length) delete instrumentVoices[foundKey];
-        if (!instrumentVoices[midi]) instrumentVoices[midi] = [];
-        instrumentVoices[midi].push(found);
         return;
       }
     }
 
-    if (cfg.mode === 'mono') {
-      for (const key of Object.keys(instrumentVoices)) {
-        instrumentVoices[key] = instrumentVoices[key].filter(v => {
-          if (v.preset === idx) { stopInstrumentVoiceInstant(v); return false; }
-          return true;
-        });
-        if (!instrumentVoices[key].length) delete instrumentVoices[key];
-      }
-    }
-
-    if (!instrumentVoices[midi]) instrumentVoices[midi] = [];
-
-    if (cfg.engine === 'sampler' && cfg.sample) {
-      const src = audioContext.createBufferSource();
-      src.buffer = cfg.sample;
-      src.playbackRate.value = Math.pow(2, (noteMidi - 60) / 12) * freqRatio;
-      const g = audioContext.createGain();
-      src.connect(g).connect(instrumentGain);
-      src.start();
-      instrumentVoices[midi].push({ src, g, env: { r: cfg.env?.r || 0 }, preset: idx });
-      return;
-    }
-
-    const osc = audioContext.createOscillator();
-    if (cfg.engine === 'wavetable' && WAVETABLES[cfg.oscillator]) {
-      osc.setPeriodicWave(WAVETABLES[cfg.oscillator]);
-    } else {
-      osc.type = cfg.oscillator || 'sine';
-    }
-    osc.frequency.value = 440 * Math.pow(2, (noteMidi - 69) / 12) * freqRatio;
-    instLfoGain.connect(osc.frequency);
-
-    let mod = null;
-    if (cfg.engine === 'fm') {
-      mod = audioContext.createOscillator();
-      const modGain = audioContext.createGain();
-      modGain.gain.value = cfg.modIndex || 50;
-      mod.frequency.value = (cfg.modFreq || 2) * Math.pow(2, (noteMidi - 69) / 12) * freqRatio;
-      mod.connect(modGain).connect(osc.frequency);
-      mod.start();
-    }
-
-    const f = audioContext.createBiquadFilter();
-    f.type = 'lowpass';
-    f.frequency.value = cfg.filter;
-    f.Q.value = cfg.q;
-    const g = audioContext.createGain();
-    const startT = audioContext.currentTime + 0.003;
-    g.gain.setValueAtTime(0, audioContext.currentTime);
-    osc.connect(f).connect(g).connect(instrumentGain);
-    osc.start(startT);
-    const e = cfg.env;
-    let t = startT;
-    g.gain.linearRampToValueAtTime(1, t + e.a);
-    g.gain.linearRampToValueAtTime(e.s, t + e.a + e.d);
-    instrumentVoices[midi].push({ osc, mod, filter: f, g, env: e, preset: idx });
+    const voice = createInstrumentVoice(cfg, targetMidi, freqRatio);
+    voice.preset = idx;
+    registerVoice(midi, voice);
+    if (mode === 'mono' || mode === 'legato') instrumentMonoVoices[idx] = voice;
   });
 }
 
@@ -3829,13 +4190,14 @@ function stopInstrumentVoice(v) {
   if (v.g) {
     v.g.gain.cancelScheduledValues(now);
     v.g.gain.setValueAtTime(v.g.gain.value, now);
-    const rel = Math.max(0.02, v.env.r || 0);
+    const rel = Math.max(0.02, v.env?.r || 0.05);
     v.g.gain.linearRampToValueAtTime(0, now + rel);
   }
-  const stopAt = now + Math.max(0.02, v.env.r || 0) + 0.05;
-  if (v.mod) v.mod.stop(stopAt);
-  if (v.osc) v.osc.stop(stopAt);
-  if (v.src) v.src.stop(stopAt);
+  const stopAt = now + Math.max(0.02, v.env?.r || 0.05) + 0.05;
+  if (v.modOsc) v.modOsc.stop(stopAt);
+  (v.oscillators || []).forEach(o => { try { o.stop(stopAt); } catch {} });
+  (v.sources || []).forEach(s => { try { s.stop(stopAt); } catch {} });
+  if (v.src) { try { v.src.stop(stopAt); } catch {} }
 }
 
 function stopInstrumentVoiceInstant(v) {
@@ -3845,17 +4207,22 @@ function stopInstrumentVoiceInstant(v) {
     v.g.gain.setTargetAtTime(0, now, 0.005);
   }
   const stopAt = now + 0.01;
-  if (v.mod) v.mod.stop(stopAt);
-  if (v.osc) v.osc.stop(stopAt);
-  if (v.src) v.src.stop();
+  if (v.modOsc) v.modOsc.stop(stopAt);
+  (v.oscillators || []).forEach(o => { try { o.stop(stopAt); } catch {} });
+  (v.sources || []).forEach(s => { try { s.stop(stopAt); } catch {} });
+  if (v.src) { try { v.src.stop(stopAt); } catch {} }
 }
 
 function stopInstrumentNote(midi) {
   const voices = instrumentVoices[midi];
   if (!voices) return;
-  voices.forEach(v => stopInstrumentVoice(v));
+  voices.forEach(v => {
+    if (instrumentMonoVoices[v.preset] === v) delete instrumentMonoVoices[v.preset];
+    stopInstrumentVoice(v);
+  });
   delete instrumentVoices[midi];
 }
+
 /**************************************
  * Audio Buffer Helpers
  **************************************/
@@ -4421,6 +4788,7 @@ async function setupAudioNodes() {
   samplesGain = audioContext.createGain();
   loopAudioGain = audioContext.createGain();
   instrumentGain = audioContext.createGain(); // voice mix
+  instrumentPan = audioContext.createStereoPanner();
   const instDelay = audioContext.createDelay();
   instDelay.delayTime.value = 0;
   instDelayMix = audioContext.createGain();
@@ -4478,9 +4846,10 @@ async function setupAudioNodes() {
   videoDestination = audioContext.createMediaStreamDestination();
 
   samplesGain.connect(bus2Gain);
-  instrumentGain.connect(instDelay);
-  instrumentGain.connect(instReverb);
-  instrumentGain.connect(instComp);
+  instrumentGain.connect(instrumentPan);
+  instrumentPan.connect(instDelay);
+  instrumentPan.connect(instReverb);
+  instrumentPan.connect(instComp);
   instDelay.connect(instDelayMix).connect(instComp);
   instReverb.connect(instRevMix).connect(instComp);
   instComp.connect(instLimiter).connect(instVolume).connect(bus2Gain);
@@ -9597,6 +9966,20 @@ function refreshInstrumentEditFields() {
     instrumentQSlider.value = cfg.q || 1;
     if (instrumentQValue) instrumentQValue.textContent = instrumentQSlider.value;
   }
+  if (instrumentDriveSlider) {
+    instrumentDriveSlider.value = cfg.drive ?? 0;
+    if (instrumentDriveValue) instrumentDriveValue.textContent = Number(instrumentDriveSlider.value).toFixed(2);
+  }
+  if (instrumentGlideSlider) {
+    instrumentGlideSlider.value = cfg.glide ?? 0;
+    if (instrumentGlideValue) instrumentGlideValue.textContent = Number(instrumentGlideSlider.value).toFixed(3) + 's';
+  }
+  if (instrumentPanSlider && instrumentPan) {
+    const panVal = cfg.pan ?? instrumentPan.pan.value;
+    instrumentPanSlider.value = panVal;
+    instrumentPan.pan.value = panVal;
+    if (instrumentPanValue) instrumentPanValue.textContent = panVal.toFixed(2);
+  }
   if (instrumentASlider) {
     instrumentASlider.value = (cfg.env?.a ?? 0.01);
     if (instrumentAValue) instrumentAValue.textContent = instrumentASlider.value;
@@ -10863,6 +11246,52 @@ function buildInstrumentWindow() {
   });
   addParamRow("Resonance", instrumentQSlider, instrumentQValue);
 
+  instrumentDriveSlider = document.createElement("input");
+  instrumentDriveSlider.className = "looper-knob";
+  instrumentDriveSlider.type = "range";
+  instrumentDriveSlider.min = 0;
+  instrumentDriveSlider.max = 0.5;
+  instrumentDriveSlider.step = 0.01;
+  instrumentDriveValue = document.createElement("span");
+  instrumentDriveSlider.addEventListener("input", () => {
+    const val = parseFloat(instrumentDriveSlider.value);
+    instrumentDriveValue.textContent = val.toFixed(2);
+    if (instrumentPreset > 0) instrumentPresets[instrumentPreset].drive = val;
+    saveInstrumentStateToLocalStorage();
+  });
+  addParamRow("Drive", instrumentDriveSlider, instrumentDriveValue);
+
+  instrumentGlideSlider = document.createElement("input");
+  instrumentGlideSlider.className = "looper-knob";
+  instrumentGlideSlider.type = "range";
+  instrumentGlideSlider.min = 0;
+  instrumentGlideSlider.max = 0.5;
+  instrumentGlideSlider.step = 0.005;
+  instrumentGlideValue = document.createElement("span");
+  instrumentGlideSlider.addEventListener("input", () => {
+    const val = parseFloat(instrumentGlideSlider.value);
+    instrumentGlideValue.textContent = val.toFixed(3) + 's';
+    if (instrumentPreset > 0) instrumentPresets[instrumentPreset].glide = val;
+    saveInstrumentStateToLocalStorage();
+  });
+  addParamRow("Glide", instrumentGlideSlider, instrumentGlideValue);
+
+  instrumentPanSlider = document.createElement("input");
+  instrumentPanSlider.className = "looper-knob";
+  instrumentPanSlider.type = "range";
+  instrumentPanSlider.min = -1;
+  instrumentPanSlider.max = 1;
+  instrumentPanSlider.step = 0.01;
+  instrumentPanValue = document.createElement("span");
+  instrumentPanSlider.addEventListener("input", () => {
+    const val = parseFloat(instrumentPanSlider.value);
+    instrumentPanValue.textContent = val.toFixed(2);
+    if (instrumentPan) instrumentPan.pan.value = val;
+    if (instrumentPreset > 0) instrumentPresets[instrumentPreset].pan = val;
+    saveInstrumentStateToLocalStorage();
+  });
+  addParamRow("Pan", instrumentPanSlider, instrumentPanValue);
+
   instrumentASlider = document.createElement("input");
   instrumentASlider.className = "looper-knob";
   instrumentASlider.type = "range";
@@ -11066,6 +11495,9 @@ function buildInstrumentWindow() {
       engine: instrumentEngineSelect.value,
       filter: parseFloat(instrumentFilterSlider.value),
       q: parseFloat(instrumentQSlider.value),
+      drive: parseFloat(instrumentDriveSlider.value),
+      glide: parseFloat(instrumentGlideSlider.value),
+      pan: parseFloat(instrumentPanSlider.value),
       delay: parseFloat(instrumentDelaySlider.value),
       delayMix: parseFloat(instrumentDelayMixSlider.value),
       reverbMix: parseFloat(instrumentReverbMixSlider.value),

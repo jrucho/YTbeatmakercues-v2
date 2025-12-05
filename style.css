@@ -34,3 +34,136 @@ input.looper-knob::-moz-range-thumb {
 .instrument-advanced {
   display: none;
 }
+
+/* Touch module */
+#touchPopup.ytbm-touch-popup {
+  position: fixed;
+  width: 720px;
+  max-width: 90vw;
+  height: 380px;
+  top: 50px;
+  left: 50px;
+  background: rgba(8, 8, 10, 0.92);
+  color: #f3f3f3;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  padding: 14px;
+  z-index: 100000;
+  box-sizing: border-box;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+.ytbm-touch-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.ytbm-touch-title {
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.ytbm-touch-utility {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.ytbm-touch-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.ytbm-touch-tab {
+  background: #1c1c1f;
+  color: #d9d9e3;
+  border: 1px solid #2a2a2d;
+  border-radius: 6px;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.ytbm-touch-tab.active { background: #3366ff; color: #fff; border-color: #3a6dff; }
+
+.ytbm-touch-content { height: calc(100% - 120px); overflow: hidden; }
+.ytbm-touch-view { display: none; height: 100%; overflow-y: auto; }
+.ytbm-touch-view.active { display: block; }
+
+.ytbm-sample-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.ytbm-sample-card {
+  background: #131316;
+  border: 1px solid #26262b;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ytbm-sample-card__head { font-weight: 600; color: #e6e6ee; }
+.ytbm-sample-meta { font-size: 12px; color: #9da0ad; }
+.ytbm-sample-controls { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; }
+
+.ytbm-aux-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 6px; margin-top: 10px; }
+
+.touch-pad-btn {
+  background: #2a2a30;
+  color: #f5f5f5;
+  border: 1px solid #3a3a45;
+  border-radius: 6px;
+  padding: 12px;
+  cursor: pointer;
+  text-align: center;
+}
+.touch-pad-btn.primary { background: #3f51b5; border-color: #4f62cc; }
+.touch-pad-btn.ghost { background: transparent; border-color: #3a3a45; }
+
+.ytbm-seq-header { margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
+.ytbm-seq-lane-label { font-weight: 600; color: #e6e6ee; }
+.ytbm-seq-pad-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 6px; }
+
+.ytbm-step-row { display: grid; grid-template-columns: repeat(16, 1fr); gap: 4px; margin-bottom: 10px; }
+.ytbm-step-btn {
+  background: #1f1f23;
+  color: #dfe1e8;
+  border: 1px solid #2e2e35;
+  border-radius: 6px;
+  padding: 10px 0;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.ytbm-step-btn.active { background: #22c55e; color: #0b1215; border-color: #26d06a; }
+
+.ytbm-touch-controls { display: flex; align-items: center; gap: 8px; }
+.ytbm-touch-btn {
+  background: #2b2b30;
+  color: #f5f5f5;
+  border: 1px solid #3a3a45;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.ytbm-touch-btn.primary { background: #3f51b5; border-color: #4f62cc; }
+.ytbm-touch-btn.secondary { background: #2d3748; border-color: #3c4858; }
+.ytbm-touch-btn.danger { background: #b3213a; border-color: #c53d51; }
+.ytbm-touch-btn.ghost { background: transparent; }
+.ytbm-touch-btn.active { background: #2563eb; border-color: #2b6ef2; }
+
+.ytbm-touch-input {
+  width: 70px;
+  background: #141417;
+  color: #f5f5f5;
+  border: 1px solid #2e2e35;
+  border-radius: 6px;
+  padding: 6px;
+}
