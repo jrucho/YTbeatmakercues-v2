@@ -1,4 +1,14 @@
+![1](https://github.com/user-attachments/assets/4ed18dee-820a-4302-8182-59c647e175f4)
+![2](https://github.com/user-attachments/assets/5f608dfe-197f-43d7-8c33-b3bd6c1bab8e)
+![3](https://github.com/user-attachments/assets/b950d2df-23f1-421e-a0dc-1acbfcf17c65)
+![4](https://github.com/user-attachments/assets/1930ad98-1d20-4f49-9fb1-12058b291e83)
+![5](https://github.com/user-attachments/assets/c06c65e9-32f7-4506-af9e-9c3e1052502e)
+
 # YouTube Beatmaker Cues - Chrome Extension
+
+Presentation : https://notebooklm.google.com/notebook/d936bb29-a507-4f20-bf3c-9031f3f9e32b?artifactId=2fedca45-b4e3-4f59-8a71-a2d3fae82eef
+Video - YT Beatmaker Cues Guide : https://youtu.be/XFnM8eDQjv8
+Podcast style guide: https://notebooklm.google.com/notebook/d936bb29-a507-4f20-bf3c-9031f3f9e32b?artifactId=47348371-5fcc-41ca-be76-6daece44677a
 
 You can try out my new website with some of the extension’s features here, before downloading it: https://bit.ly/beatmakercues
 
