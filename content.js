@@ -825,12 +825,28 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       instrumentDSlider = null,
       instrumentSSlider = null,
       instrumentRSlider = null,
+      instrumentFilterEnvSlider = null,
+      instrumentFilterEnvAttack = null,
+      instrumentFilterEnvDecay = null,
+      instrumentSubSlider = null,
+      instrumentGrainSizeSlider = null,
+      instrumentGrainDensitySlider = null,
+      instrumentGrainSpreadSlider = null,
+      instrumentGrainJitterSlider = null,
       instrumentSampleLabel = null,
       instrumentFilterValue = null,
       instrumentQValue = null,
       instrumentDriveValue = null,
       instrumentGlideValue = null,
       instrumentPanValue = null,
+      instrumentFilterEnvValue = null,
+      instrumentFilterEnvAttackValue = null,
+      instrumentFilterEnvDecayValue = null,
+      instrumentSubValue = null,
+      instrumentGrainSizeValue = null,
+      instrumentGrainDensityValue = null,
+      instrumentGrainSpreadValue = null,
+      instrumentGrainJitterValue = null,
       instrumentAValue = null,
       instrumentDValue = null,
       instrumentSValue = null,
@@ -1470,7 +1486,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   }
 
   const BUILTIN_DEFAULT_COUNT = 10;
-  const BUILTIN_PRESET_COUNT = 12;
+  const BUILTIN_PRESET_COUNT = 10;
   const PRESET_COLORS = [
     "#52a3cc",
     "#cca352",
@@ -1521,7 +1537,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     WAVETABLES.subpulse = createWavetable([1, 0.2, 0.05]);
     defaultSampleBuffer = generateDefaultSample(audioContext);
     instrumentPresets.forEach(p => {
-      if (p && p.engine === 'sampler' && !p.sample) p.sample = defaultSampleBuffer;
+      if (p && (p.engine === 'sampler' || p.engine === 'granular') && !p.sample) p.sample = defaultSampleBuffer;
     });
   }
   // Speed level 1 matches the old fastest rate. Levels 2 and 3 are
@@ -2146,6 +2162,59 @@ function toggleBlindMode() {
     header.appendChild(headerBtns);
     touchPopup.appendChild(header);
 
+    const cueStrip = document.createElement('div');
+    cueStrip.className = 'ytbm-cue-strip';
+    const cueButtons = [];
+    const cueKeys = ['1','2','3','4','5','6','7','8','9','0'];
+    const formatTime = (t) => {
+      if (t == null || isNaN(t)) return '--:--';
+      const m = Math.floor(t / 60);
+      const s = Math.floor(t % 60).toString().padStart(2,'0');
+      return `${m}:${s}`;
+    };
+    cueKeys.forEach(key => {
+      const btn = document.createElement('button');
+      btn.className = 'ytbm-cue-btn';
+      const label = document.createElement('span');
+      label.className = 'ytbm-cue-label';
+      label.textContent = key;
+      const time = document.createElement('span');
+      time.className = 'ytbm-cue-time';
+      time.textContent = '--:--';
+      btn.appendChild(label);
+      btn.appendChild(time);
+      btn.addEventListener('click', () => {
+        const vid = getVideoElement();
+        if (modTouchActive && vid) {
+          pushUndoState();
+          cuePoints[key] = vid.currentTime;
+          saveCuePointsToURL();
+          updateCueMarkers();
+          refreshCuesButton();
+          updateCueBar();
+        } else {
+          const t = cuePoints[key];
+          if (t != null) {
+            selectedCueKey = key;
+            clearSuperKnobHistory();
+            safeSeekVideo(null, t);
+          }
+        }
+      });
+      cueButtons.push({ btn, time });
+      cueStrip.appendChild(btn);
+    });
+    touchPopup.appendChild(cueStrip);
+
+    function updateCueBar() {
+      cueButtons.forEach((item, i) => {
+        const key = cueKeys[i];
+        const t = cuePoints[key];
+        item.time.textContent = formatTime(t);
+        item.btn.classList.toggle('set', t != null);
+      });
+    }
+
     const utilityRow = document.createElement("div");
     utilityRow.className = "ytbm-touch-utility";
     const modifierBtn = document.createElement("button");
@@ -2246,6 +2315,7 @@ function toggleBlindMode() {
           saveCuePointsToURL();
           updateCueMarkers();
           refreshCuesButton();
+          updateCueBar();
         } else {
           triggerPadCue(i);
         }
@@ -2310,6 +2380,11 @@ function toggleBlindMode() {
     samplesView.appendChild(sampleGrid);
     samplesView.appendChild(auxPadGrid);
 
+    const seqLayout = document.createElement('div');
+    seqLayout.className = 'ytbm-seq-layout';
+    const seqMain = document.createElement('div');
+    seqMain.className = 'ytbm-seq-main';
+
     const seqHeader = document.createElement('div');
     seqHeader.className = 'ytbm-seq-header';
     const laneLabel = document.createElement('div');
@@ -2330,7 +2405,7 @@ function toggleBlindMode() {
       padSelectRow.appendChild(btn);
     });
     seqHeader.appendChild(padSelectRow);
-    seqView.appendChild(seqHeader);
+    seqMain.appendChild(seqHeader);
 
     const stepRow = document.createElement("div");
     stepRow.id = "stepRow";
@@ -2344,7 +2419,7 @@ function toggleBlindMode() {
       stepBtn.addEventListener("touchstart", e => { e.preventDefault(); toggleStep(s); });
       stepRow.appendChild(stepBtn);
     }
-    seqView.appendChild(stepRow);
+    seqMain.appendChild(stepRow);
 
     const controlRow = document.createElement("div");
     controlRow.className = 'ytbm-touch-controls';
@@ -2389,11 +2464,28 @@ function toggleBlindMode() {
     });
     controlRow.appendChild(startStopBtn);
 
-    seqView.appendChild(controlRow);
+    seqMain.appendChild(controlRow);
+
+    const livePadPanel = document.createElement('div');
+    livePadPanel.className = 'ytbm-live-pad-panel';
+    const liveTitle = document.createElement('div');
+    liveTitle.className = 'ytbm-live-pad-title';
+    liveTitle.textContent = 'Live Pads';
+    livePadPanel.appendChild(liveTitle);
+    padMeta.slice(0,6).forEach(meta => {
+      const btn = createPadButton(meta.label, meta.index);
+      btn.classList.add('compact');
+      livePadPanel.appendChild(btn);
+    });
+
+    seqLayout.appendChild(seqMain);
+    seqLayout.appendChild(livePadPanel);
+    seqView.appendChild(seqLayout);
 
     document.body.appendChild(touchPopup);
     makeOverlayDraggable(touchPopup, header);
     currentPad = 0;
+    updateCueBar();
     updateSequencerUI();
   }
 
@@ -2443,9 +2535,20 @@ function toggleBlindMode() {
   }
   
 
-// Dummy sample playback
+// Map pad presses to the actual drum/sample players
 function playSamplePad(padIndex) {
-  console.log(`Playing sample for pad ${padIndex}`);
+  const coreTypes = ['kick', 'snare', 'hihat'];
+  if (padIndex < coreTypes.length) {
+    playSample(coreTypes[padIndex]);
+    return;
+  }
+  const userIdx = padIndex - coreTypes.length;
+  if (userIdx >= 0 && userIdx < userSamples.length) {
+    playUserSample(userSamples[userIdx]);
+    return;
+  }
+  // Fallback to the kick for any unmapped pad to guarantee audible feedback
+  playSample('kick');
 }
 
 function triggerPadCue(padIndex) {
@@ -3721,37 +3824,41 @@ function updateInstrumentButtonColor() {
 let instrumentPresets = [
   null,
   {
-    name: 'Sub Glide',
+    name: 'Velvet Sub',
     color: PRESET_COLORS[0],
-    oscillator: 'sawtooth',
+    oscillator: 'sine',
     filter: 140,
-    q: 1.8,
-    drive: 0.18,
-    glide: 0.12,
+    q: 1.4,
+    drive: 0.12,
+    glide: 0.14,
     pan: 0,
-    env: { a: 0.01, d: 0.12, s: 0.8, r: 0.25 },
+    env: { a: 0.006, d: 0.18, s: 0.85, r: 0.32 },
+    filterEnv: { amount: 0.65, attack: 0.01, decay: 0.2 },
     engine: 'analog',
     mode: 'legato',
     filterType: 'lowpass',
-    volume: 0.18,
+    subLevel: 0.5,
+    volume: 0.2,
     compThresh: -22,
     limitThresh: -4,
     tune: 0
   },
   {
-    name: 'Thick Analog',
+    name: 'Tube Saw',
     color: PRESET_COLORS[1],
     oscillator: 'sawtooth',
     filter: 220,
-    q: 2.8,
-    drive: 0.22,
-    glide: 0.08,
-    pan: -0.05,
-    env: { a: 0.008, d: 0.14, s: 0.82, r: 0.28 },
+    q: 2,
+    drive: 0.26,
+    glide: 0.07,
+    pan: -0.04,
+    env: { a: 0.008, d: 0.16, s: 0.8, r: 0.3 },
+    filterEnv: { amount: 0.4, attack: 0.006, decay: 0.14 },
     engine: 'analog',
     mode: 'mono',
     filterType: 'lowpass',
-    volume: 0.2,
+    subLevel: 0.25,
+    volume: 0.22,
     compThresh: -18,
     limitThresh: -3,
     tune: 0
@@ -3761,67 +3868,96 @@ let instrumentPresets = [
     color: PRESET_COLORS[2],
     oscillator: 'sine',
     filter: 90,
-    q: 0.7,
+    q: 0.8,
     drive: 0.2,
-    glide: 0.2,
+    glide: 0.22,
     pan: 0,
-    env: { a: 0.005, d: 0.32, s: 0.95, r: 0.6 },
+    env: { a: 0.004, d: 0.34, s: 0.96, r: 0.62 },
+    filterEnv: { amount: 0.55, attack: 0.004, decay: 0.28 },
     engine: 'analog',
     mode: 'legato',
     filterType: 'lowpass',
-    volume: 0.16,
+    subLevel: 0.6,
+    volume: 0.18,
     compThresh: -22,
     limitThresh: -4,
     tune: 0
   },
   {
-    name: 'Warm Square',
+    name: 'Square Plow',
     color: PRESET_COLORS[3],
     oscillator: 'square',
-    filter: 320,
-    q: 2.2,
-    drive: 0.15,
-    glide: 0.05,
-    pan: 0.05,
-    env: { a: 0.01, d: 0.2, s: 0.75, r: 0.32 },
-    engine: 'analog',
-    mode: 'mono',
-    filterType: 'lowpass',
-    volume: 0.18,
-    compThresh: -20,
-    limitThresh: -3,
-    tune: 0
-  },
-  {
-    name: 'Moog Punch',
-    color: PRESET_COLORS[4],
-    oscillator: 'sawtooth',
     filter: 260,
-    q: 2.6,
-    drive: 0.24,
-    glide: 0.07,
-    pan: -0.08,
-    env: { a: 0.008, d: 0.18, s: 0.78, r: 0.35 },
+    q: 1.2,
+    drive: 0.18,
+    glide: 0.05,
+    pan: 0.06,
+    env: { a: 0.01, d: 0.21, s: 0.75, r: 0.3 },
+    filterEnv: { amount: 0.35, attack: 0.008, decay: 0.18 },
     engine: 'analog',
     mode: 'mono',
-    filterType: 'lowpass',
-    volume: 0.22,
+    filterType: 'highpass',
+    subLevel: 0.3,
+    volume: 0.19,
     compThresh: -20,
     limitThresh: -3,
     tune: 0
   },
   {
-    name: 'Morph Bass',
-    color: PRESET_COLORS[5],
-    oscillator: 'bright',
-    wavetableB: 'hollow',
-    wavetableMix: 0.4,
-    filter: 340,
-    q: 1.2,
+    name: 'FM Bite',
+    color: PRESET_COLORS[4],
+    oscillator: 'sine',
+    filter: 320,
+    q: 1.6,
     drive: 0.14,
     glide: 0.06,
+    pan: 0,
+    env: { a: 0.012, d: 0.16, s: 0.7, r: 0.36 },
+    filterEnv: { amount: 0.28, attack: 0.01, decay: 0.16 },
+    engine: 'fm',
+    mode: 'mono',
+    fmRatio: 2.2,
+    fmIndex: 120,
+    filterType: 'lowpass',
+    volume: 0.21,
+    compThresh: -20,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: 'FM Hollow',
+    color: PRESET_COLORS[5],
+    oscillator: 'sine',
+    filter: 280,
+    q: 1.3,
+    drive: 0.16,
+    glide: 0.04,
+    pan: -0.03,
+    env: { a: 0.01, d: 0.18, s: 0.68, r: 0.42 },
+    filterEnv: { amount: 0.32, attack: 0.012, decay: 0.2 },
+    engine: 'fm',
+    mode: 'mono',
+    fmRatio: 3,
+    fmIndex: 90,
+    filterType: 'lowpass',
+    volume: 0.2,
+    compThresh: -20,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: 'Morph Pulse',
+    color: PRESET_COLORS[6],
+    oscillator: 'bright',
+    wavetableB: 'hollow',
+    wavetableMix: 0.45,
+    filter: 340,
+    q: 1.3,
+    drive: 0.16,
+    glide: 0.06,
     pan: 0.02,
-    env: { a: 0.02, d: 0.18, s: 0.7, r: 0.45 },
+    env: { a: 0.018, d: 0.18, s: 0.7, r: 0.42 },
+    filterEnv: { amount: 0.38, attack: 0.012, decay: 0.18 },
     engine: 'wavetable',
     mode: 'mono',
     filterType: 'lowpass',
@@ -3831,117 +3967,65 @@ let instrumentPresets = [
     tune: 0
   },
   {
-    name: 'Digital Sweep',
-    color: PRESET_COLORS[6],
+    name: 'Glass Sweep',
+    color: PRESET_COLORS[7],
     oscillator: 'organ',
     wavetableB: 'grit',
-    wavetableMix: 0.65,
+    wavetableMix: 0.6,
     filter: 420,
-    q: 1.6,
+    q: 1.8,
     drive: 0.18,
-    glide: 0.04,
+    glide: 0.05,
     pan: -0.02,
-    env: { a: 0.012, d: 0.24, s: 0.65, r: 0.4 },
+    env: { a: 0.02, d: 0.18, s: 0.65, r: 0.4 },
+    filterEnv: { amount: 0.42, attack: 0.016, decay: 0.22 },
     engine: 'wavetable',
     mode: 'mono',
     filterType: 'lowpass',
     volume: 0.2,
-    compThresh: -18,
-    limitThresh: -2,
-    tune: 0
-  },
-  {
-    name: 'FM Razor',
-    color: PRESET_COLORS[7],
-    oscillator: 'sine',
-    fmRatio: 1.6,
-    fmIndex: 95,
-    filter: 420,
-    q: 1,
-    drive: 0.12,
-    glide: 0.05,
-    pan: 0,
-    env: { a: 0.006, d: 0.15, s: 0.7, r: 0.35 },
-    engine: 'fm',
-    mode: 'mono',
-    filterType: 'lowpass',
-    volume: 0.18,
-    compThresh: -22,
+    compThresh: -20,
     limitThresh: -3,
     tune: 0
   },
   {
-    name: 'FM Metallic',
+    name: 'Sampler Round',
     color: PRESET_COLORS[8],
-    oscillator: 'square',
-    fmRatio: 2.2,
-    fmIndex: 140,
-    filter: 520,
-    q: 1.8,
-    drive: 0.16,
-    glide: 0.03,
-    pan: 0.1,
-    env: { a: 0.004, d: 0.18, s: 0.6, r: 0.28 },
-    engine: 'fm',
-    mode: 'mono',
-    filterType: 'lowpass',
-    volume: 0.17,
-    compThresh: -18,
-    limitThresh: -3,
-    tune: 0
-  },
-  {
-    name: 'Sweep Lead',
-    color: PRESET_COLORS[9],
-    oscillator: 'sawtooth',
-    fmRatio: 0.8,
-    fmIndex: 60,
-    filter: 680,
-    q: 2.4,
-    drive: 0.12,
-    glide: 0.02,
-    pan: -0.1,
-    env: { a: 0.02, d: 0.22, s: 0.55, r: 0.55 },
-    engine: 'fm',
-    mode: 'mono',
-    filterType: 'lowpass',
-    volume: 0.19,
-    compThresh: -18,
-    limitThresh: -3,
-    tune: 0
-  },
-  {
-    name: 'Low Cut',
-    color: PRESET_COLORS[10],
-    oscillator: 'sine',
-    filter: 170,
-    q: 0.4,
-    drive: 0.08,
-    glide: 0.05,
-    pan: 0,
-    env: { a: 0.006, d: 0.18, s: 0.82, r: 0.28 },
-    engine: 'analog',
-    mode: 'mono',
-    filterType: 'highpass',
-    volume: 0.17,
-    compThresh: -18,
-    limitThresh: -3,
-    tune: 0
-  },
-  {
-    name: 'Sampler Bass',
-    color: PRESET_COLORS[11],
     oscillator: 'sine',
     filter: 520,
-    q: 0.6,
+    q: 0.7,
     drive: 0.1,
     glide: 0.08,
     pan: 0,
     env: { a: 0.01, d: 0.22, s: 0.78, r: 0.45 },
+    filterEnv: { amount: 0.25, attack: 0.01, decay: 0.24 },
     engine: 'sampler',
     mode: 'mono',
     filterType: 'lowpass',
     volume: 0.18,
+    compThresh: -20,
+    limitThresh: -3,
+    sample: null,
+    tune: 0
+  },
+  {
+    name: 'Grain Drift',
+    color: PRESET_COLORS[9],
+    oscillator: 'sine',
+    filter: 380,
+    q: 1.2,
+    drive: 0.16,
+    glide: 0.05,
+    pan: 0,
+    env: { a: 0.012, d: 0.25, s: 0.82, r: 0.4 },
+    filterEnv: { amount: 0.32, attack: 0.01, decay: 0.2 },
+    engine: 'granular',
+    mode: 'mono',
+    grainSize: 0.09,
+    grainDensity: 14,
+    grainSpread: 0.18,
+    grainJitter: 0.08,
+    filterType: 'lowpass',
+    volume: 0.19,
     compThresh: -20,
     limitThresh: -3,
     sample: null,
@@ -3952,7 +4036,7 @@ let instrumentPresets = [
 
 function randomizeInstrumentPreset() {
   const oscTypes = ['sine','square','sawtooth','triangle','organ','bright'];
-  const engines = ['analog','fm','wavetable','sampler'];
+  const engines = ['analog','fm','wavetable','sampler','granular'];
   const p = instrumentPresets[instrumentPreset];
   if (!p) return;
   p.oscillator = oscTypes[Math.floor(Math.random()*oscTypes.length)];
@@ -3962,8 +4046,16 @@ function randomizeInstrumentPreset() {
   p.tune = [-24,-12,0,12,24][Math.floor(Math.random()*5)];
   p.drive = Math.random()*0.3;
   p.glide = Math.random()*0.15;
-  p.pan = Math.max(-0.5, Math.min(0.5, (Math.random()-0.5))); 
+  p.pan = Math.max(-0.5, Math.min(0.5, (Math.random()-0.5)));
   p.env = { a: Math.random()*0.2, d: 0.1+Math.random()*0.3, s: 0.5+Math.random()*0.5, r: 0.2+Math.random()*0.6 };
+  p.filterEnv = { amount: Math.random()*0.6, attack: 0.002 + Math.random()*0.04, decay: 0.08 + Math.random()*0.4 };
+  p.subLevel = Math.random()*0.6;
+  if (p.engine === 'granular') {
+    p.grainSize = 0.05 + Math.random()*0.18;
+    p.grainDensity = 8 + Math.random()*16;
+    p.grainSpread = Math.random()*0.3;
+    p.grainJitter = Math.random()*0.15;
+  }
   if (instDelayNode) instDelayNode.delayTime.value = Math.random()*0.5;
   if (instDelayMix) instDelayMix.gain.value = Math.random()*0.5;
   if (instReverbMix) instReverbMix.gain.value = 0.2+Math.random()*0.4;
@@ -4023,7 +4115,7 @@ function moveVoiceToMidi(voice, midi) {
   registerVoice(midi, voice);
 }
 
-function triggerEnvelope(voice, env) {
+function triggerEnvelope(voice, env, filterEnv) {
   const e = env || { a: 0.01, d: 0.2, s: 0.8, r: 0.3 };
   const now = audioContext.currentTime;
   voice.g.gain.cancelScheduledValues(now);
@@ -4031,6 +4123,16 @@ function triggerEnvelope(voice, env) {
   voice.g.gain.linearRampToValueAtTime(1, now + e.a);
   voice.g.gain.linearRampToValueAtTime(e.s ?? 0.8, now + e.a + e.d);
   voice.env = e;
+  if (filterEnv && voice.filter) {
+    const base = voice.filterBase || voice.filter.frequency.value;
+    const peak = Math.max(30, base * (1 + (filterEnv.amount || 0)));
+    const atk = filterEnv.attack ?? 0.01;
+    const dec = filterEnv.decay ?? 0.18;
+    voice.filter.frequency.cancelScheduledValues(now);
+    voice.filter.frequency.setValueAtTime(base, now);
+    voice.filter.frequency.linearRampToValueAtTime(peak, now + atk);
+    voice.filter.frequency.linearRampToValueAtTime(base, now + atk + dec);
+  }
 }
 
 function holdLegato(voice, env) {
@@ -4055,11 +4157,46 @@ function glideVoiceFrequency(voice, targetHz, glideSeconds) {
   }
 }
 
+function scheduleGranular(voice, buffer, midiNote, freqRatio, cfg) {
+  const baseRate = Math.pow(2, (midiNote - 60) / 12) * freqRatio;
+  const grainSize = Math.max(0.02, cfg.grainSize || 0.08);
+  const density = Math.max(1, cfg.grainDensity || 12);
+  const spread = Math.max(0, cfg.grainSpread || 0.12);
+  const jitter = cfg.grainJitter || 0.05;
+  let nextTime = audioContext.currentTime;
+  const scheduleAhead = 0.25;
+  voice._granularActive = true;
+
+  function tick() {
+    const now = audioContext.currentTime;
+    while (nextTime < now + scheduleAhead && voice._granularActive) {
+      const src = audioContext.createBufferSource();
+      src.buffer = buffer;
+      const drift = (Math.random() - 0.5) * spread;
+      const start = Math.max(0, Math.min(buffer.duration - grainSize, Math.random() * buffer.duration + drift));
+      src.playbackRate.value = baseRate * (1 + (Math.random() - 0.5) * jitter);
+      src.connect(voice.filter);
+      src.start(nextTime, start, Math.min(grainSize, buffer.duration));
+      src.stop(nextTime + grainSize + 0.02);
+      voice.sources.push(src);
+      nextTime += 1 / density;
+    }
+    if (voice._granularActive) voice._granularRaf = requestAnimationFrame(tick);
+  }
+
+  tick();
+  voice.stopGrains = () => {
+    voice._granularActive = false;
+    if (voice._granularRaf) cancelAnimationFrame(voice._granularRaf);
+  };
+}
+
 function createInstrumentVoice(cfg, midiNote, freqRatio) {
   const env = cfg.env || { a: 0.01, d: 0.2, s: 0.8, r: 0.3 };
   const filter = audioContext.createBiquadFilter();
   filter.type = cfg.filterType === 'highpass' ? 'highpass' : 'lowpass';
-  filter.frequency.value = cfg.filter || 400;
+  const baseCutoff = cfg.filter || 400;
+  filter.frequency.value = baseCutoff;
   filter.Q.value = cfg.q || 0.8;
   const driveStage = createDriveStage(cfg.drive || 0);
   const g = audioContext.createGain();
@@ -4071,6 +4208,7 @@ function createInstrumentVoice(cfg, midiNote, freqRatio) {
     filter,
     g,
     env,
+    filterBase: baseCutoff,
     engine: cfg.engine,
     oscillators: [],
     sources: [],
@@ -4088,6 +4226,9 @@ function createInstrumentVoice(cfg, midiNote, freqRatio) {
     src.connect(filter);
     src.start();
     voice.sources.push(src);
+  } else if (cfg.engine === 'granular') {
+    const buf = cfg.sample || defaultSampleBuffer;
+    if (buf) scheduleGranular(voice, buf, midiNote, freqRatio, cfg);
   } else if (cfg.engine === 'fm') {
     const carrier = audioContext.createOscillator();
     carrier.type = cfg.oscillator || 'sine';
@@ -4140,15 +4281,17 @@ function createInstrumentVoice(cfg, midiNote, freqRatio) {
     sub.frequency.value = targetHz / 2;
     instLfoGain.connect(sub.frequency);
     const subGain = audioContext.createGain();
-    subGain.gain.value = 0.35;
-    main.connect(filter);
+    subGain.gain.value = cfg.subLevel ?? 0.35;
+    const mainGain = audioContext.createGain();
+    mainGain.gain.value = 1 - Math.min(0.7, subGain.gain.value * 0.5);
+    main.connect(mainGain).connect(filter);
     sub.connect(subGain).connect(filter);
     main.start();
     sub.start();
     voice.oscillators.push(main, sub);
   }
 
-  triggerEnvelope(voice, env);
+  triggerEnvelope(voice, env, cfg.filterEnv);
   return voice;
 }
 
@@ -4172,7 +4315,7 @@ function playInstrumentNote(midi) {
         if (mode === 'legato') {
           holdLegato(existing, cfg.env);
         } else {
-          triggerEnvelope(existing, cfg.env);
+          triggerEnvelope(existing, cfg.env, cfg.filterEnv);
         }
         return;
       }
@@ -4198,6 +4341,7 @@ function stopInstrumentVoice(v) {
   (v.oscillators || []).forEach(o => { try { o.stop(stopAt); } catch {} });
   (v.sources || []).forEach(s => { try { s.stop(stopAt); } catch {} });
   if (v.src) { try { v.src.stop(stopAt); } catch {} }
+  if (v.stopGrains) v.stopGrains();
 }
 
 function stopInstrumentVoiceInstant(v) {
@@ -4211,6 +4355,7 @@ function stopInstrumentVoiceInstant(v) {
   (v.oscillators || []).forEach(o => { try { o.stop(stopAt); } catch {} });
   (v.sources || []).forEach(s => { try { s.stop(stopAt); } catch {} });
   if (v.src) { try { v.src.stop(stopAt); } catch {} }
+  if (v.stopGrains) v.stopGrains();
 }
 
 function stopInstrumentNote(midi) {
@@ -9980,6 +10125,26 @@ function refreshInstrumentEditFields() {
     instrumentPan.pan.value = panVal;
     if (instrumentPanValue) instrumentPanValue.textContent = panVal.toFixed(2);
   }
+  if (instrumentFilterEnvSlider) {
+    const amt = cfg.filterEnv?.amount ?? 0;
+    instrumentFilterEnvSlider.value = amt;
+    if (instrumentFilterEnvValue) instrumentFilterEnvValue.textContent = instrumentFilterEnvSlider.value;
+  }
+  if (instrumentFilterEnvAttack) {
+    const atk = cfg.filterEnv?.attack ?? 0.01;
+    instrumentFilterEnvAttack.value = atk;
+    if (instrumentFilterEnvAttackValue) instrumentFilterEnvAttackValue.textContent = instrumentFilterEnvAttack.value;
+  }
+  if (instrumentFilterEnvDecay) {
+    const dec = cfg.filterEnv?.decay ?? 0.2;
+    instrumentFilterEnvDecay.value = dec;
+    if (instrumentFilterEnvDecayValue) instrumentFilterEnvDecayValue.textContent = instrumentFilterEnvDecay.value;
+  }
+  if (instrumentSubSlider) {
+    const sub = cfg.subLevel ?? 0.35;
+    instrumentSubSlider.value = sub;
+    if (instrumentSubValue) instrumentSubValue.textContent = instrumentSubSlider.value;
+  }
   if (instrumentASlider) {
     instrumentASlider.value = (cfg.env?.a ?? 0.01);
     if (instrumentAValue) instrumentAValue.textContent = instrumentASlider.value;
@@ -9995,6 +10160,22 @@ function refreshInstrumentEditFields() {
   if (instrumentRSlider) {
     instrumentRSlider.value = (cfg.env?.r ?? 0.3);
     if (instrumentRValue) instrumentRValue.textContent = instrumentRSlider.value;
+  }
+  if (instrumentGrainSizeSlider) {
+    instrumentGrainSizeSlider.value = cfg.grainSize ?? 0.1;
+    if (instrumentGrainSizeValue) instrumentGrainSizeValue.textContent = instrumentGrainSizeSlider.value;
+  }
+  if (instrumentGrainDensitySlider) {
+    instrumentGrainDensitySlider.value = cfg.grainDensity ?? 12;
+    if (instrumentGrainDensityValue) instrumentGrainDensityValue.textContent = instrumentGrainDensitySlider.value;
+  }
+  if (instrumentGrainSpreadSlider) {
+    instrumentGrainSpreadSlider.value = cfg.grainSpread ?? 0.12;
+    if (instrumentGrainSpreadValue) instrumentGrainSpreadValue.textContent = instrumentGrainSpreadSlider.value;
+  }
+  if (instrumentGrainJitterSlider) {
+    instrumentGrainJitterSlider.value = cfg.grainJitter ?? 0.05;
+    if (instrumentGrainJitterValue) instrumentGrainJitterValue.textContent = instrumentGrainJitterSlider.value;
   }
   if (instrumentTuneSlider) {
     instrumentTuneSlider.value = cfg.tune || 0;
@@ -10971,7 +11152,7 @@ async function showInstrumentWindowToggle() {
 
 function buildInstrumentWindow() {
   instrumentWindowContainer = document.createElement("div");
-  instrumentWindowContainer.className = "looper-midimap-container";
+  instrumentWindowContainer.className = "looper-midimap-container nova-panel";
 
   const dh = document.createElement("div");
   dh.className = "looper-midimap-drag-handle";
@@ -10980,7 +11161,15 @@ function buildInstrumentWindow() {
 
   const cw = document.createElement("div");
   cw.className = "looper-midimap-content";
+  cw.style.display = "flex";
+  cw.style.flexDirection = "column";
+  cw.style.gap = "8px";
   instrumentWindowContainer.appendChild(cw);
+
+  const hero = document.createElement("div");
+  hero.className = "nova-hero";
+  hero.innerHTML = `<div class="nova-title">Nova Bass Lab</div><div class="nova-sub">Analog · FM · Wavetable · Sampler · Granular</div>`;
+  cw.appendChild(hero);
 
   const topRow = document.createElement("div");
   topRow.style.display = "flex";
@@ -11187,7 +11376,7 @@ function buildInstrumentWindow() {
   });
 
   instrumentEngineSelect = document.createElement("select");
-  ["analog","fm","wavetable","sampler"].forEach(t => instrumentEngineSelect.add(new Option(t, t)));
+  ["analog","fm","wavetable","sampler","granular"].forEach(t => instrumentEngineSelect.add(new Option(t, t)));
   addParamRow("Engine", instrumentEngineSelect);
   instrumentEngineSelect.addEventListener("change", () => {
     if (instrumentPreset > 0) instrumentPresets[instrumentPreset].engine = instrumentEngineSelect.value;
@@ -11292,6 +11481,71 @@ function buildInstrumentWindow() {
   });
   addParamRow("Pan", instrumentPanSlider, instrumentPanValue);
 
+  instrumentFilterEnvSlider = document.createElement("input");
+  instrumentFilterEnvSlider.className = "looper-knob";
+  instrumentFilterEnvSlider.type = "range";
+  instrumentFilterEnvSlider.min = 0;
+  instrumentFilterEnvSlider.max = 1;
+  instrumentFilterEnvSlider.step = 0.01;
+  instrumentFilterEnvValue = document.createElement("span");
+  instrumentFilterEnvSlider.addEventListener("input", () => {
+    instrumentFilterEnvValue.textContent = instrumentFilterEnvSlider.value;
+    if (instrumentPreset > 0) {
+      instrumentPresets[instrumentPreset].filterEnv = instrumentPresets[instrumentPreset].filterEnv || {};
+      instrumentPresets[instrumentPreset].filterEnv.amount = parseFloat(instrumentFilterEnvSlider.value);
+    }
+    saveInstrumentStateToLocalStorage();
+  });
+  addParamRow("Env Amt", instrumentFilterEnvSlider, instrumentFilterEnvValue);
+
+  instrumentFilterEnvAttack = document.createElement("input");
+  instrumentFilterEnvAttack.className = "looper-knob";
+  instrumentFilterEnvAttack.type = "range";
+  instrumentFilterEnvAttack.min = 0;
+  instrumentFilterEnvAttack.max = 0.2;
+  instrumentFilterEnvAttack.step = 0.002;
+  instrumentFilterEnvAttackValue = document.createElement("span");
+  instrumentFilterEnvAttack.addEventListener("input", () => {
+    instrumentFilterEnvAttackValue.textContent = instrumentFilterEnvAttack.value;
+    if (instrumentPreset > 0) {
+      instrumentPresets[instrumentPreset].filterEnv = instrumentPresets[instrumentPreset].filterEnv || {};
+      instrumentPresets[instrumentPreset].filterEnv.attack = parseFloat(instrumentFilterEnvAttack.value);
+    }
+    saveInstrumentStateToLocalStorage();
+  });
+  addParamRow("Env Atk", instrumentFilterEnvAttack, instrumentFilterEnvAttackValue);
+
+  instrumentFilterEnvDecay = document.createElement("input");
+  instrumentFilterEnvDecay.className = "looper-knob";
+  instrumentFilterEnvDecay.type = "range";
+  instrumentFilterEnvDecay.min = 0.05;
+  instrumentFilterEnvDecay.max = 0.6;
+  instrumentFilterEnvDecay.step = 0.01;
+  instrumentFilterEnvDecayValue = document.createElement("span");
+  instrumentFilterEnvDecay.addEventListener("input", () => {
+    instrumentFilterEnvDecayValue.textContent = instrumentFilterEnvDecay.value;
+    if (instrumentPreset > 0) {
+      instrumentPresets[instrumentPreset].filterEnv = instrumentPresets[instrumentPreset].filterEnv || {};
+      instrumentPresets[instrumentPreset].filterEnv.decay = parseFloat(instrumentFilterEnvDecay.value);
+    }
+    saveInstrumentStateToLocalStorage();
+  });
+  addParamRow("Env Dcy", instrumentFilterEnvDecay, instrumentFilterEnvDecayValue);
+
+  instrumentSubSlider = document.createElement("input");
+  instrumentSubSlider.className = "looper-knob";
+  instrumentSubSlider.type = "range";
+  instrumentSubSlider.min = 0;
+  instrumentSubSlider.max = 1;
+  instrumentSubSlider.step = 0.01;
+  instrumentSubValue = document.createElement("span");
+  instrumentSubSlider.addEventListener("input", () => {
+    instrumentSubValue.textContent = instrumentSubSlider.value;
+    if (instrumentPreset > 0) instrumentPresets[instrumentPreset].subLevel = parseFloat(instrumentSubSlider.value);
+    saveInstrumentStateToLocalStorage();
+  });
+  addParamRow("Sub", instrumentSubSlider, instrumentSubValue);
+
   instrumentASlider = document.createElement("input");
   instrumentASlider.className = "looper-knob";
   instrumentASlider.type = "range";
@@ -11359,6 +11613,62 @@ function buildInstrumentWindow() {
     saveInstrumentStateToLocalStorage();
   });
   addParamRow("Release", instrumentRSlider, instrumentRValue);
+
+  instrumentGrainSizeSlider = document.createElement("input");
+  instrumentGrainSizeSlider.className = "looper-knob";
+  instrumentGrainSizeSlider.type = "range";
+  instrumentGrainSizeSlider.min = 0.03;
+  instrumentGrainSizeSlider.max = 0.3;
+  instrumentGrainSizeSlider.step = 0.005;
+  instrumentGrainSizeValue = document.createElement("span");
+  instrumentGrainSizeSlider.addEventListener("input", () => {
+    instrumentGrainSizeValue.textContent = instrumentGrainSizeSlider.value;
+    if (instrumentPreset > 0) instrumentPresets[instrumentPreset].grainSize = parseFloat(instrumentGrainSizeSlider.value);
+    saveInstrumentStateToLocalStorage();
+  });
+  addParamRow("Grain Size", instrumentGrainSizeSlider, instrumentGrainSizeValue);
+
+  instrumentGrainDensitySlider = document.createElement("input");
+  instrumentGrainDensitySlider.className = "looper-knob";
+  instrumentGrainDensitySlider.type = "range";
+  instrumentGrainDensitySlider.min = 4;
+  instrumentGrainDensitySlider.max = 28;
+  instrumentGrainDensitySlider.step = 1;
+  instrumentGrainDensityValue = document.createElement("span");
+  instrumentGrainDensitySlider.addEventListener("input", () => {
+    instrumentGrainDensityValue.textContent = instrumentGrainDensitySlider.value;
+    if (instrumentPreset > 0) instrumentPresets[instrumentPreset].grainDensity = parseFloat(instrumentGrainDensitySlider.value);
+    saveInstrumentStateToLocalStorage();
+  });
+  addParamRow("Grain Rate", instrumentGrainDensitySlider, instrumentGrainDensityValue);
+
+  instrumentGrainSpreadSlider = document.createElement("input");
+  instrumentGrainSpreadSlider.className = "looper-knob";
+  instrumentGrainSpreadSlider.type = "range";
+  instrumentGrainSpreadSlider.min = 0;
+  instrumentGrainSpreadSlider.max = 0.5;
+  instrumentGrainSpreadSlider.step = 0.01;
+  instrumentGrainSpreadValue = document.createElement("span");
+  instrumentGrainSpreadSlider.addEventListener("input", () => {
+    instrumentGrainSpreadValue.textContent = instrumentGrainSpreadSlider.value;
+    if (instrumentPreset > 0) instrumentPresets[instrumentPreset].grainSpread = parseFloat(instrumentGrainSpreadSlider.value);
+    saveInstrumentStateToLocalStorage();
+  });
+  addParamRow("Grain Spread", instrumentGrainSpreadSlider, instrumentGrainSpreadValue);
+
+  instrumentGrainJitterSlider = document.createElement("input");
+  instrumentGrainJitterSlider.className = "looper-knob";
+  instrumentGrainJitterSlider.type = "range";
+  instrumentGrainJitterSlider.min = 0;
+  instrumentGrainJitterSlider.max = 0.25;
+  instrumentGrainJitterSlider.step = 0.01;
+  instrumentGrainJitterValue = document.createElement("span");
+  instrumentGrainJitterSlider.addEventListener("input", () => {
+    instrumentGrainJitterValue.textContent = instrumentGrainJitterSlider.value;
+    if (instrumentPreset > 0) instrumentPresets[instrumentPreset].grainJitter = parseFloat(instrumentGrainJitterSlider.value);
+    saveInstrumentStateToLocalStorage();
+  });
+  addParamRow("Grain Jitter", instrumentGrainJitterSlider, instrumentGrainJitterValue);
 
   instrumentVolumeSlider = document.createElement("input");
   instrumentVolumeSlider.className = "looper-knob";
@@ -11498,6 +11808,12 @@ function buildInstrumentWindow() {
       drive: parseFloat(instrumentDriveSlider.value),
       glide: parseFloat(instrumentGlideSlider.value),
       pan: parseFloat(instrumentPanSlider.value),
+      filterEnv: {
+        amount: parseFloat(instrumentFilterEnvSlider.value),
+        attack: parseFloat(instrumentFilterEnvAttack.value),
+        decay: parseFloat(instrumentFilterEnvDecay.value)
+      },
+      subLevel: parseFloat(instrumentSubSlider.value),
       delay: parseFloat(instrumentDelaySlider.value),
       delayMix: parseFloat(instrumentDelayMixSlider.value),
       reverbMix: parseFloat(instrumentReverbMixSlider.value),
@@ -11515,6 +11831,10 @@ function buildInstrumentWindow() {
         s: parseFloat(instrumentSSlider.value),
         r: parseFloat(instrumentRSlider.value)
       },
+      grainSize: parseFloat(instrumentGrainSizeSlider.value),
+      grainDensity: parseFloat(instrumentGrainDensitySlider.value),
+      grainSpread: parseFloat(instrumentGrainSpreadSlider.value),
+      grainJitter: parseFloat(instrumentGrainJitterSlider.value),
       sample: instrumentPresets[instrumentPreset]?.sample || null
     };
   }

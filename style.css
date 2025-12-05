@@ -38,19 +38,21 @@ input.looper-knob::-moz-range-thumb {
 /* Touch module */
 #touchPopup.ytbm-touch-popup {
   position: fixed;
-  width: 720px;
-  max-width: 90vw;
-  height: 380px;
-  top: 50px;
-  left: 50px;
-  background: rgba(8, 8, 10, 0.92);
+  width: 960px;
+  max-width: 94vw;
+  height: 620px;
+  top: 40px;
+  left: 40px;
+  background: radial-gradient(circle at 20% 20%, rgba(52, 82, 255, 0.08), rgba(10, 12, 18, 0.95));
   color: #f3f3f3;
-  border-radius: 10px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.4);
-  padding: 14px;
+  border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(0,0,0,0.55);
+  padding: 16px;
   z-index: 100000;
   box-sizing: border-box;
   font-family: 'Inter', system-ui, sans-serif;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.05);
 }
 
 .ytbm-touch-header {
@@ -72,6 +74,37 @@ input.looper-knob::-moz-range-thumb {
   margin-bottom: 10px;
 }
 
+.ytbm-cue-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.05);
+}
+
+.ytbm-cue-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  background: #16181f;
+  border: 1px solid #2a2d38;
+  color: #e6e8f5;
+  border-radius: 8px;
+  padding: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.ytbm-cue-btn:hover { transform: translateY(-1px); }
+.ytbm-cue-btn.set { border-color: #3f7cff; background: linear-gradient(180deg, #1f2c48, #141824); }
+.ytbm-cue-label { font-size: 12px; opacity: 0.8; }
+.ytbm-cue-time { font-size: 13px; letter-spacing: 0.3px; }
+
 .ytbm-touch-tabs {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -90,7 +123,7 @@ input.looper-knob::-moz-range-thumb {
 
 .ytbm-touch-tab.active { background: #3366ff; color: #fff; border-color: #3a6dff; }
 
-.ytbm-touch-content { height: calc(100% - 120px); overflow: hidden; }
+.ytbm-touch-content { height: calc(100% - 160px); overflow: hidden; }
 .ytbm-touch-view { display: none; height: 100%; overflow-y: auto; }
 .ytbm-touch-view.active { display: block; }
 
@@ -128,6 +161,8 @@ input.looper-knob::-moz-range-thumb {
 .touch-pad-btn.primary { background: #3f51b5; border-color: #4f62cc; }
 .touch-pad-btn.ghost { background: transparent; border-color: #3a3a45; }
 
+.ytbm-seq-layout { display: grid; grid-template-columns: 1.3fr 0.7fr; gap: 12px; align-items: start; height: calc(100% - 10px); }
+.ytbm-seq-main { background: #0f1117; border: 1px solid #1f2230; border-radius: 10px; padding: 10px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.03); }
 .ytbm-seq-header { margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
 .ytbm-seq-lane-label { font-weight: 600; color: #e6e6ee; }
 .ytbm-seq-pad-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 6px; }
@@ -158,6 +193,41 @@ input.looper-knob::-moz-range-thumb {
 .ytbm-touch-btn.danger { background: #b3213a; border-color: #c53d51; }
 .ytbm-touch-btn.ghost { background: transparent; }
 .ytbm-touch-btn.active { background: #2563eb; border-color: #2b6ef2; }
+
+.ytbm-live-pad-panel { background: #0f121a; border: 1px solid #1f2230; border-radius: 10px; padding: 10px; display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+.ytbm-live-pad-title { grid-column: 1 / -1; font-weight: 700; color: #dfe5ff; letter-spacing: 0.3px; }
+.touch-pad-btn.compact { padding: 10px; font-size: 14px; }
+
+.nova-panel {
+  width: 820px;
+  max-width: 96vw;
+  background: radial-gradient(circle at 15% 15%, rgba(53, 97, 255, 0.14), rgba(12, 14, 22, 0.96));
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.06);
+  box-shadow: 0 20px 48px rgba(0,0,0,0.55);
+}
+.nova-panel .looper-midimap-drag-handle {
+  background: transparent;
+  border: none;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+}
+.nova-panel .looper-midimap-content {
+  background: transparent;
+  padding: 12px;
+}
+.nova-hero {
+  background: linear-gradient(135deg, rgba(66, 109, 255, 0.18), rgba(10, 12, 18, 0.7));
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nova-title { font-size: 18px; font-weight: 800; color: #f6f7ff; }
+.nova-sub { font-size: 13px; color: #b9c4ff; letter-spacing: 0.4px; }
 
 .ytbm-touch-input {
   width: 70px;
