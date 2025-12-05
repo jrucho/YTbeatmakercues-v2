@@ -1746,13 +1746,51 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   let modTouchActive = false;
   let touchPopup = null;
   let currentPad = null; // current selected pad index (0–9)
-  const padSequencers = []; // Array of sequencer data for each pad (16 booleans per pad)
+  let padSlots = [];
+  let padSequencers = []; // Array of sequencer data for each pad (16 booleans per pad)
+  let padSequencerIntervals = new Array(10).fill(null);
+  let padSequencerSteps = new Array(10).fill(0);
   let sequencerBPM = 120; // default BPM
   let sequencerInterval = null;
   let sequencerPlaying = false;
   // Initialize pad sequencer data for 10 pads (all steps off)
   for (let i = 0; i < 10; i++) {
     padSequencers[i] = new Array(16).fill(false);
+  }
+
+  refreshPadSlots();
+
+  function refreshPadSlots() {
+    const base = [
+      { id: 'kick', label: 'Kick', type: 'kick', play: () => playSample('kick') },
+      { id: 'snare', label: 'Snare', type: 'snare', play: () => playSample('snare') },
+      { id: 'hihat', label: 'Hat', type: 'hihat', play: () => playSample('hihat') }
+    ];
+    const userPads = (userSamples || []).map((u, idx) => ({
+      id: `user-${idx}`,
+      label: u.name || `User ${idx + 1}`,
+      type: `user-${idx}`,
+      play: () => playUserSample(u)
+    }));
+    padSlots = [...base, ...userPads];
+    while (padSlots.length < 10) {
+      const padIndex = padSlots.length + 1;
+      padSlots.push({
+        id: `pad-${padIndex}`,
+        label: `Pad ${padIndex}`,
+        type: null,
+        play: () => playSample('kick')
+      });
+    }
+    padSlots = padSlots.slice(0, 10);
+
+    // Resize sequencer lanes to match the slot count
+    if (padSequencers.length !== padSlots.length) {
+      const next = padSlots.map((_, i) => padSequencers[i] ? padSequencers[i].slice(0, 16) : new Array(16).fill(false));
+      padSequencers = next.map(seq => seq.length === 16 ? seq : [...seq, ...new Array(16 - seq.length).fill(false)]);
+      padSequencerIntervals = new Array(padSlots.length).fill(null);
+      padSequencerSteps = new Array(padSlots.length).fill(0);
+    }
   }
   
 // Global flag to track the toggle state.
@@ -2141,6 +2179,8 @@ function toggleBlindMode() {
       return;
     }
 
+    refreshPadSlots();
+
     touchPopup = document.createElement("div");
     touchPopup.id = "touchPopup";
     touchPopup.className = "ytbm-touch-popup";
@@ -2292,33 +2332,27 @@ function toggleBlindMode() {
     samplesTab.addEventListener('click', () => setTab('samples'));
     seqTab.addEventListener('click', () => setTab('seq'));
 
-    const padMeta = [
-      { index: 0, label: 'Kick', type: 'kick' },
-      { index: 1, label: 'Snare', type: 'snare' },
-      { index: 2, label: 'Hat', type: 'hihat' },
-      { index: 3, label: 'Pad 4' },
-      { index: 4, label: 'Pad 5' },
-      { index: 5, label: 'Pad 6' },
-      { index: 6, label: 'Pad 7' },
-      { index: 7, label: 'Pad 8' },
-      { index: 8, label: 'Pad 9' },
-      { index: 9, label: 'Pad 10' }
-    ];
     if (currentPad === null) currentPad = 0;
 
-    function getSampleLabel(type) {
-      const idx = currentSampleIndex[type] ?? 0;
-      const meta = sampleOrigin[type]?.[idx];
+    function getSampleLabel(slot) {
+      if (!slot?.type) return 'Pad';
+      if (slot.type.startsWith('user-')) {
+        const idx = Number(slot.type.split('-')[1]);
+        const u = userSamples[idx];
+        return u?.name || 'User sample';
+      }
+      const idx = currentSampleIndex[slot.type] ?? 0;
+      const meta = sampleOrigin[slot.type]?.[idx];
       if (meta?.packName) return `${meta.packName} #${meta.index + 1}`;
       return meta ? 'User sample' : 'Loaded';
     }
 
-    function createPadButton(label, i) {
+    function createPadButton(slot, i, variant) {
       const padBtn = document.createElement("button");
-      padBtn.className = "touch-pad-btn";
+      padBtn.className = "touch-pad-btn" + (variant ? ` ${variant}` : '');
       padBtn.dataset.padIndex = String(i);
-      padBtn.textContent = label;
-      padBtn.addEventListener("mousedown", () => {
+      padBtn.textContent = slot.label;
+      padBtn.addEventListener("pointerdown", () => {
         currentPad = i;
         updateSequencerUI();
         let cueKey = (i + 1) % 10;
@@ -2335,36 +2369,34 @@ function toggleBlindMode() {
           triggerPadCue(i);
         }
       });
-      padBtn.addEventListener("touchstart", e => { e.preventDefault(); padBtn.dispatchEvent(new MouseEvent('mousedown')); });
+      padBtn.addEventListener("touchstart", e => { e.preventDefault(); padBtn.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true})); });
       return padBtn;
     }
 
     const railPadWrap = document.createElement('div');
     railPadWrap.className = 'ytbm-rail-grid';
     padRail.appendChild(railPadWrap);
-    padMeta.forEach(meta => {
-      const btn = createPadButton(meta.label, meta.index);
-      btn.classList.add('compact');
+    padSlots.forEach((slot, i) => {
+      const btn = createPadButton(slot, i, 'compact');
       railPadWrap.appendChild(btn);
     });
 
     const sampleGrid = document.createElement('div');
     sampleGrid.className = 'ytbm-sample-grid';
-    padMeta.slice(0,3).forEach(meta => {
+    padSlots.slice(0,3).forEach((slot, i) => {
       const card = document.createElement('div');
       card.className = 'ytbm-sample-card';
       const head = document.createElement('div');
       head.className = 'ytbm-sample-card__head';
-      head.textContent = meta.label;
+      head.textContent = slot.label;
       card.appendChild(head);
-      const padBtn = createPadButton(meta.label, meta.index);
-      padBtn.classList.add('primary');
+      const padBtn = createPadButton(slot, i, 'primary');
       card.appendChild(padBtn);
       const sampleLabel = document.createElement('div');
       sampleLabel.className = 'ytbm-sample-meta';
-      sampleLabel.textContent = meta.type ? getSampleLabel(meta.type) : 'Pad';
+      sampleLabel.textContent = getSampleLabel(slot);
       card.appendChild(sampleLabel);
-      if (meta.type) {
+      if (slot.type) {
         const controls = document.createElement('div');
         controls.className = 'ytbm-sample-controls';
         const volLabel = document.createElement('span');
@@ -2373,19 +2405,20 @@ function toggleBlindMode() {
         slider.min = -18;
         slider.max = 6;
         slider.step = 0.5;
-        const initialDb = 20 * Math.log10(sampleVolumes[meta.type] || 1);
+        const gainKey = (slot.type in sampleVolumes) ? slot.type : (slot.type?.startsWith('user-') ? 'user' : slot.type);
+        const initialDb = 20 * Math.log10(sampleVolumes[gainKey] || 1);
         slider.value = isFinite(initialDb) ? initialDb : 0;
         volLabel.textContent = `${slider.value} dB`;
         slider.addEventListener('input', () => {
           volLabel.textContent = `${slider.value} dB`;
-          onSampleVolumeFaderChange(meta.type, parseFloat(slider.value));
+          onSampleVolumeFaderChange(gainKey, parseFloat(slider.value));
         });
         const muteBtn = document.createElement('button');
         muteBtn.className = 'ytbm-touch-btn ghost';
-        muteBtn.textContent = sampleMutes[meta.type] ? 'Unmute' : 'Mute';
+        muteBtn.textContent = sampleMutes[gainKey] ? 'Unmute' : 'Mute';
         muteBtn.addEventListener('click', () => {
-          toggleSampleMute(meta.type);
-          muteBtn.textContent = sampleMutes[meta.type] ? 'Unmute' : 'Mute';
+          toggleSampleMute(gainKey);
+          muteBtn.textContent = sampleMutes[gainKey] ? 'Unmute' : 'Mute';
         });
         controls.appendChild(slider);
         controls.appendChild(volLabel);
@@ -2397,8 +2430,8 @@ function toggleBlindMode() {
 
     const auxPadGrid = document.createElement('div');
     auxPadGrid.className = 'ytbm-aux-grid';
-    padMeta.slice(3).forEach(meta => {
-      const btn = createPadButton(meta.label, meta.index);
+    padSlots.slice(3).forEach((slot, i) => {
+      const btn = createPadButton(slot, i + 3);
       auxPadGrid.appendChild(btn);
     });
     samplesView.appendChild(sampleGrid);
@@ -2414,8 +2447,8 @@ function toggleBlindMode() {
     const laneLabel = document.createElement('div');
     laneLabel.className = 'ytbm-seq-lane-label';
     const updateLaneLabel = () => {
-      const meta = padMeta[currentPad] || { label: `Pad ${currentPad + 1}` };
-      const sampleInfo = meta.type ? ` • ${getSampleLabel(meta.type)}` : '';
+      const meta = padSlots[currentPad] || { label: `Pad ${currentPad + 1}` };
+      const sampleInfo = meta.type ? ` • ${getSampleLabel(meta)}` : '';
       laneLabel.textContent = `Editing: ${meta.label}${sampleInfo}`;
     };
     updateLaneLabel();
@@ -2423,9 +2456,8 @@ function toggleBlindMode() {
 
     const padSelectRow = document.createElement('div');
     padSelectRow.className = 'ytbm-seq-pad-row';
-    padMeta.forEach(meta => {
-      const btn = createPadButton(meta.label, meta.index);
-      btn.classList.add('ghost');
+    padSlots.forEach((slot, i) => {
+      const btn = createPadButton(slot, i, 'ghost');
       btn.addEventListener('click', updateLaneLabel);
       padSelectRow.appendChild(btn);
     });
@@ -2524,9 +2556,9 @@ function toggleBlindMode() {
       btn.classList.toggle('active', steps[index]);
     });
     const laneLabel = document.querySelector('.ytbm-seq-lane-label');
-    if (laneLabel && typeof padMeta !== 'undefined') {
-      const meta = padMeta[currentPad] || { label: `Pad ${currentPad + 1}` };
-      const sampleInfo = meta.type ? ` • ${getSampleLabel(meta.type)}` : '';
+    if (laneLabel) {
+      const meta = padSlots[currentPad] || { label: `Pad ${currentPad + 1}` };
+      const sampleInfo = meta.type ? ` • ${getSampleLabel(meta)}` : '';
       laneLabel.textContent = `Editing: ${meta.label}${sampleInfo}`;
     }
   }
@@ -2555,17 +2587,11 @@ function toggleBlindMode() {
 
 // Map pad presses to the actual drum/sample players
 function playSamplePad(padIndex) {
-  const coreTypes = ['kick', 'snare', 'hihat'];
-  if (padIndex < coreTypes.length) {
-    playSample(coreTypes[padIndex]);
+  const slot = padSlots[padIndex];
+  if (slot && typeof slot.play === 'function') {
+    slot.play();
     return;
   }
-  const userIdx = padIndex - coreTypes.length;
-  if (userIdx >= 0 && userIdx < userSamples.length) {
-    playUserSample(userSamples[userIdx]);
-    return;
-  }
-  // Fallback to the kick for any unmapped pad to guarantee audible feedback
   playSample('kick');
 }
 
@@ -2598,10 +2624,6 @@ function triggerPadCue(padIndex) {
     if (!stepRow) return;
     Array.from(stepRow.children).forEach(btn => { btn.style.outline = "none"; });
   }
-  
-  // Arrays for pad sequencer intervals and steps
-  let padSequencerIntervals = new Array(10).fill(null);
-  let padSequencerSteps = new Array(10).fill(0);
   
   // Start sequencers for all pads
   function startAllSequencers() {
@@ -4088,6 +4110,71 @@ let instrumentPresets = [
     limitThresh: -3,
     sample: null,
     tune: 0
+  },
+  {
+    name: 'Future Bass Lift',
+    color: PRESET_COLORS[2],
+    oscillator: 'organ',
+    wavetableB: 'gloss',
+    wavetableMix: 0.55,
+    filter: 520,
+    q: 1.3,
+    drive: 0.18,
+    glide: 0.06,
+    pan: 0.04,
+    env: { a: 0.016, d: 0.22, s: 0.7, r: 0.48 },
+    filterEnv: { amount: 0.5, attack: 0.016, decay: 0.22 },
+    engine: 'wavetable',
+    mode: 'poly',
+    filterType: 'lowpass',
+    volume: 0.24,
+    compThresh: -18,
+    limitThresh: -3,
+    tune: 0
+  },
+  {
+    name: 'BoomBap Dust',
+    color: PRESET_COLORS[3],
+    oscillator: 'sawtooth',
+    filter: 180,
+    q: 1.1,
+    drive: 0.26,
+    glide: 0.04,
+    pan: -0.06,
+    env: { a: 0.007, d: 0.18, s: 0.74, r: 0.32 },
+    filterEnv: { amount: 0.42, attack: 0.008, decay: 0.18 },
+    engine: 'analog',
+    mode: 'mono',
+    filterType: 'lowpass',
+    subLevel: 0.34,
+    volume: 0.23,
+    compThresh: -19,
+    limitThresh: -3,
+    tune: -2
+  },
+  {
+    name: 'IDM Noise Lab',
+    color: PRESET_COLORS[4],
+    oscillator: 'triangle',
+    filter: 420,
+    q: 1.8,
+    drive: 0.22,
+    glide: 0.05,
+    pan: 0,
+    env: { a: 0.012, d: 0.28, s: 0.55, r: 0.6 },
+    filterEnv: { amount: 0.6, attack: 0.012, decay: 0.3 },
+    engine: 'granular',
+    mode: 'poly',
+    grainSize: 0.06,
+    grainDensity: 18,
+    grainSpread: 0.35,
+    grainJitter: 0.18,
+    filterType: 'bandpass',
+    volume: 0.22,
+    compThresh: -18,
+    limitThresh: -3,
+    sample: null,
+    tune: 0
   }
 ];
 
@@ -4299,7 +4386,8 @@ function createInstrumentVoice(cfg, midiNote, freqRatio) {
     const ratio = cfg.fmRatio || 2;
     const idx = cfg.fmIndex || 80;
     mod.frequency.value = targetHz * ratio;
-    modGain.gain.value = idx;
+    modGain.gain.setValueAtTime(idx, audioContext.currentTime);
+    modGain.gain.exponentialRampToValueAtTime(Math.max(4, idx * 0.28), audioContext.currentTime + Math.max(0.08, env.a + env.d));
     mod.connect(modGain).connect(carrier.frequency);
     mod.start();
     carrier.connect(filter);
@@ -4335,20 +4423,35 @@ function createInstrumentVoice(cfg, midiNote, freqRatio) {
     const main = audioContext.createOscillator();
     main.type = cfg.oscillator || 'sawtooth';
     main.frequency.value = targetHz;
+    main.detune.value = (Math.random() - 0.5) * 8;
     instLfoGain.connect(main.frequency);
+
+    const partner = audioContext.createOscillator();
+    partner.type = cfg.oscillator || 'sawtooth';
+    partner.frequency.value = targetHz;
+    partner.detune.value = 7;
+    instLfoGain.connect(partner.frequency);
+
     const sub = audioContext.createOscillator();
     sub.type = 'square';
     sub.frequency.value = targetHz / 2;
     instLfoGain.connect(sub.frequency);
+
     const subGain = audioContext.createGain();
     subGain.gain.value = cfg.subLevel ?? 0.35;
     const mainGain = audioContext.createGain();
-    mainGain.gain.value = 1 - Math.min(0.7, subGain.gain.value * 0.5);
+    mainGain.gain.value = 0.58;
+    const partnerGain = audioContext.createGain();
+    partnerGain.gain.value = 0.42;
+
     main.connect(mainGain).connect(filter);
+    partner.connect(partnerGain).connect(filter);
     sub.connect(subGain).connect(filter);
+
     main.start();
+    partner.start();
     sub.start();
-    voice.oscillators.push(main, sub);
+    voice.oscillators.push(main, partner, sub);
   }
 
   triggerEnvelope(voice, env, cfg.filterEnv);
@@ -11225,7 +11328,7 @@ function buildInstrumentWindow() {
 
   const hero = document.createElement("div");
   hero.className = "nova-hero";
-  hero.innerHTML = `<div class="nova-title">Nova Bass Studio</div><div class="nova-sub">Analog · FM · Wavetable · Sampler · Granular</div>`;
+  hero.innerHTML = `<div class="nova-title">Nova Forge</div><div class="nova-sub">Analog · FM · Wavetable · Sampler · Granular</div>`;
   cw.appendChild(hero);
 
   const layout = document.createElement("div");

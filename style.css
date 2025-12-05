@@ -38,9 +38,9 @@ input.looper-knob::-moz-range-thumb {
 /* Touch module */
 #touchPopup.ytbm-touch-popup {
   position: fixed;
-  width: 1080px;
-  max-width: 96vw;
-  height: 700px;
+  width: 1240px;
+  max-width: 98vw;
+  height: 780px;
   top: 40px;
   left: 40px;
   background: radial-gradient(circle at 20% 20%, rgba(52, 82, 255, 0.08), rgba(10, 12, 18, 0.95));
