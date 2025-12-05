@@ -1,8 +1,7 @@
-# Next Release Notes (2.0.2)
+# Next Release Notes (2.0.3)
 
 ## Highlights
-- Added a sidechain launch button to the Advanced window so you can pop open the ducking controls (with advanced mode enabled) without hunting for shortcuts.
-- Simplified the sidechain popup header to a clean title and close button while keeping everything inside the canvas area.
-- Ensured kick/all-drum sidechaining always uses the currently selected curve—whether triggered from keys or MIDI—so drum-follow ducking matches what you dialed in.
+- Sidechain taps—whether from the **J** key, MIDI, or kick/all-drum follow—are now written into MIDI looper clips so your recorded grooves keep the same pump when they loop.
+- MIDI loop playback replays the captured sidechain envelope automatically, matching the curve you selected for kicks or the full kit.
 
-These changes focus on a cleaner sidechain workflow while maintaining the streamlined YouTube-inspired look.
+This release focuses on making sidechain ducking fully recordable and repeatable inside MIDI loopers without changing your existing workflow.

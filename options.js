@@ -1,3 +1,9 @@
+const versionLabel = document.getElementById("extensionVersion");
+const manifest = chrome.runtime?.getManifest?.();
+if (versionLabel && manifest?.version) {
+  versionLabel.textContent = `YouTube Beatmaker Extension v${manifest.version}`;
+}
+
 // Save user-defined settings to Chrome Storage
 document.getElementById("saveSettings").addEventListener("click", () => {
   const sampleKeys = {
