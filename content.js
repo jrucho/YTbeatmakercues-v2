@@ -2171,37 +2171,36 @@ function toggleBlindMode() {
 
 
   
-  // Build the Touch popup window (without layout toggle)
+
+  // Build the Touch popup window (rewritten with tabbed pad + sequencer studio)
   function buildTouchPopup() {
+    refreshPadSlots();
     if (touchPopup) {
       touchPopup.style.display = "block";
-      updateSequencerUI();
+      rebuildTouchViews();
       return;
     }
 
-    refreshPadSlots();
-
     touchPopup = document.createElement("div");
     touchPopup.id = "touchPopup";
-    touchPopup.className = "ytbm-touch-popup";
+    touchPopup.className = "ytbm-touch-popup touch-pro";
 
     const header = document.createElement("div");
     header.className = "ytbm-touch-header";
     const title = document.createElement("div");
     title.className = "ytbm-touch-title";
-    title.textContent = "Touch Sequencer";
+    title.textContent = "Touch Studio";
     const headerBtns = document.createElement("div");
-
     const closeBtn = document.createElement("button");
     closeBtn.className = "ytbm-touch-btn ghost";
     closeBtn.textContent = "Close";
     closeBtn.addEventListener("click", () => { touchPopup.style.display = "none"; });
     headerBtns.appendChild(closeBtn);
-
     header.appendChild(title);
     header.appendChild(headerBtns);
     touchPopup.appendChild(header);
 
+    // Cue strip with overwrite modifier support
     const cueStrip = document.createElement('div');
     cueStrip.className = 'ytbm-cue-strip';
     const cueButtons = [];
@@ -2273,7 +2272,7 @@ function toggleBlindMode() {
     eraseAllStepsBtn.addEventListener("click", () => {
       pushUndoState();
       for (let i = 0; i < padSequencers.length; i++) padSequencers[i].fill(false);
-      updateSequencerUI();
+      rebuildSequencerGrid();
     });
     utilityRow.appendChild(eraseAllStepsBtn);
 
@@ -2283,7 +2282,7 @@ function toggleBlindMode() {
     tabBar.className = "ytbm-touch-tabs";
     const samplesTab = document.createElement("button");
     samplesTab.className = "ytbm-touch-tab active";
-    samplesTab.textContent = "Samples";
+    samplesTab.textContent = "Pads";
     const seqTab = document.createElement("button");
     seqTab.className = "ytbm-touch-tab";
     seqTab.textContent = "Sequencer";
@@ -2293,6 +2292,8 @@ function toggleBlindMode() {
 
     const contentWrap = document.createElement("div");
     contentWrap.className = "ytbm-touch-content";
+    touchPopup.appendChild(contentWrap);
+
     const samplesView = document.createElement("div");
     samplesView.className = "ytbm-touch-view active";
     const seqView = document.createElement("div");
@@ -2300,361 +2301,305 @@ function toggleBlindMode() {
     contentWrap.appendChild(samplesView);
     contentWrap.appendChild(seqView);
 
-    const mainWrap = document.createElement('div');
-    mainWrap.className = 'ytbm-touch-main';
-    const leftPane = document.createElement('div');
-    leftPane.className = 'ytbm-touch-left';
-    leftPane.appendChild(contentWrap);
+    samplesTab.addEventListener("click", () => {
+      samplesTab.classList.add("active");
+      seqTab.classList.remove("active");
+      samplesView.classList.add("active");
+      seqView.classList.remove("active");
+    });
+    seqTab.addEventListener("click", () => {
+      samplesTab.classList.remove("active");
+      seqTab.classList.add("active");
+      samplesView.classList.remove("active");
+      seqView.classList.add("active");
+    });
+
+    const padViewMain = document.createElement('div');
+    padViewMain.className = 'ytbm-touch-main';
+    const padLeft = document.createElement('div');
+    padLeft.className = 'ytbm-touch-left';
+    const padRight = document.createElement('div');
+    padRight.className = 'ytbm-touch-right';
+    padViewMain.appendChild(padLeft);
+    padViewMain.appendChild(padRight);
+    samplesView.appendChild(padViewMain);
+
     const padRail = document.createElement('div');
     padRail.className = 'ytbm-touch-rail';
-    const railTitle = document.createElement('div');
-    railTitle.className = 'ytbm-touch-rail-title';
-    railTitle.textContent = 'Live Pads';
-    padRail.appendChild(railTitle);
-    mainWrap.appendChild(leftPane);
-    mainWrap.appendChild(padRail);
-    touchPopup.appendChild(mainWrap);
+    const padRailTitle = document.createElement('div');
+    padRailTitle.className = 'ytbm-touch-rail-title';
+    padRailTitle.textContent = 'Sample Pads';
+    padRail.appendChild(padRailTitle);
+    const padGrid = document.createElement('div');
+    padGrid.className = 'touch-pad-grid';
+    padRail.appendChild(padGrid);
+    padLeft.appendChild(padRail);
 
-    function setTab(view) {
-      if (view === 'samples') {
-        samplesTab.classList.add('active');
-        seqTab.classList.remove('active');
-        samplesView.classList.add('active');
-        seqView.classList.remove('active');
-      } else {
-        seqTab.classList.add('active');
-        samplesTab.classList.remove('active');
-        seqView.classList.add('active');
-        samplesView.classList.remove('active');
-      }
-    }
+    const inspector = document.createElement('div');
+    inspector.className = 'ytbm-touch-card';
+    inspector.innerHTML = '<div class="ytbm-touch-card-title">Pad Inspector</div><div class="ytbm-touch-card-body" id="padInspectorBody">Trigger a pad to edit its lane and cue.</div>';
+    padRight.appendChild(inspector);
 
-    samplesTab.addEventListener('click', () => setTab('samples'));
-    seqTab.addEventListener('click', () => setTab('seq'));
+    const seqViewMain = document.createElement('div');
+    seqViewMain.className = 'ytbm-touch-main';
+    const seqLeft = document.createElement('div');
+    seqLeft.className = 'ytbm-touch-left';
+    const seqRight = document.createElement('div');
+    seqRight.className = 'ytbm-touch-right';
+    seqViewMain.appendChild(seqLeft);
+    seqViewMain.appendChild(seqRight);
+    seqView.appendChild(seqViewMain);
 
-    if (currentPad === null) currentPad = 0;
+    const seqPadRail = document.createElement('div');
+    seqPadRail.className = 'ytbm-touch-rail';
+    seqPadRail.innerHTML = '<div class="ytbm-touch-rail-title">Live Pads</div>';
+    const seqPadGrid = document.createElement('div');
+    seqPadGrid.className = 'touch-pad-grid';
+    seqPadRail.appendChild(seqPadGrid);
+    seqLeft.appendChild(seqPadRail);
 
-    function getSampleLabel(slot) {
-      if (!slot?.type) return 'Pad';
-      if (slot.type.startsWith('user-')) {
-        const idx = Number(slot.type.split('-')[1]);
-        const u = userSamples[idx];
-        return u?.name || 'User sample';
-      }
-      const idx = currentSampleIndex[slot.type] ?? 0;
-      const meta = sampleOrigin[slot.type]?.[idx];
-      if (meta?.packName) return `${meta.packName} #${meta.index + 1}`;
-      return meta ? 'User sample' : 'Loaded';
-    }
-
-    function createPadButton(slot, i, variant) {
-      const padBtn = document.createElement("button");
-      padBtn.className = "touch-pad-btn" + (variant ? ` ${variant}` : '');
-      padBtn.dataset.padIndex = String(i);
-      padBtn.textContent = slot.label;
-      padBtn.addEventListener("pointerdown", () => {
-        currentPad = i;
-        updateSequencerUI();
-        let cueKey = (i + 1) % 10;
-        cueKey = cueKey === 0 ? "0" : String(cueKey);
-        const vid = getVideoElement();
-        if (modTouchActive && vid) {
-          pushUndoState();
-          cuePoints[cueKey] = vid.currentTime;
-          saveCuePointsToURL();
-          updateCueMarkers();
-          refreshCuesButton();
-          updateCueBar();
-        } else {
-          triggerPadCue(i);
-        }
-      });
-      padBtn.addEventListener("touchstart", e => { e.preventDefault(); padBtn.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true})); });
-      return padBtn;
-    }
-
-    const railPadWrap = document.createElement('div');
-    railPadWrap.className = 'ytbm-rail-grid';
-    padRail.appendChild(railPadWrap);
-    padSlots.forEach((slot, i) => {
-      const btn = createPadButton(slot, i, 'compact');
-      railPadWrap.appendChild(btn);
-    });
-
-    const sampleGrid = document.createElement('div');
-    sampleGrid.className = 'ytbm-sample-grid';
-    padSlots.slice(0,3).forEach((slot, i) => {
-      const card = document.createElement('div');
-      card.className = 'ytbm-sample-card';
-      const head = document.createElement('div');
-      head.className = 'ytbm-sample-card__head';
-      head.textContent = slot.label;
-      card.appendChild(head);
-      const padBtn = createPadButton(slot, i, 'primary');
-      card.appendChild(padBtn);
-      const sampleLabel = document.createElement('div');
-      sampleLabel.className = 'ytbm-sample-meta';
-      sampleLabel.textContent = getSampleLabel(slot);
-      card.appendChild(sampleLabel);
-      if (slot.type) {
-        const controls = document.createElement('div');
-        controls.className = 'ytbm-sample-controls';
-        const volLabel = document.createElement('span');
-        const slider = document.createElement('input');
-        slider.type = 'range';
-        slider.min = -18;
-        slider.max = 6;
-        slider.step = 0.5;
-        const gainKey = (slot.type in sampleVolumes) ? slot.type : (slot.type?.startsWith('user-') ? 'user' : slot.type);
-        const initialDb = 20 * Math.log10(sampleVolumes[gainKey] || 1);
-        slider.value = isFinite(initialDb) ? initialDb : 0;
-        volLabel.textContent = `${slider.value} dB`;
-        slider.addEventListener('input', () => {
-          volLabel.textContent = `${slider.value} dB`;
-          onSampleVolumeFaderChange(gainKey, parseFloat(slider.value));
-        });
-        const muteBtn = document.createElement('button');
-        muteBtn.className = 'ytbm-touch-btn ghost';
-        muteBtn.textContent = sampleMutes[gainKey] ? 'Unmute' : 'Mute';
-        muteBtn.addEventListener('click', () => {
-          toggleSampleMute(gainKey);
-          muteBtn.textContent = sampleMutes[gainKey] ? 'Unmute' : 'Mute';
-        });
-        controls.appendChild(slider);
-        controls.appendChild(volLabel);
-        controls.appendChild(muteBtn);
-        card.appendChild(controls);
-      }
-      sampleGrid.appendChild(card);
-    });
-
-    const auxPadGrid = document.createElement('div');
-    auxPadGrid.className = 'ytbm-aux-grid';
-    padSlots.slice(3).forEach((slot, i) => {
-      const btn = createPadButton(slot, i + 3);
-      auxPadGrid.appendChild(btn);
-    });
-    samplesView.appendChild(sampleGrid);
-    samplesView.appendChild(auxPadGrid);
-
-    const seqLayout = document.createElement('div');
-    seqLayout.className = 'ytbm-seq-layout';
-    const seqMain = document.createElement('div');
-    seqMain.className = 'ytbm-seq-main';
-
-    const seqHeader = document.createElement('div');
-    seqHeader.className = 'ytbm-seq-header';
+    const seqControls = document.createElement('div');
+    seqControls.className = 'ytbm-touch-controls';
     const laneLabel = document.createElement('div');
     laneLabel.className = 'ytbm-seq-lane-label';
-    const updateLaneLabel = () => {
-      const meta = padSlots[currentPad] || { label: `Pad ${currentPad + 1}` };
-      const sampleInfo = meta.type ? ` • ${getSampleLabel(meta)}` : '';
-      laneLabel.textContent = `Editing: ${meta.label}${sampleInfo}`;
-    };
-    updateLaneLabel();
-    seqHeader.appendChild(laneLabel);
-
-    const padSelectRow = document.createElement('div');
-    padSelectRow.className = 'ytbm-seq-pad-row';
-    padSlots.forEach((slot, i) => {
-      const btn = createPadButton(slot, i, 'ghost');
-      btn.addEventListener('click', updateLaneLabel);
-      padSelectRow.appendChild(btn);
-    });
-    seqHeader.appendChild(padSelectRow);
-    seqMain.appendChild(seqHeader);
-
-    const stepRow = document.createElement("div");
-    stepRow.id = "stepRow";
-    stepRow.className = 'ytbm-step-row';
-    for (let s = 0; s < 16; s++) {
-      const stepBtn = document.createElement("button");
-      stepBtn.className = "ytbm-step-btn";
-      stepBtn.dataset.step = s;
-      stepBtn.innerText = s + 1;
-      stepBtn.addEventListener("click", () => { toggleStep(s); });
-      stepBtn.addEventListener("touchstart", e => { e.preventDefault(); toggleStep(s); });
-      stepRow.appendChild(stepBtn);
-    }
-    seqMain.appendChild(stepRow);
-
-    const controlRow = document.createElement("div");
-    controlRow.className = 'ytbm-touch-controls';
-
-    const tapBpmBtn = document.createElement("button");
-    tapBpmBtn.className = 'ytbm-touch-btn';
-    tapBpmBtn.innerText = "Tap BPM";
-    tapBpmBtn.addEventListener("click", () => {
-      let now = performance.now();
-      tapTimes.push(now);
-      if (tapTimes.length > 8) tapTimes.shift();
-      if (tapTimes.length >= 4) {
-        let intervals = [];
-        for (let i = 1; i < tapTimes.length; i++) intervals.push(tapTimes[i] - tapTimes[i - 1]);
-        let avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-        sequencerBPM = Math.round(60000 / avgInterval);
-        if (bpmInput) bpmInput.value = sequencerBPM;
-        if (sequencerPlaying) { stopAllSequencers(); startAllSequencers(); }
-      }
-    });
-    controlRow.appendChild(tapBpmBtn);
-
-    const bpmInput = document.createElement("input");
-    bpmInput.type = "number";
+    laneLabel.textContent = 'Editing: Pad 1';
+    seqControls.appendChild(laneLabel);
+    const bpmLabel = document.createElement('span');
+    bpmLabel.textContent = 'BPM';
+    seqControls.appendChild(bpmLabel);
+    const bpmInput = document.createElement('input');
+    bpmInput.type = 'number';
     bpmInput.value = sequencerBPM;
     bpmInput.className = 'ytbm-touch-input';
-    bpmInput.addEventListener("input", () => {
-      const newBpm = parseInt(bpmInput.value, 10) || 120;
-      if (newBpm !== sequencerBPM) {
-        sequencerBPM = newBpm;
-        if (sequencerPlaying) { stopAllSequencers(); startAllSequencers(); }
+    bpmInput.addEventListener('input', () => {
+      sequencerBPM = Math.max(40, Math.min(220, parseInt(bpmInput.value, 10) || 120));
+      if (sequencerPlaying) { stopSequencer(); startSequencer(); }
+    });
+    seqControls.appendChild(bpmInput);
+    const tapBpmBtn = document.createElement('button');
+    tapBpmBtn.className = 'ytbm-touch-btn secondary';
+    tapBpmBtn.innerText = 'Tap';
+    tapBpmBtn.addEventListener('click', () => {
+      const now = performance.now();
+      tapTimes.push(now);
+      while (tapTimes.length > 8) tapTimes.shift();
+      if (tapTimes.length >= 2) {
+        const intervals = [];
+        for (let i = 1; i < tapTimes.length; i++) intervals.push(tapTimes[i] - tapTimes[i-1]);
+        const avg = intervals.reduce((a,b)=>a+b,0) / intervals.length;
+        sequencerBPM = Math.round(60000 / avg);
+        bpmInput.value = sequencerBPM;
+        if (sequencerPlaying) { stopSequencer(); startSequencer(); }
       }
     });
-    controlRow.appendChild(bpmInput);
-
-    const startStopBtn = document.createElement("button");
+    seqControls.appendChild(tapBpmBtn);
+    const startStopBtn = document.createElement('button');
     startStopBtn.className = 'ytbm-touch-btn primary';
-    startStopBtn.innerText = "Start";
-    startStopBtn.addEventListener("click", () => {
-      if (sequencerPlaying) { stopSequencer(); startStopBtn.innerText = "Start"; }
-      else { startSequencer(); startStopBtn.innerText = "Stop"; }
+    startStopBtn.innerText = 'Start';
+    startStopBtn.addEventListener('click', () => {
+      if (sequencerPlaying) { stopSequencer(); startStopBtn.innerText = 'Start'; }
+      else { startSequencer(); startStopBtn.innerText = 'Stop'; }
     });
-    controlRow.appendChild(startStopBtn);
+    seqControls.appendChild(startStopBtn);
+    const eraseAllStepsBtnSeq = document.createElement('button');
+    eraseAllStepsBtnSeq.className = 'ytbm-touch-btn danger';
+    eraseAllStepsBtnSeq.textContent = 'Clear All';
+    eraseAllStepsBtnSeq.addEventListener('click', () => {
+      pushUndoState();
+      for (let i = 0; i < padSequencers.length; i++) padSequencers[i].fill(false);
+      rebuildSequencerGrid();
+    });
+    seqControls.appendChild(eraseAllStepsBtnSeq);
+    seqRight.appendChild(seqControls);
 
-    seqMain.appendChild(controlRow);
+    const seqGrid = document.createElement('div');
+    seqGrid.className = 'ytbm-seq-grid';
+    seqRight.appendChild(seqGrid);
 
-    seqLayout.appendChild(seqMain);
-    seqView.appendChild(seqLayout);
+    function rebuildPadGrid() {
+      padGrid.innerHTML = '';
+      padSlots.forEach((slot, i) => {
+        const padBtn = document.createElement('button');
+        padBtn.className = 'touch-pad-btn cardy';
+        padBtn.innerHTML = `<div class="touch-pad-label">${slot.label}</div><div class="touch-pad-sub">${getSampleLabel(slot)}</div>`;
+        padBtn.addEventListener('click', () => {
+          currentPad = i;
+          triggerPadCue(i);
+          updateInspector();
+          rebuildSequencerGrid();
+        });
+        padGrid.appendChild(padBtn);
+      });
+    }
+
+    function rebuildSeqPadGrid() {
+      seqPadGrid.innerHTML = '';
+      padSlots.forEach((slot, i) => {
+        const b = document.createElement('button');
+        b.className = 'touch-pad-btn compact';
+        b.innerHTML = `<div class="touch-pad-label">${slot.label}</div><div class="touch-pad-sub">${getSampleLabel(slot)}</div>`;
+        b.addEventListener('click', () => { currentPad = i; triggerPadCue(i); updateInspector(); rebuildSequencerGrid(); });
+        seqPadGrid.appendChild(b);
+      });
+    }
+
+    let stepButtons = [];
+    function rebuildSequencerGrid() {
+      seqGrid.innerHTML = '';
+      stepButtons = [];
+      padSlots.forEach((slot, row) => {
+        const lane = document.createElement('div');
+        lane.className = 'ytbm-seq-lane';
+        const label = document.createElement('div');
+        label.className = 'ytbm-seq-lane-label';
+        label.textContent = `${slot.label} · ${getSampleLabel(slot)}`;
+        lane.appendChild(label);
+        const rowWrap = document.createElement('div');
+        rowWrap.className = 'ytbm-seq-row';
+        const rowButtons = [];
+        for (let s = 0; s < 16; s++) {
+          const btn = document.createElement('button');
+          btn.className = 'ytbm-step';
+          btn.dataset.row = String(row);
+          btn.dataset.step = String(s);
+          btn.innerText = s + 1;
+          btn.classList.toggle('active', padSequencers[row]?.[s]);
+          btn.addEventListener('click', () => toggleStep(row, s));
+          rowWrap.appendChild(btn);
+          rowButtons.push(btn);
+        }
+        lane.appendChild(rowWrap);
+        seqGrid.appendChild(lane);
+        stepButtons.push(rowButtons);
+      });
+      updateInspector();
+    }
+
+    function updateInspector() {
+      const meta = padSlots[currentPad] || { label: `Pad ${currentPad + 1}` };
+      const el = inspector.querySelector('#padInspectorBody');
+      if (el) el.textContent = `${meta.label} • ${getSampleLabel(meta)} · Cue ${(currentPad === 9 ? '0' : currentPad + 1)}`;
+      laneLabel.textContent = `Editing: ${meta.label}`;
+      stepButtons.forEach((rowBtns, rowIdx) => {
+        rowBtns.forEach((btn, stepIdx) => {
+          const active = padSequencers[rowIdx]?.[stepIdx];
+          btn.classList.toggle('active', active);
+        });
+      });
+    }
+
+    function rebuildTouchViews() {
+      refreshPadSlots();
+      rebuildPadGrid();
+      rebuildSeqPadGrid();
+      rebuildSequencerGrid();
+      updateCueBar();
+    }
+
+    function toggleStep(row, stepIndex) {
+      padSequencers[row][stepIndex] = !padSequencers[row][stepIndex];
+      if (row === currentPad) updateInspector();
+      else stepButtons[row][stepIndex].classList.toggle('active', padSequencers[row][stepIndex]);
+    }
+
+    let seqInterval = null;
+    let seqStep = 0;
+    function startSequencer() {
+      if (seqInterval) return;
+      sequencerPlaying = true;
+      const intervalMs = (60 / sequencerBPM) * 1000 / 4; // 16th grid
+      seqInterval = setInterval(() => {
+        padSlots.forEach((_, row) => {
+          if (padSequencers[row]?.[seqStep]) triggerPadCue(row);
+        });
+        highlightColumn(seqStep);
+        seqStep = (seqStep + 1) % 16;
+      }, intervalMs);
+    }
+
+    function stopSequencer() {
+      sequencerPlaying = false;
+      if (seqInterval) clearInterval(seqInterval);
+      seqInterval = null;
+      highlightColumn(-1);
+    }
+
+    function highlightColumn(col) {
+      stepButtons.forEach(row => {
+        row.forEach((btn, idx) => {
+          btn.classList.toggle('playhead', idx === col);
+        });
+      });
+    }
+
+    touchPopup._rebuildViews = rebuildTouchViews;
+    touchPopup._startSequencer = startSequencer;
+    touchPopup._stopSequencer = stopSequencer;
+    touchPopup._updateInspector = updateInspector;
 
     document.body.appendChild(touchPopup);
     makeOverlayDraggable(touchPopup, header);
     currentPad = 0;
-    updateCueBar();
-    updateSequencerUI();
+    rebuildTouchViews();
   }
 
-// Helper to make overlays draggable
+  // Helper to make overlays draggable
   function makeOverlayDraggable(overlay, handle) {
     let offsetX = 0, offsetY = 0, dragging = false;
     handle.addEventListener("mousedown", e => {
       dragging = true;
-      let rect = overlay.getBoundingClientRect();
+      const rect = overlay.getBoundingClientRect();
       offsetX = e.clientX - rect.left;
       offsetY = e.clientY - rect.top;
       document.body.style.userSelect = "none";
     });
-    document.addEventListener("mousemove", e => { if (!dragging) return; overlay.style.left = (e.clientX - offsetX) + "px"; overlay.style.top = (e.clientY - offsetY) + "px"; });
+    document.addEventListener("mousemove", e => {
+      if (!dragging) return;
+      overlay.style.left = (e.clientX - offsetX) + "px";
+      overlay.style.top = (e.clientY - offsetY) + "px";
+    });
     document.addEventListener("mouseup", () => { dragging = false; document.body.style.userSelect = ""; });
   }
-  
-  // Update sequencer UI for current pad
-  function updateSequencerUI() {
-    const stepRow = document.getElementById("stepRow");
-    if (!stepRow) return;
-    const steps = padSequencers[currentPad];
-    Array.from(stepRow.children).forEach((btn, index) => {
-      btn.classList.toggle('active', steps[index]);
-    });
-    const laneLabel = document.querySelector('.ytbm-seq-lane-label');
-    if (laneLabel) {
-      const meta = padSlots[currentPad] || { label: `Pad ${currentPad + 1}` };
-      const sampleInfo = meta.type ? ` • ${getSampleLabel(meta)}` : '';
-      laneLabel.textContent = `Editing: ${meta.label}${sampleInfo}`;
+
+  function rebuildTouchViews() {
+    if (!touchPopup || typeof touchPopup._rebuildViews !== 'function') return;
+    touchPopup._rebuildViews();
+  }
+
+  // Map pad presses to the actual drum/sample players
+  function playSamplePad(padIndex) {
+    const slot = padSlots[padIndex];
+    if (slot && typeof slot.play === 'function') {
+      slot.play();
+      return;
+    }
+    playSample('kick');
+  }
+
+  function triggerPadCue(padIndex) {
+    playSamplePad?.(padIndex);
+    const vid = getVideoElement();
+    const cueKey = (padIndex === 9) ? "0" : String(padIndex + 1);
+    if (vid && cuePoints[cueKey] !== undefined) {
+      selectedCueKey = cueKey;
+      clearSuperKnobHistory();
+      safeSeekVideo(null, cuePoints[cueKey]);
     }
   }
-  
-  // Toggle a step on/off for current pad
-  function toggleStep(stepIndex) {
-    if (currentPad === null) return;
-    padSequencers[currentPad][stepIndex] = !padSequencers[currentPad][stepIndex];
-    updateSequencerUI();
-  }
-  
-  // Start all sequencers for all pads concurrently
+
+  // Sequencer transport wrappers for keyboard/MIDI hooks
   function startSequencer() {
-    if (sequencerPlaying) return;
-    sequencerPlaying = true;
-    startAllSequencers();
-    highlightCurrentStep(padSequencerSteps[currentPad]);
+    if (touchPopup && typeof touchPopup._startSequencer === 'function') {
+      touchPopup._startSequencer();
+    }
   }
-  
+
   function stopSequencer() {
-    sequencerPlaying = false;
-    stopAllSequencers();
-    clearStepHighlights();
-  }
-  
-
-// Map pad presses to the actual drum/sample players
-function playSamplePad(padIndex) {
-  const slot = padSlots[padIndex];
-  if (slot && typeof slot.play === 'function') {
-    slot.play();
-    return;
-  }
-  playSample('kick');
-}
-
-function triggerPadCue(padIndex) {
-  // 1 – fire the one‑shot sample assigned to this pad (if any)
-  playSamplePad?.(padIndex);
-
-  // 2 – jump to the linked cue using the cross‑fade helper
-  const vid = getVideoElement();
-  const cueKey = (padIndex === 9) ? "0" : String(padIndex + 1);
-  if (vid && cuePoints[cueKey] !== undefined) {
-    selectedCueKey = cueKey;
-    clearSuperKnobHistory();
-    safeSeekVideo(null, cuePoints[cueKey]);  // routes into jumpToCue()
-  }
-}
-  
-  // Highlight current step in UI
-  function highlightCurrentStep(stepIndex) {
-    const stepRow = document.getElementById("stepRow");
-    if (!stepRow) return;
-    Array.from(stepRow.children).forEach((btn, index) => {
-      btn.style.outline = (index === stepIndex) ? "2px solid yellow" : "none";
-    });
-  }
-  
-  // Clear step highlights
-  function clearStepHighlights() {
-    const stepRow = document.getElementById("stepRow");
-    if (!stepRow) return;
-    Array.from(stepRow.children).forEach(btn => { btn.style.outline = "none"; });
-  }
-  
-  // Start sequencers for all pads
-  function startAllSequencers() {
-    const intervalTime = (60 / sequencerBPM) * 1000;
-    for (let padIndex = 0; padIndex < padSequencers.length; padIndex++) {
-      if (padSequencerIntervals[padIndex] !== null) continue;
-      padSequencerSteps[padIndex] = 0;
-      padSequencerIntervals[padIndex] = setInterval(() => {
-        if (padSequencers[padIndex][padSequencerSteps[padIndex]]) {
-          triggerPadCue(padIndex);
-        }
-        if (padIndex === currentPad) {
-          highlightCurrentStep(padSequencerSteps[padIndex]);
-        }
-        padSequencerSteps[padIndex] = (padSequencerSteps[padIndex] + 1) % 16;
-      }, intervalTime);
+    if (touchPopup && typeof touchPopup._stopSequencer === 'function') {
+      touchPopup._stopSequencer();
     }
-    console.log("All pad sequencers started.");
   }
-  
-  // Stop all pad sequencers
-  function stopAllSequencers() {
-    for (let i = 0; i < padSequencerIntervals.length; i++) {
-      if (padSequencerIntervals[i] !== null) {
-        clearInterval(padSequencerIntervals[i]);
-        padSequencerIntervals[i] = null;
-      }
-    }
-    console.log("All pad sequencers stopped.");
-  }
-  
+
   /**************************************
    * Keyboard & MIDI shortcuts for Sequencer & Touch Popup
    **************************************/
@@ -3867,161 +3812,152 @@ let instrumentPresets = [
     name: 'Velvet Sub',
     color: PRESET_COLORS[0],
     oscillator: 'sine',
-    filter: 120,
+    filter: 140,
     q: 1.2,
-    drive: 0.1,
-    glide: 0.12,
+    drive: 0.12,
+    glide: 0.14,
     pan: 0,
-    env: { a: 0.004, d: 0.2, s: 0.9, r: 0.28 },
-    filterEnv: { amount: 0.65, attack: 0.01, decay: 0.24 },
+    env: { a: 0.003, d: 0.24, s: 0.92, r: 0.32 },
+    filterEnv: { amount: 0.6, attack: 0.01, decay: 0.22 },
     engine: 'analog',
     mode: 'legato',
     filterType: 'lowpass',
-    subLevel: 0.62,
+    subLevel: 0.68,
+    noise: 0,
     volume: 0.22,
     compThresh: -22,
     limitThresh: -4,
     tune: 0
   },
   {
-    name: 'BoomBap Thump',
+    name: 'BoomBap Smoke',
     color: PRESET_COLORS[1],
     oscillator: 'sawtooth',
-    filter: 180,
-    q: 1.6,
-    drive: 0.34,
+    filter: 190,
+    q: 1.4,
+    drive: 0.3,
     glide: 0.05,
-    pan: -0.03,
-    env: { a: 0.006, d: 0.18, s: 0.76, r: 0.24 },
-    filterEnv: { amount: 0.45, attack: 0.006, decay: 0.18 },
+    pan: -0.06,
+    env: { a: 0.006, d: 0.22, s: 0.78, r: 0.28 },
+    filterEnv: { amount: 0.48, attack: 0.008, decay: 0.22 },
     engine: 'analog',
     mode: 'mono',
     filterType: 'lowpass',
-    subLevel: 0.38,
+    subLevel: 0.42,
+    noise: 0.02,
     volume: 0.24,
     compThresh: -18,
     limitThresh: -3,
-    tune: 0
+    tune: -1
   },
   {
-    name: 'Trap 808 Glide',
+    name: 'Trap 808 Glide Pro',
     color: PRESET_COLORS[2],
     oscillator: 'sine',
     filter: 90,
     q: 0.9,
-    drive: 0.24,
-    glide: 0.26,
+    drive: 0.26,
+    glide: 0.32,
     pan: 0,
-    env: { a: 0.003, d: 0.42, s: 0.98, r: 0.66 },
-    filterEnv: { amount: 0.5, attack: 0.004, decay: 0.34 },
+    env: { a: 0.002, d: 0.46, s: 0.98, r: 0.7 },
+    filterEnv: { amount: 0.52, attack: 0.004, decay: 0.34 },
     engine: 'analog',
     mode: 'legato',
     filterType: 'lowpass',
-    subLevel: 0.7,
-    volume: 0.21,
+    subLevel: 0.74,
+    noise: 0,
+    volume: 0.23,
     compThresh: -22,
     limitThresh: -4,
     tune: 0
   },
   {
-    name: 'Square Dirt',
+    name: 'Future Bass Hover',
     color: PRESET_COLORS[3],
-    oscillator: 'square',
-    filter: 240,
-    q: 1.1,
-    drive: 0.22,
+    oscillator: 'bright',
+    wavetableB: 'gloss',
+    wavetableMix: 0.55,
+    filter: 420,
+    q: 1.4,
+    drive: 0.18,
     glide: 0.08,
-    pan: 0.05,
-    env: { a: 0.01, d: 0.2, s: 0.72, r: 0.32 },
-    filterEnv: { amount: 0.42, attack: 0.01, decay: 0.2 },
-    engine: 'analog',
-    mode: 'mono',
-    filterType: 'highpass',
-    subLevel: 0.36,
+    pan: 0.02,
+    env: { a: 0.012, d: 0.2, s: 0.74, r: 0.42 },
+    filterEnv: { amount: 0.48, attack: 0.012, decay: 0.2 },
+    engine: 'wavetable',
+    mode: 'poly',
+    filterType: 'lowpass',
+    subLevel: 0.4,
+    noise: 0.02,
     volume: 0.23,
     compThresh: -19,
     limitThresh: -3,
     tune: 0
   },
   {
-    name: 'IDM Carrier',
+    name: 'IDM Carrier Edge',
     color: PRESET_COLORS[4],
     oscillator: 'sine',
-    filter: 310,
-    q: 1.4,
-    drive: 0.18,
-    glide: 0.06,
+    filter: 320,
+    q: 1.5,
+    drive: 0.2,
+    glide: 0.07,
     pan: 0,
-    env: { a: 0.01, d: 0.14, s: 0.68, r: 0.32 },
-    filterEnv: { amount: 0.32, attack: 0.01, decay: 0.16 },
+    env: { a: 0.01, d: 0.16, s: 0.7, r: 0.32 },
+    filterEnv: { amount: 0.36, attack: 0.01, decay: 0.18 },
     engine: 'fm',
     mode: 'mono',
-    fmRatio: 2.5,
-    fmIndex: 126,
+    fmRatio: 2.6,
+    fmIndex: 128,
     filterType: 'lowpass',
+    subLevel: 0.22,
+    noise: 0.01,
     volume: 0.22,
     compThresh: -20,
     limitThresh: -3,
     tune: 0
   },
   {
-    name: 'Metallic Edge',
+    name: 'Metallic FM Slice',
     color: PRESET_COLORS[5],
     oscillator: 'sine',
-    filter: 270,
-    q: 1.2,
-    drive: 0.2,
-    glide: 0.04,
-    pan: -0.04,
-    env: { a: 0.009, d: 0.2, s: 0.65, r: 0.38 },
-    filterEnv: { amount: 0.38, attack: 0.012, decay: 0.2 },
+    filter: 280,
+    q: 1.3,
+    drive: 0.22,
+    glide: 0.05,
+    pan: 0,
+    env: { a: 0.01, d: 0.22, s: 0.68, r: 0.32 },
+    filterEnv: { amount: 0.4, attack: 0.012, decay: 0.22 },
     engine: 'fm',
     mode: 'mono',
     fmRatio: 3.2,
-    fmIndex: 92,
+    fmIndex: 96,
     filterType: 'bandpass',
+    subLevel: 0.18,
+    noise: 0.02,
     volume: 0.21,
     compThresh: -20,
     limitThresh: -3,
     tune: 0
   },
   {
-    name: 'Future Glide',
+    name: 'Wavetable Surge',
     color: PRESET_COLORS[6],
-    oscillator: 'bright',
-    wavetableB: 'hollow',
-    wavetableMix: 0.5,
-    filter: 360,
-    q: 1.5,
-    drive: 0.16,
-    glide: 0.08,
-    pan: 0.02,
-    env: { a: 0.014, d: 0.18, s: 0.74, r: 0.4 },
-    filterEnv: { amount: 0.44, attack: 0.012, decay: 0.18 },
-    engine: 'wavetable',
-    mode: 'mono',
-    filterType: 'lowpass',
-    volume: 0.22,
-    compThresh: -19,
-    limitThresh: -3,
-    tune: 0
-  },
-  {
-    name: 'IDM Warp',
-    color: PRESET_COLORS[7],
     oscillator: 'organ',
     wavetableB: 'grit',
     wavetableMix: 0.62,
-    filter: 400,
+    filter: 380,
     q: 1.7,
-    drive: 0.2,
-    glide: 0.05,
+    drive: 0.18,
+    glide: 0.06,
     pan: -0.02,
-    env: { a: 0.016, d: 0.18, s: 0.62, r: 0.42 },
-    filterEnv: { amount: 0.5, attack: 0.016, decay: 0.2 },
+    env: { a: 0.015, d: 0.2, s: 0.66, r: 0.4 },
+    filterEnv: { amount: 0.5, attack: 0.014, decay: 0.2 },
     engine: 'wavetable',
     mode: 'poly',
     filterType: 'lowpass',
+    subLevel: 0.36,
+    noise: 0.02,
     volume: 0.23,
     compThresh: -18,
     limitThresh: -3,
@@ -4029,43 +3965,47 @@ let instrumentPresets = [
   },
   {
     name: 'Sampler Punch',
-    color: PRESET_COLORS[8],
+    color: PRESET_COLORS[7],
     oscillator: 'sine',
     filter: 520,
-    q: 0.8,
-    drive: 0.12,
+    q: 0.9,
+    drive: 0.14,
     glide: 0.06,
     pan: 0,
     env: { a: 0.008, d: 0.24, s: 0.78, r: 0.44 },
-    filterEnv: { amount: 0.3, attack: 0.012, decay: 0.22 },
+    filterEnv: { amount: 0.32, attack: 0.012, decay: 0.22 },
     engine: 'sampler',
     mode: 'mono',
     filterType: 'lowpass',
-    volume: 0.2,
+    subLevel: 0.28,
+    noise: 0,
+    volume: 0.21,
     compThresh: -20,
     limitThresh: -3,
     sample: null,
     tune: 0
   },
   {
-    name: 'Granular IDM',
-    color: PRESET_COLORS[9],
-    oscillator: 'sine',
-    filter: 360,
-    q: 1.2,
+    name: 'Granular IDM Cloud',
+    color: PRESET_COLORS[8],
+    oscillator: 'triangle',
+    filter: 340,
+    q: 1.3,
     drive: 0.18,
-    glide: 0.07,
+    glide: 0.08,
     pan: 0.01,
     env: { a: 0.01, d: 0.22, s: 0.82, r: 0.4 },
-    filterEnv: { amount: 0.4, attack: 0.012, decay: 0.22 },
+    filterEnv: { amount: 0.42, attack: 0.012, decay: 0.22 },
     engine: 'granular',
-    mode: 'mono',
+    mode: 'poly',
     grainSize: 0.08,
-    grainDensity: 16,
-    grainSpread: 0.22,
+    grainDensity: 18,
+    grainSpread: 0.28,
     grainJitter: 0.12,
-    filterType: 'lowpass',
-    volume: 0.21,
+    filterType: 'bandpass',
+    subLevel: 0.24,
+    noise: 0.02,
+    volume: 0.22,
     compThresh: -20,
     limitThresh: -3,
     sample: null,
@@ -4075,17 +4015,18 @@ let instrumentPresets = [
     name: 'Noise Cutter',
     color: PRESET_COLORS[0],
     oscillator: 'triangle',
-    filter: 440,
-    q: 1.6,
+    filter: 420,
+    q: 1.8,
     drive: 0.22,
-    glide: 0.03,
+    glide: 0.04,
     pan: 0,
-    env: { a: 0.006, d: 0.14, s: 0.64, r: 0.22 },
-    filterEnv: { amount: 0.36, attack: 0.01, decay: 0.14 },
+    env: { a: 0.008, d: 0.18, s: 0.6, r: 0.32 },
+    filterEnv: { amount: 0.34, attack: 0.01, decay: 0.18 },
     engine: 'analog',
     mode: 'poly',
     filterType: 'bandpass',
-    subLevel: 0.28,
+    subLevel: 0.24,
+    noise: 0.04,
     volume: 0.2,
     compThresh: -20,
     limitThresh: -3,
@@ -4098,85 +4039,53 @@ let instrumentPresets = [
     filter: 300,
     q: 0.9,
     drive: 0.14,
-    glide: 0.09,
+    glide: 0.1,
     pan: 0,
     env: { a: 0.01, d: 0.2, s: 0.76, r: 0.36 },
     filterEnv: { amount: 0.32, attack: 0.012, decay: 0.24 },
     engine: 'sampler',
     mode: 'poly',
     filterType: 'lowpass',
-    volume: 0.23,
+    subLevel: 0.32,
+    noise: 0,
+    volume: 0.22,
     compThresh: -19,
     limitThresh: -3,
     sample: null,
     tune: 0
   },
   {
-    name: 'Future Bass Lift',
+    name: 'IDM Texture Pad',
     color: PRESET_COLORS[2],
     oscillator: 'organ',
-    wavetableB: 'gloss',
-    wavetableMix: 0.55,
-    filter: 520,
-    q: 1.3,
-    drive: 0.18,
-    glide: 0.06,
-    pan: 0.04,
-    env: { a: 0.016, d: 0.22, s: 0.7, r: 0.48 },
-    filterEnv: { amount: 0.5, attack: 0.016, decay: 0.22 },
-    engine: 'wavetable',
-    mode: 'poly',
-    filterType: 'lowpass',
-    volume: 0.24,
-    compThresh: -18,
-    limitThresh: -3,
-    tune: 0
-  },
-  {
-    name: 'BoomBap Dust',
-    color: PRESET_COLORS[3],
-    oscillator: 'sawtooth',
-    filter: 180,
-    q: 1.1,
-    drive: 0.26,
-    glide: 0.04,
-    pan: -0.06,
-    env: { a: 0.007, d: 0.18, s: 0.74, r: 0.32 },
-    filterEnv: { amount: 0.42, attack: 0.008, decay: 0.18 },
-    engine: 'analog',
-    mode: 'mono',
-    filterType: 'lowpass',
-    subLevel: 0.34,
-    volume: 0.23,
-    compThresh: -19,
-    limitThresh: -3,
-    tune: -2
-  },
-  {
-    name: 'IDM Noise Lab',
-    color: PRESET_COLORS[4],
-    oscillator: 'triangle',
-    filter: 420,
-    q: 1.8,
-    drive: 0.22,
+    wavetableB: 'hollow',
+    wavetableMix: 0.6,
+    filter: 480,
+    q: 1.2,
+    drive: 0.16,
     glide: 0.05,
-    pan: 0,
-    env: { a: 0.012, d: 0.28, s: 0.55, r: 0.6 },
-    filterEnv: { amount: 0.6, attack: 0.012, decay: 0.3 },
+    pan: 0.04,
+    env: { a: 0.02, d: 0.28, s: 0.68, r: 0.5 },
+    filterEnv: { amount: 0.48, attack: 0.02, decay: 0.26 },
     engine: 'granular',
     mode: 'poly',
     grainSize: 0.06,
-    grainDensity: 18,
-    grainSpread: 0.35,
-    grainJitter: 0.18,
-    filterType: 'bandpass',
-    volume: 0.22,
+    grainDensity: 20,
+    grainSpread: 0.32,
+    grainJitter: 0.16,
+    filterType: 'lowpass',
+    subLevel: 0.22,
+    noise: 0.03,
+    volume: 0.23,
     compThresh: -18,
     limitThresh: -3,
     sample: null,
     tune: 0
   }
 ];
+
+
+function randomizeInstrumentPreset()];
 
 
 function randomizeInstrumentPreset() {
@@ -4345,15 +4254,18 @@ function createInstrumentVoice(cfg, midiNote, freqRatio) {
   const baseCutoff = cfg.filter || 400;
   filter.frequency.value = baseCutoff;
   filter.Q.value = cfg.q || 0.8;
-  const driveStage = createDriveStage(cfg.drive || 0);
-  const g = audioContext.createGain();
-  g.gain.value = 0;
+
+  const driveStage = createDriveStage(cfg.drive || 0.15);
+  const amp = audioContext.createGain();
+  amp.gain.value = 0;
+  const panner = audioContext.createStereoPanner();
+  panner.pan.value = cfg.pan || 0;
   filter.connect(driveStage.input);
-  driveStage.output.connect(g).connect(instrumentGain);
+  driveStage.output.connect(amp).connect(panner).connect(instrumentGain);
 
   const voice = {
     filter,
-    g,
+    g: amp,
     env,
     filterBase: baseCutoff,
     engine: cfg.engine,
@@ -4361,10 +4273,39 @@ function createInstrumentVoice(cfg, midiNote, freqRatio) {
     sources: [],
     fmRatio: cfg.fmRatio || 0,
     glide: cfg.glide || 0,
-    preset: null
+    preset: null,
+    panNode: panner
   };
 
   const targetHz = midiToHz(midiNote) * freqRatio;
+
+  function addSub(level = 0) {
+    if (!level) return;
+    const sub = audioContext.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.value = targetHz / 2;
+    const subGain = audioContext.createGain();
+    subGain.gain.value = level;
+    sub.connect(subGain).connect(filter);
+    sub.start();
+    voice.oscillators.push(sub);
+  }
+
+  function addNoise(amount = 0) {
+    if (!amount) return;
+    const bufferSize = 2 * audioContext.sampleRate;
+    const noiseBuffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1) * 0.6;
+    const noise = audioContext.createBufferSource();
+    noise.buffer = noiseBuffer;
+    noise.loop = true;
+    const nGain = audioContext.createGain();
+    nGain.gain.value = amount;
+    noise.connect(nGain).connect(filter);
+    noise.start();
+    voice.sources.push(noise);
+  }
 
   if (cfg.engine === 'sampler' && cfg.sample) {
     const src = audioContext.createBufferSource();
@@ -4373,9 +4314,11 @@ function createInstrumentVoice(cfg, midiNote, freqRatio) {
     src.connect(filter);
     src.start();
     voice.sources.push(src);
+    addSub(cfg.subLevel || 0);
   } else if (cfg.engine === 'granular') {
     const buf = cfg.sample || defaultSampleBuffer;
     if (buf) scheduleGranular(voice, buf, midiNote, freqRatio, cfg);
+    addSub(cfg.subLevel || 0.4);
   } else if (cfg.engine === 'fm') {
     const carrier = audioContext.createOscillator();
     carrier.type = cfg.oscillator || 'sine';
@@ -4387,7 +4330,7 @@ function createInstrumentVoice(cfg, midiNote, freqRatio) {
     const idx = cfg.fmIndex || 80;
     mod.frequency.value = targetHz * ratio;
     modGain.gain.setValueAtTime(idx, audioContext.currentTime);
-    modGain.gain.exponentialRampToValueAtTime(Math.max(4, idx * 0.28), audioContext.currentTime + Math.max(0.08, env.a + env.d));
+    modGain.gain.exponentialRampToValueAtTime(Math.max(6, idx * 0.35), audioContext.currentTime + Math.max(0.06, env.a + env.d));
     mod.connect(modGain).connect(carrier.frequency);
     mod.start();
     carrier.connect(filter);
@@ -4395,6 +4338,8 @@ function createInstrumentVoice(cfg, midiNote, freqRatio) {
     voice.modOsc = mod;
     voice.oscillators.push(carrier);
     voice.fmRatio = ratio;
+    addSub(cfg.subLevel || 0.2);
+    addNoise(cfg.noise || 0);
   } else if (cfg.engine === 'wavetable') {
     const mix = cfg.wavetableMix ?? 0.5;
     const oscA = audioContext.createOscillator();
@@ -4419,76 +4364,33 @@ function createInstrumentVoice(cfg, midiNote, freqRatio) {
     oscB.start();
     voice.oscillators.push(oscA, oscB);
     voice.crossfade = { a: gainA, b: gainB };
+    addSub(cfg.subLevel || 0.35);
+    addNoise(cfg.noise || 0.03);
   } else {
-    const main = audioContext.createOscillator();
-    main.type = cfg.oscillator || 'sawtooth';
-    main.frequency.value = targetHz;
-    main.detune.value = (Math.random() - 0.5) * 8;
-    instLfoGain.connect(main.frequency);
-
-    const partner = audioContext.createOscillator();
-    partner.type = cfg.oscillator || 'sawtooth';
-    partner.frequency.value = targetHz;
-    partner.detune.value = 7;
-    instLfoGain.connect(partner.frequency);
-
-    const sub = audioContext.createOscillator();
-    sub.type = 'square';
-    sub.frequency.value = targetHz / 2;
-    instLfoGain.connect(sub.frequency);
-
-    const subGain = audioContext.createGain();
-    subGain.gain.value = cfg.subLevel ?? 0.35;
-    const mainGain = audioContext.createGain();
-    mainGain.gain.value = 0.58;
-    const partnerGain = audioContext.createGain();
-    partnerGain.gain.value = 0.42;
-
-    main.connect(mainGain).connect(filter);
-    partner.connect(partnerGain).connect(filter);
-    sub.connect(subGain).connect(filter);
-
-    main.start();
-    partner.start();
-    sub.start();
-    voice.oscillators.push(main, partner, sub);
+    const osc1 = audioContext.createOscillator();
+    osc1.type = cfg.oscillator || 'sawtooth';
+    osc1.frequency.value = targetHz;
+    instLfoGain.connect(osc1.frequency);
+    const osc2 = audioContext.createOscillator();
+    osc2.type = cfg.oscillator || 'sawtooth';
+    osc2.frequency.value = targetHz;
+    osc2.detune.value = cfg.detune || -7;
+    instLfoGain.connect(osc2.frequency);
+    const osc1Gain = audioContext.createGain();
+    const osc2Gain = audioContext.createGain();
+    osc1Gain.gain.value = 0.7;
+    osc2Gain.gain.value = 0.6;
+    osc1.connect(osc1Gain).connect(filter);
+    osc2.connect(osc2Gain).connect(filter);
+    osc1.start();
+    osc2.start();
+    voice.oscillators.push(osc1, osc2);
+    addSub(cfg.subLevel || 0.5);
+    addNoise(cfg.noise || 0.02);
   }
 
   triggerEnvelope(voice, env, cfg.filterEnv);
   return voice;
-}
-
-function playInstrumentNote(midi) {
-  if (!audioContext || instrumentLayers.length === 0) return;
-  recordMidiEvent('instrument', midi);
-  const baseMidi = midi + instrumentTranspose;
-  const freqRatio = instrumentPitchRatio;
-
-  instrumentLayers.forEach(idx => {
-    const cfg = instrumentPresets[idx];
-    if (!cfg) return;
-    const targetMidi = baseMidi + (cfg.tune || 0);
-    const mode = cfg.mode || 'poly';
-
-    if ((mode === 'mono' || mode === 'legato') && cfg.engine !== 'sampler') {
-      const existing = instrumentMonoVoices[idx];
-      if (existing) {
-        moveVoiceToMidi(existing, midi);
-        glideVoiceFrequency(existing, midiToHz(targetMidi) * freqRatio, cfg.glide);
-        if (mode === 'legato') {
-          holdLegato(existing, cfg.env);
-        } else {
-          triggerEnvelope(existing, cfg.env, cfg.filterEnv);
-        }
-        return;
-      }
-    }
-
-    const voice = createInstrumentVoice(cfg, targetMidi, freqRatio);
-    voice.preset = idx;
-    registerVoice(midi, voice);
-    if (mode === 'mono' || mode === 'legato') instrumentMonoVoices[idx] = voice;
-  });
 }
 
 function stopInstrumentVoice(v) {
@@ -11328,7 +11230,7 @@ function buildInstrumentWindow() {
 
   const hero = document.createElement("div");
   hero.className = "nova-hero";
-  hero.innerHTML = `<div class="nova-title">Nova Forge</div><div class="nova-sub">Analog · FM · Wavetable · Sampler · Granular</div>`;
+  hero.innerHTML = `<div class="nova-title">Nova Atelier</div><div class="nova-sub">Analog · FM · Wavetable · Sampler · Granular</div>`;
   cw.appendChild(hero);
 
   const layout = document.createElement("div");
@@ -11982,6 +11884,7 @@ function buildInstrumentWindow() {
         decay: parseFloat(instrumentFilterEnvDecay.value)
       },
       subLevel: parseFloat(instrumentSubSlider.value),
+      noise: instrumentPresets[instrumentPreset]?.noise ?? 0,
       delay: parseFloat(instrumentDelaySlider.value),
       delayMix: parseFloat(instrumentDelayMixSlider.value),
       reverbMix: parseFloat(instrumentReverbMixSlider.value),
