@@ -5429,6 +5429,8 @@ async function triggerSidechainEnvelope(reason = 'tap') {
   ensureSidechainDefaults();
   if (!sidechainGain || !audioContext) return;
 
+  recordMidiEvent('sidechain', { reason });
+
   const now = audioContext.currentTime;
   const dur = sidechainEnvelopeDuration || 0.6;
   sidechainGain.gain.cancelScheduledValues(now);
@@ -8564,6 +8566,8 @@ function playMidiEvent(ev) {
     if (us) playUserSample(us);
   } else if (ev.type === 'instrument') {
     playInstrumentNote(ev.payload);
+  } else if (ev.type === 'sidechain') {
+    triggerSidechainEnvelope(ev.payload?.reason || 'midi');
   }
 }
 
