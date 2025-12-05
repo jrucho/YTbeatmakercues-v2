@@ -4085,7 +4085,6 @@ let instrumentPresets = [
 ];
 
 
-function randomizeInstrumentPreset()];
 
 
 function randomizeInstrumentPreset() {
