@@ -30,6 +30,7 @@
       "sounds/*",
       "sp303-compressor-worklet.js",
       "sp404-compressor-worklet.js",
+      "src/entrypoint.js",
       "worklets/cassette-processor-worklet.js",
       "worklets/loop-recorder-worklet.js",
       "worklets/vinyl-break-worklet.js",
