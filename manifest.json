@@ -22,7 +22,6 @@
       ],
       "all_frames": true,
       "js": ["content.js"],
-      "type": "module",
       "css": ["style.css"]
     }
   ],
