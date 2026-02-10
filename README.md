@@ -162,6 +162,8 @@ Holding the MIDI Shift note while pressing a loop note erases that loop.
 💬 DM on Instagram: [@owae.ga](https://instagram.com/owae.ga)  
 🎥 Video tutorial: [YouTube](https://youtu.be/1--CEtz9H_0)
 
+https://deepwiki.com/jrucho/YTbeatmakercues-v2
+
 📄 Manual [GoogleDoc](https://docs.google.com/document/d/1-36AdsgzwXt7Mt-YsxxTY9NqxipxE-XvGeUNbLmTUCA/mobilebasic?fbclid=PAQ0xDSwK0OPNleHRuA2FlbQIxMAABp8W6y8O5IC8MR0UyQuGRNqEzNzCuUWRdAmEsF2-PToglY4jHIou6FDSq2F2j_aem_v9J-pyC1j4Uvl0vfl8PemA)
 ---
 
