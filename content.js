@@ -513,6 +513,10 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   const PLAY_PADDING = 0.02; // shorter scheduling for lower latency
   const LOOP_CROSSFADE = 0.001; // smoother boundaries without changing length
   const LOOP_COLORS = ['#0ff', '#f0f', '#ff0', '#fa0'];
+  const DEFAULT_MIDI_CUES = {
+    1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40, 0: 41,
+    a: 52, b: 53, c: 54, d: 55, e: 56, f: 57
+  };
   let cuePoints = {},
       sampleKeys = { kick: "é", hihat: "à", snare: "$" },
       // Additional extension-wide keystrokes that can be rebound:
@@ -553,7 +557,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
           pitchUp: 43,
           pitchMode: 72,
           sidechainTap: 25,
-          cues: { 1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40, 0: 41 },
+          cues: { ...DEFAULT_MIDI_CUES },
           looperA: 34,
           looperB: 60,
           looperC: 61,
@@ -913,6 +917,10 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   }
   if (superKnobRelativeEncoding !== 'binaryOffset' && superKnobRelativeEncoding !== 'twoComplement') {
     superKnobRelativeEncoding = 'auto';
+  }
+
+  function ensureDefaultMidiCueMappings() {
+    midiNotes.cues = Object.assign({}, DEFAULT_MIDI_CUES, midiNotes.cues || {});
   }
 
   // CLOCK
@@ -6870,19 +6878,22 @@ function pasteCuesFromLink() {
   }
 }
 
-function randomizeCuesInOneClick() {
+function randomizeCuesInOneClick(source = "keyboard") {
   const vid = getVideoElement();
   if (!vid || !vid.duration) return;
+  const isMidiSource = source === "midi";
+  const cueKeys = isMidiSource
+    ? ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "a", "b", "c", "d", "e", "f"]
+    : ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
   pushUndoState();
   const cues = [];
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < cueKeys.length; i++) {
     cues.push(Math.random() * vid.duration);
   }
   cues.sort((a, b) => a - b);
-  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
   cuePoints = {};
-  for (let i = 0; i < keys.length; i++) {
-    cuePoints[keys[i]] = cues[i];
+  for (let i = 0; i < cueKeys.length; i++) {
+    cuePoints[cueKeys[i]] = cues[i];
   }
   saveCuePointsToURL();
   updateCueMarkers();
@@ -9791,7 +9802,7 @@ function handleMIDIMessage(e) {
     }
   } else if (st === 144) {
         if (Number(note) === Number(midiNotes.randomCues)) {
-      randomizeCuesInOneClick();
+      randomizeCuesInOneClick("midi");
       return;
     }
     if (note === midiNotes.sidechainTap) {
@@ -11851,6 +11862,8 @@ function refreshSamplePackDropdown() {
 /**************************************
  * Mappings to Local Storage
  **************************************/
+ensureDefaultMidiCueMappings();
+
 async function loadMappingsFromLocalStorage() {
   let s = localStorage.getItem("ytbm_mappings");
   if (!s) return;
@@ -11874,6 +11887,7 @@ async function loadMappingsFromLocalStorage() {
       Object.assign(midiNotes, o.midiNotes);
       if (!midiNotes.cues) midiNotes.cues = {};
     }
+    ensureDefaultMidiCueMappings();
     if (o.activeSamplePackNames) {
       activeSamplePackNames = o.activeSamplePackNames;
     } else if (o.currentSamplePackName) {
@@ -12489,6 +12503,8 @@ if (typeof midiNotes !== "undefined" && midiNotes.randomCues !== undefined) {
         if ((typeof isModPressed !== "undefined" && isModPressed) ||
             (opts && opts.shift)) {
           suggestCuesFromTransients();
+        } else if (typeof randomizeCuesInOneClick === "function") {
+          randomizeCuesInOneClick("midi");
         } else {
           placeRandomCues();
         }
