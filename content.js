@@ -514,8 +514,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   const LOOP_CROSSFADE = 0.001; // smoother boundaries without changing length
   const LOOP_COLORS = ['#0ff', '#f0f', '#ff0', '#fa0'];
   const DEFAULT_MIDI_CUES = {
-    1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40, 0: 41,
-    a: 52, b: 53, c: 54, d: 55, e: 56, f: 57
+    1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40,
+    10: 41, 11: 52, 12: 53, 13: 54, 14: 55, 15: 56, 16: 57
   };
   let cuePoints = {},
       sampleKeys = { kick: "é", hihat: "à", snare: "$" },
@@ -920,7 +920,15 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   }
 
   function ensureDefaultMidiCueMappings() {
-    midiNotes.cues = Object.assign({}, DEFAULT_MIDI_CUES, midiNotes.cues || {});
+    const legacyCueMap = { "0": "10", a: "11", b: "12", c: "13", d: "14", e: "15", f: "16" };
+    const existingCues = Object.assign({}, midiNotes.cues || {});
+    Object.entries(legacyCueMap).forEach(([legacyKey, numericKey]) => {
+      if (existingCues[legacyKey] !== undefined && existingCues[numericKey] === undefined) {
+        existingCues[numericKey] = existingCues[legacyKey];
+      }
+      delete existingCues[legacyKey];
+    });
+    midiNotes.cues = Object.assign({}, DEFAULT_MIDI_CUES, existingCues);
   }
 
   // CLOCK
@@ -6883,7 +6891,7 @@ function randomizeCuesInOneClick(source = "keyboard") {
   if (!vid || !vid.duration) return;
   const isMidiSource = source === "midi";
   const cueKeys = isMidiSource
-    ? ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "a", "b", "c", "d", "e", "f"]
+    ? ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"]
     : ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
   pushUndoState();
   const cues = [];
@@ -10329,10 +10337,10 @@ function buildMIDIMapWindow() {
       <input data-midiname="sidechainTap" value="${escapeHtml(String(midiNotes.sidechainTap))}" type="number">
       <button data-detect="sidechainTap" class="detect-midi-btn">Detect</button>
     </div>
-    <h4>Cues (0..9)</h4>
+    <h4>Cues (1..16)</h4>
     <div class="midimap-cues">
   `;
-  for (let k of Object.keys(midiNotes.cues)) {
+  for (let k of Object.keys(midiNotes.cues).sort((a, b) => Number(a) - Number(b))) {
     out += `
       <div class="midimap-row">
         <label>Cue ${k}:</label>
