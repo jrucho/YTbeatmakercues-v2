@@ -919,16 +919,20 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     superKnobRelativeEncoding = 'auto';
   }
 
-  function ensureDefaultMidiCueMappings() {
+  function normalizeMidiCueMappings(cues = {}) {
     const legacyCueMap = { "0": "10", a: "11", b: "12", c: "13", d: "14", e: "15", f: "16" };
-    const existingCues = Object.assign({}, midiNotes.cues || {});
+    const normalized = Object.assign({}, cues || {});
     Object.entries(legacyCueMap).forEach(([legacyKey, numericKey]) => {
-      if (existingCues[legacyKey] !== undefined && existingCues[numericKey] === undefined) {
-        existingCues[numericKey] = existingCues[legacyKey];
+      if (normalized[legacyKey] !== undefined && normalized[numericKey] === undefined) {
+        normalized[numericKey] = normalized[legacyKey];
       }
-      delete existingCues[legacyKey];
+      delete normalized[legacyKey];
     });
-    midiNotes.cues = Object.assign({}, DEFAULT_MIDI_CUES, existingCues);
+    return Object.assign({}, DEFAULT_MIDI_CUES, normalized);
+  }
+
+  function ensureDefaultMidiCueMappings() {
+    midiNotes.cues = normalizeMidiCueMappings(midiNotes.cues);
   }
 
   // CLOCK
@@ -11394,6 +11398,16 @@ function loadMidiPresetsFromLocalStorage() {
   try {
     const raw = localStorage.getItem(MIDI_PRESET_STORAGE_KEY);
     midiPresets = raw ? JSON.parse(raw) : [];
+    midiPresets = midiPresets.map(p => {
+      if (!p || typeof p !== "object" || !p.config) return p;
+      return {
+        ...p,
+        config: {
+          ...p.config,
+          cues: normalizeMidiCueMappings(p.config.cues)
+        }
+      };
+    });
   } catch (err) {
     console.warn("Could not parse stored presets – cleared.", err);
     midiPresets = [];
@@ -11485,6 +11499,7 @@ function saveCurrentMidiMappingAsPreset(name) {
   if (!name) { alert("Preset needs a name."); return; }
 
   syncMidiNotesFromWindow();                       // NEW 🔄
+  ensureDefaultMidiCueMappings();
   const snapshot = JSON.parse(JSON.stringify(midiNotes));   // deep clone
   const idx      = midiPresets.findIndex(p => p.name === name);
 
@@ -11518,6 +11533,7 @@ function applyMidiPresetByName(name) {
   if (!preset) { alert(`Preset “${name}” was not found.`); return; }
 
   Object.assign(midiNotes, preset.config);         // apply mapping
+  ensureDefaultMidiCueMappings();
   saveMappingsToLocalStorage();                    // ← your existing util
   currentMidiPresetName = name;
 
