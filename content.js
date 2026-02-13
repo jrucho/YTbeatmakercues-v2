@@ -759,6 +759,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       lastClickTime = 0,
       isDoublePress = false,
       doublePressHoldStartTime = null,
+      audioRecordStartedOnPress = false,
       lastClickTimeVideo = 0,
       isDoublePressVideo = false,
       // Undo double-press
@@ -780,6 +781,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       shiftDownTime = 0,
       shiftUsedAsModifier = false,
       lastShiftTapTime = 0,
+      midiShiftTapLastOnTime = 0,
+      suppressShiftTapOnRelease = false,
       pitchDownInterval = null,
       pitchUpInterval = null,
       // Track last processed MIDI message to filter duplicates
@@ -820,6 +823,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       midiPressTimes = [],
       midiIsDoublePress = false,
       midiLastClickTime = 0,
+      midiRecordStartedOnPress = false,
       midiDoublePressHoldStartTime = null,
       midiPlaybackFlag = false,
       midiOverdubStartTimeouts = new Array(MAX_MIDI_LOOPS).fill(null),
@@ -8116,6 +8120,12 @@ function onLooperButtonMouseDown(e) {
     }
     return onMidiLooperButtonMouseDown();
   }
+
+  if (looperState === "idle" && !audioLoopBuffers[activeLoopIndex]) {
+    audioRecordStartedOnPress = true;
+    startRecording();
+  }
+
   const now = Date.now();
 
   // 1) Record this press time
@@ -8142,6 +8152,13 @@ function onLooperButtonMouseDown(e) {
 
 function onLooperButtonMouseUp() {
   if (useMidiLoopers) return onMidiLooperButtonMouseUp();
+  if (audioRecordStartedOnPress) {
+    audioRecordStartedOnPress = false;
+    pressTimes = [];
+    isDoublePress = false;
+    doublePressHoldStartTime = null;
+    return;
+  }
   // First check for triple press (3 quick presses within ~600ms)
   if (pressTimes.length === 3) {
     const tFirst = pressTimes[0];
@@ -8216,6 +8233,11 @@ function singlePressAudioLooperAction() {
 }
 
 function onMidiLooperButtonMouseDown() {
+  const idx = activeMidiLoopIndex;
+  if ((midiLoopStates[idx] === 'idle' || midiLoopStates[idx] === 'stopped') && !midiLoopEvents[idx].length) {
+    midiRecordStartedOnPress = true;
+    startMidiLoopRecording(idx);
+  }
   const now = Date.now();
   midiPressTimes.push(now);
   const cutoff = now - clickDelay;
@@ -8227,6 +8249,14 @@ function onMidiLooperButtonMouseDown() {
 }
 
 function onMidiLooperButtonMouseUp() {
+  if (midiRecordStartedOnPress) {
+    midiRecordStartedOnPress = false;
+    midiPressTimes = [];
+    midiIsDoublePress = false;
+    midiDoublePressHoldStartTime = null;
+    midiMultiLaunch = false;
+    return;
+  }
   if (midiPressTimes.length === 3) {
     const tFirst = midiPressTimes[0];
     const tLast = midiPressTimes[2];
@@ -9935,15 +9965,22 @@ function handleMIDIMessage(e) {
 
   if (note === midiNotes.shift) {
     if (command === 144 && e.data[2] > 0) {
+      const nowTap = Date.now();
+      if (nowTap - midiShiftTapLastOnTime < clickDelay) {
+        handleShiftTap();
+        suppressShiftTapOnRelease = true;
+      }
+      midiShiftTapLastOnTime = nowTap;
       isModPressed = true;
-      shiftDownTime = Date.now();
+      shiftDownTime = nowTap;
       shiftUsedAsModifier = false;
     } else if (command === 128 || (command === 144 && e.data[2] === 0)) {
       isModPressed = false;
       const holdMs = Date.now() - shiftDownTime;
-      if (!shiftUsedAsModifier && holdMs < clickDelay) {
+      if (!suppressShiftTapOnRelease && !shiftUsedAsModifier && holdMs < clickDelay) {
         handleShiftTap();
       }
+      suppressShiftTapOnRelease = false;
     }
     return;
 
