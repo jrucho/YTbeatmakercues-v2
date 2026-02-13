@@ -6301,16 +6301,25 @@ function playSingleLoop(index, startTime = null, offset = 0) {
   });
 }
 
+function getSyncedOffsetSeconds(durationSec, whenSec) {
+  if (!durationSec || !clock || !Number.isFinite(clock.startTime)) return 0;
+  const elapsed = whenSec - clock.startTime;
+  return ((elapsed % durationSec) + durationSec) % durationSec;
+}
+
 function schedulePlayLoop(index) {
   ensureAudioContext().then(() => {
     if (!audioContext) return;
     if (pendingStopTimeouts[index]) { clearTimeout(pendingStopTimeouts[index]); pendingStopTimeouts[index] = null; }
     let when = audioContext.currentTime + PLAY_PADDING;
     const hasOtherSyncAnchor = loopPlaying.some((isPlaying, i) => i !== index && isAudioLoopEffectivelyPlaying(i)) || midiLoopPlaying.some(Boolean);
+    let offset = 0;
     if (hasOtherSyncAnchor && clock.isRunning) {
       when = getNextBarTime(when);
+      const dur = loopDurations[index] || baseLoopDuration;
+      offset = getSyncedOffsetSeconds(dur, when);
     }
-    playSingleLoop(index, when, 0);
+    playSingleLoop(index, when, offset);
     if (masterLoopIndex === null) masterLoopIndex = index;
   });
 }
@@ -8168,8 +8177,8 @@ function singlePressAudioLooperAction() {
     if (audioLoopBuffers[activeLoopIndex]) {
       looperState = "playing";
       loopPlaying[activeLoopIndex] = true;
-      if (loopSources.some(Boolean)) {
-        playNewLoop(activeLoopIndex);
+      if (loopSources.some(Boolean) || midiLoopPlaying.some(Boolean)) {
+        scheduleResumeLoop(activeLoopIndex);
       } else {
         schedulePlayLoop(activeLoopIndex);
       }
@@ -8187,7 +8196,7 @@ function singlePressAudioLooperAction() {
       startRecording();
     } else if (!loopPlaying[activeLoopIndex]) {
       loopPlaying[activeLoopIndex] = true;
-      if (loopSources.some(Boolean)) {
+      if (loopSources.some(Boolean) || midiLoopPlaying.some(Boolean)) {
         scheduleResumeLoop(activeLoopIndex);
       } else {
         schedulePlayLoop(activeLoopIndex);
@@ -8256,7 +8265,7 @@ function singlePressMidiLooperAction() {
     }
     if (midiLoopEvents[idx].length) {
       midiLoopStates[idx] = 'playing';
-      playMidiLoop(idx);
+      resumeMidiLoop(idx);
     } else {
       startMidiLoopRecording(idx);
     }
