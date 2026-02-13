@@ -246,6 +246,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   let outputDeviceSelect = null;
   let inputDeviceSelect = null;
   let monitorInputSelect = null;
+  let midiInputSelect = null;
   let monitorToggleBtn = null;
   let currentOutputNode = null;
   let externalOutputDest = null;
@@ -254,6 +255,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   // Monitoring starts disabled on each page load
   let monitorMicDeviceId = localStorage.getItem('ytbm_monitorInputDeviceId') || 'off';
   let monitorEnabled = false;
+  let midiAccess = null;
+  let selectedMidiInputId = localStorage.getItem('ytbm_midiInputDeviceId') || 'all';
 
   async function loadMonitorPrefs() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
@@ -417,6 +420,46 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
       navigator.mediaDevices.addEventListener('devicechange', populateMonitorInputSelect);
     }
+  }
+
+
+  function isMidiInputAllowed(portOrId) {
+    if (!selectedMidiInputId || selectedMidiInputId === 'all') return true;
+    const id = typeof portOrId === 'string' ? portOrId : portOrId?.id;
+    return id === selectedMidiInputId;
+  }
+
+  function populateMidiInputSelect() {
+    if (!midiInputSelect) return;
+    midiInputSelect.innerHTML = '';
+    midiInputSelect.add(new Option('MIDI Input: Auto (All)', 'all'));
+    if (midiAccess && midiAccess.inputs) {
+      midiAccess.inputs.forEach(input => {
+        midiInputSelect.add(new Option(input.name || `MIDI ${input.id}`, input.id));
+      });
+    }
+    if (selectedMidiInputId !== 'all') {
+      const exists = Array.from(midiInputSelect.options).some(o => o.value === selectedMidiInputId);
+      if (!exists) selectedMidiInputId = 'all';
+    }
+    midiInputSelect.value = selectedMidiInputId;
+  }
+
+  function setSelectedMidiInput(id) {
+    selectedMidiInputId = id || 'all';
+    localStorage.setItem('ytbm_midiInputDeviceId', selectedMidiInputId);
+    populateMidiInputSelect();
+  }
+
+  function buildMidiInputDropdown(parent) {
+    if (midiInputSelect || !parent) return;
+    midiInputSelect = document.createElement('select');
+    midiInputSelect.className = 'looper-btn';
+    midiInputSelect.style.flex = '1 1 auto';
+    midiInputSelect.title = 'Choose MIDI input device (Auto = all devices)';
+    midiInputSelect.addEventListener('change', e => setSelectedMidiInput(e.target.value));
+    parent.appendChild(midiInputSelect);
+    populateMidiInputSelect();
   }
 
   function buildMonitorToggle(parent) {
@@ -2581,6 +2624,7 @@ hideYouTubePopups();
         port._ytbmHooked = true;
         const orig = port.onmidimessage;
         port.onmidimessage = function(ev) {
+          if (!isMidiInputAllowed(port)) return;
           if (unhideOnInput) pulseShowYTControls();
           const [status, note, velocity] = ev.data;
           const command = status & 0xf0;
@@ -6114,20 +6158,8 @@ function beginLoopRecording() {
 function startRecording() {
   ensureAudioContext().then(() => {
     if (!audioContext) return;
-    if (recordingNewLoop && hasAnyLoopPlaying() && getActiveSyncLoopDuration()) {
-      const now = audioContext.currentTime;
-      let d = getActiveSyncLoopDuration();
-      if (pitchTarget === "loop") d /= getCurrentPitchRate();
-      const elapsed = (now - loopStartAbsoluteTime) % d;
-      const remain = d - elapsed;
-      if (newLoopStartTimeout) clearTimeout(newLoopStartTimeout);
-      newLoopStartTimeout = setTimeout(() => {
-        beginLoopRecording();
-      }, remain * 1000);
-    } else {
-      if (!recordingNewLoop && looperState !== "idle") return;
-      beginLoopRecording();
-    }
+    if (!recordingNewLoop && looperState !== "idle") return;
+    beginLoopRecording();
   });
 }
 
@@ -8885,6 +8917,7 @@ function addControls() {
   cw.appendChild(sidechainRow);
 
   buildInputDeviceDropdown(cw);
+  buildMidiInputDropdown(cw);
   updateMonitorSelectColor();
 
   makePanelDraggable(panelContainer, dragHandle, "ytbm_panelPos");
@@ -9770,9 +9803,18 @@ function toggleSampleMute(which) {
  **************************************/
 async function initializeMIDI() {
   try {
-    let access = await navigator.requestMIDIAccess({ sysex: false });
-    access.inputs.forEach(inp => {
+    midiAccess = await navigator.requestMIDIAccess({ sysex: false });
+    midiAccess.inputs.forEach(inp => {
       inp.onmidimessage = handleMIDIMessage;
+    });
+    populateMidiInputSelect();
+    midiAccess.addEventListener('statechange', () => {
+      if (midiAccess) {
+        midiAccess.inputs.forEach(inp => {
+          inp.onmidimessage = handleMIDIMessage;
+        });
+      }
+      populateMidiInputSelect();
     });
   } catch (e) {
     console.warn("MIDI unavailable:", e);
@@ -9780,6 +9822,8 @@ async function initializeMIDI() {
 }
 
 function handleMIDIMessage(e) {
+  const midiPort = e.currentTarget || e.target;
+  if (!isMidiInputAllowed(midiPort)) return;
   // Filter out duplicate events which can happen on some controllers
   if (e.timeStamp === lastMidiTimestamp &&
       e.data[0] === lastMidiData[0] &&
