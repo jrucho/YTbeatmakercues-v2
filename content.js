@@ -6268,7 +6268,8 @@ function schedulePlayLoop(index) {
     if (!audioContext) return;
     if (pendingStopTimeouts[index]) { clearTimeout(pendingStopTimeouts[index]); pendingStopTimeouts[index] = null; }
     let when = audioContext.currentTime + PLAY_PADDING;
-    if ((loopSource || midiLoopPlaying.some(Boolean)) && clock.isRunning) {
+    const hasOtherSyncAnchor = loopPlaying.some((isPlaying, i) => i !== index && isAudioLoopEffectivelyPlaying(i)) || midiLoopPlaying.some(Boolean);
+    if (hasOtherSyncAnchor && clock.isRunning) {
       when = getNextBarTime(when);
     }
     playSingleLoop(index, when, 0);
@@ -6461,7 +6462,7 @@ function stopLoop(index) {
     return;
   }
   let now = audioContext.currentTime;
-  const hasOtherPlaying = loopPlaying.some((isPlaying, i) => i !== index && isPlaying) || midiLoopPlaying.some(Boolean);
+  const hasOtherPlaying = loopPlaying.some((isPlaying, i) => i !== index && isAudioLoopEffectivelyPlaying(i)) || midiLoopPlaying.some(Boolean);
   let d = hasOtherPlaying ? (getActiveSyncLoopDuration() || baseLoopDuration) : (loopDurations[index] || baseLoopDuration);
   if (!d || !Number.isFinite(d)) {
     stopLoopImmediately(index);
@@ -7571,19 +7572,20 @@ function sequencerTriggerCue(cueKey) {
   if (!video || !cuePoints[cueKey]) return;
   selectedCueKey = cueKey;
   clearSuperKnobHistory();
-  const fadeTime = 0.002; // 50ms fade
+  const fadeTime = 0.002; // keep ultra-low latency
   const now = audioContext.currentTime;
-  
+  const EPS = 0.005; // avoid hard 0 which can click on some streams
+
   // Cancel any scheduled changes and ramp down the gain
   videoGain.gain.cancelScheduledValues(now);
-  videoGain.gain.setValueAtTime(videoGain.gain.value, now);
-  videoGain.gain.linearRampToValueAtTime(0, now + fadeTime);
-  
+  videoGain.gain.setValueAtTime(Math.max(EPS, videoGain.gain.value), now);
+  videoGain.gain.linearRampToValueAtTime(EPS, now + fadeTime);
+
   // After the fade out, jump to the new cue and fade back in
   setTimeout(() => {
     video.currentTime = cuePoints[cueKey];
     const t = audioContext.currentTime;
-    videoGain.gain.setValueAtTime(0, t);
+    videoGain.gain.setValueAtTime(EPS, t);
     videoGain.gain.linearRampToValueAtTime(1, t + fadeTime);
   }, fadeTime * 1000);
 
@@ -7796,17 +7798,18 @@ function onKeyDown(e) {
     if (video && cuePoints[e.key] !== undefined) {
       selectedCueKey = e.key;
       clearSuperKnobHistory();
-      const fadeTime = 0.002; // 50ms fade duration
+      const fadeTime = 0.002; // keep ultra-low latency
       const now = audioContext.currentTime;
+      const EPS = 0.005; // avoid hard 0 which can click on some streams
       // Fade out the audio
       videoGain.gain.cancelScheduledValues(now);
-      videoGain.gain.setValueAtTime(videoGain.gain.value, now);
-      videoGain.gain.linearRampToValueAtTime(0, now + fadeTime);
+      videoGain.gain.setValueAtTime(Math.max(EPS, videoGain.gain.value), now);
+      videoGain.gain.linearRampToValueAtTime(EPS, now + fadeTime);
       // After fade out, change cue and fade back in
       setTimeout(() => {
         video.currentTime = cuePoints[e.key];
         const t = audioContext.currentTime;
-        videoGain.gain.setValueAtTime(0, t);
+        videoGain.gain.setValueAtTime(EPS, t);
         videoGain.gain.linearRampToValueAtTime(1, t + fadeTime);
       }, fadeTime * 1000);
     }
@@ -8374,8 +8377,12 @@ function getClock() {
 }
 
 // ─── MIDI LOOPERS ───────────────────────────────────────────────
+function isAudioLoopEffectivelyPlaying(index) {
+  return Boolean(loopPlaying[index] && !pendingStopTimeouts[index]);
+}
+
 function hasAnyLoopPlaying() {
-  return loopPlaying.some(Boolean) || midiLoopPlaying.some(Boolean);
+  return loopPlaying.some((_, i) => isAudioLoopEffectivelyPlaying(i)) || midiLoopPlaying.some(Boolean);
 }
 
 function getActiveSyncLoopDuration() {
