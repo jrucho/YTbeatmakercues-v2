@@ -4279,8 +4279,9 @@ function onMinimalPointerUp(e) {
 
     if (minimalCuesLabel && cuesButtonMin) {
       const cc = Object.keys(cuePoints).length;
-      minimalCuesLabel.textContent = cc ? `Cues ${cc}/10` : "Cues";
-      cuesButtonMin.dataset.mode = cc >= 10 ? "erase" : "add";
+      const total = getCueDisplayTotal();
+      minimalCuesLabel.textContent = cc ? `Cues ${cc}/${total}` : "Cues";
+      cuesButtonMin.dataset.mode = cc >= total ? "erase" : "add";
     }
 
     updateMinimalLoopButtonColor(loopButtonMin);
@@ -7446,11 +7447,18 @@ function computeSuperKnobDelta(val) {
   return delta;
 }
 
+function getCueDisplayTotal() {
+  const count = Object.keys(cuePoints).length;
+  if (count <= 10) return 10;
+  return Math.min(16, count);
+}
+
 function refreshCuesButton() {
   if (!cuesButton) return;
   let c = Object.keys(cuePoints).length;
+  const total = getCueDisplayTotal();
   if (c >= 10) {
-    cuesButton.innerText = `EraseCues(${c}/10)`;
+    cuesButton.innerText = `EraseCues(${c}/${total})`;
     cuesButton.style.background = "#C22";
     cuesButton.onclick = () => {
       pushUndoState();
@@ -7461,7 +7469,7 @@ function refreshCuesButton() {
       if (window.refreshMinimalState) window.refreshMinimalState();
     };
   } else {
-    cuesButton.innerText = `AddCue(${c}/10)`;
+    cuesButton.innerText = `AddCue(${c}/${total})`;
     cuesButton.style.background = "#333";
     cuesButton.onclick = e => {
       if (e.ctrlKey || e.metaKey) {
