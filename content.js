@@ -556,6 +556,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   const PLAY_PADDING = 0.02; // shorter scheduling for lower latency
   const LOOP_CROSSFADE = 0.001; // smoother boundaries without changing length
   const LOOP_COLORS = ['#0ff', '#f0f', '#ff0', '#fa0'];
+  const MAX_TOTAL_CUES = 256;
   const DEFAULT_MIDI_CUES = {
     1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40,
     10: 41, 11: 52, 12: 53, 13: 54, 14: 55, 15: 56, 16: 57
@@ -2636,7 +2637,7 @@ hideYouTubePopups();
               if (midiNote === note) {
                 const vid = getVideoElement();
                 const cueKey = getCueKeyForMidi(key, status);
-                if (vid && cuePoints[cueKey] === undefined) {
+                if (vid && cuePoints[cueKey] === undefined && canAddCueKey(cueKey)) {
                   pushUndoState();
                   cuePoints[cueKey] = vid.currentTime;
                   saveCuePointsToURL();
@@ -7482,9 +7483,15 @@ function computeSuperKnobDelta(val) {
   return delta;
 }
 
+function canAddCueKey(key) {
+  if (key in cuePoints) return true;
+  return Object.keys(cuePoints).length < MAX_TOTAL_CUES;
+}
+
 function getCueDisplayTotal() {
-  const count = Object.keys(cuePoints).length;
+  const count = Math.min(MAX_TOTAL_CUES, Object.keys(cuePoints).length);
   if (count <= 10) return 10;
+  if (midiMultiChannelCuesEnabled) return count;
   return Math.min(16, count);
 }
 
@@ -10058,6 +10065,7 @@ function handleMIDIMessage(e) {
         let vid = getVideoElement();
         if (!vid) return;
         if (isModPressed) {
+          if (!canAddCueKey(cueKey)) continue;
           pushUndoState();
           cuePoints[cueKey] = vid.currentTime;
           saveCuePointsToURL();
