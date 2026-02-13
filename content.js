@@ -828,6 +828,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       midiRecordLines = new Array(MAX_MIDI_LOOPS).fill(null),
       midiRecordLinesMin = new Array(MAX_MIDI_LOOPS).fill(null),
       midiMultiLaunch = false,
+      midiChannelCueToggleBtn = null,
+      midiMultiChannelCuesEnabled = localStorage.getItem('ytbm_midiMultiChannelCuesEnabled') === '1',
       // 4-Bus Audio nodes
       audioContext = null,
       videoGain = null,
@@ -2633,9 +2635,10 @@ hideYouTubePopups();
             for (const [key, midiNote] of Object.entries(midiNotes.cues)) {
               if (midiNote === note) {
                 const vid = getVideoElement();
-                if (vid && cuePoints[key] === undefined) {
+                const cueKey = getCueKeyForMidi(key, status);
+                if (vid && cuePoints[cueKey] === undefined) {
                   pushUndoState();
-                  cuePoints[key] = vid.currentTime;
+                  cuePoints[cueKey] = vid.currentTime;
                   saveCuePointsToURL();
                   updateCueMarkers();
                   refreshCuesButton();
@@ -9296,6 +9299,20 @@ function addControls() {
   midiMapButton.addEventListener("click", showMIDIMapWindowToggle);
   actionWrap.appendChild(midiMapButton);
 
+  midiChannelCueToggleBtn = document.createElement("button");
+  midiChannelCueToggleBtn.className = "looper-btn";
+  midiChannelCueToggleBtn.style.flex = '1 1 calc(50% - 4px)';
+  midiChannelCueToggleBtn.title = "Allow cue banks per MIDI channel (ch1 base, ch2+ add extra cue keys)";
+  midiChannelCueToggleBtn.addEventListener("click", () => {
+    midiMultiChannelCuesEnabled = !midiMultiChannelCuesEnabled;
+    localStorage.setItem('ytbm_midiMultiChannelCuesEnabled', midiMultiChannelCuesEnabled ? '1' : '0');
+    updateMidiChannelCueToggleButton();
+    refreshCuesButton();
+    if (window.refreshMinimalState) window.refreshMinimalState();
+  });
+  updateMidiChannelCueToggleButton();
+  actionWrap.appendChild(midiChannelCueToggleBtn);
+
   // Reverb + Cassette
   reverbButton = document.createElement("button");
   reverbButton.className = "looper-btn";
@@ -9801,6 +9818,23 @@ function toggleSampleMute(which) {
 /**************************************
  * MIDI
  **************************************/
+function getMidiChannelFromStatus(statusByte) {
+  return (statusByte & 0x0f) + 1;
+}
+
+function getCueKeyForMidi(baseKey, statusByte) {
+  const key = String(baseKey);
+  if (!midiMultiChannelCuesEnabled) return key;
+  const channel = getMidiChannelFromStatus(statusByte);
+  return channel <= 1 ? key : `${key}_ch${channel}`;
+}
+
+function updateMidiChannelCueToggleButton() {
+  if (!midiChannelCueToggleBtn) return;
+  midiChannelCueToggleBtn.innerText = `MIDI Ch Cues:${midiMultiChannelCuesEnabled ? 'On' : 'Off'}`;
+  midiChannelCueToggleBtn.style.backgroundColor = midiMultiChannelCuesEnabled ? '#1a6' : '#333';
+}
+
 async function initializeMIDI() {
   try {
     midiAccess = await navigator.requestMIDIAccess({ sysex: false });
@@ -9849,11 +9883,11 @@ function handleMIDIMessage(e) {
     shiftUsedAsModifier = true;
   }
 
-  if (st === 144 && note === midiNotes.instrumentToggle) {
+  if (command === 144 && e.data[2] > 0 && note === midiNotes.instrumentToggle) {
     showInstrumentWindowToggle();
     return;
   }
-  if (st === 144 && note === midiNotes.fxPadToggle) {
+  if (command === 144 && e.data[2] > 0 && note === midiNotes.fxPadToggle) {
     showFxPadWindowToggle();
     return;
   }
@@ -9875,11 +9909,11 @@ function handleMIDIMessage(e) {
   }
 
   if (note === midiNotes.shift) {
-    if (st === 144) {
+    if (command === 144 && e.data[2] > 0) {
       isModPressed = true;
       shiftDownTime = Date.now();
       shiftUsedAsModifier = false;
-    } else if (st === 128) {
+    } else if (command === 128 || (command === 144 && e.data[2] === 0)) {
       isModPressed = false;
       const holdMs = Date.now() - shiftDownTime;
       if (!shiftUsedAsModifier && holdMs < clickDelay) {
@@ -9889,7 +9923,7 @@ function handleMIDIMessage(e) {
     return;
 
   }
-  if (currentlyDetectingMidi && st === 144) {
+  if (currentlyDetectingMidi && command === 144 && e.data[2] > 0) {
     if (midiNotes[currentlyDetectingMidi] !== undefined) {
       // Could be a base field or a cue
       if (typeof midiNotes[currentlyDetectingMidi] === 'number') {
@@ -9930,7 +9964,7 @@ function handleMIDIMessage(e) {
         }
       }
     }
-  } else if (st === 144) {
+  } else if (command === 144 && e.data[2] > 0) {
         if (Number(note) === Number(midiNotes.randomCues)) {
       randomizeCuesInOneClick("midi");
       return;
@@ -10020,25 +10054,26 @@ function handleMIDIMessage(e) {
 
     for (let [k, v] of Object.entries(midiNotes.cues)) {
       if (v === note) {
+        const cueKey = getCueKeyForMidi(k, st);
         let vid = getVideoElement();
         if (!vid) return;
         if (isModPressed) {
           pushUndoState();
-          cuePoints[k] = vid.currentTime;
+          cuePoints[cueKey] = vid.currentTime;
           saveCuePointsToURL();
           updateCueMarkers();
           refreshCuesButton();
           if (window.refreshMinimalState) window.refreshMinimalState();
         } else {
-          if (k in cuePoints) {
-        selectedCueKey = k;
+          if (cueKey in cuePoints) {
+        selectedCueKey = cueKey;
         // jump with a 50 ms cross-fade, same as the keyboard path
-        sequencerTriggerCue(k);
+        sequencerTriggerCue(cueKey);
           }
         }
       }
     }
-  } else if (st === 128) {
+  } else if (command === 128 || (command === 144 && e.data[2] === 0)) {
     if (note === midiNotes.pitchDown) stopPitchDownRepeat();
     if (note === midiNotes.pitchUp) stopPitchUpRepeat();
     if (note === midiNotes.looperA) { activeLoopIndex = 0; activeMidiLoopIndex = 0; if (!isModPressed) onLooperButtonMouseUp(); }
