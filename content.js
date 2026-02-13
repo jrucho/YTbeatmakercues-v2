@@ -4590,6 +4590,16 @@ async function setupAudioNodes() {
 
   await setupFxPadNodes();
 
+  if (audioContext.audioWorklet && !loopRecorderNode) {
+    try {
+      loopRecorderNode = await createLoopRecorderNode(audioContext);
+      mainRecorderMix.connect(loopRecorderNode);
+    } catch (err) {
+      console.warn('Loop recorder worklet unavailable, falling back to MediaRecorder.', err);
+      loopRecorderNode = null;
+    }
+  }
+
   applyAllFXRouting();
 }
 
@@ -6126,10 +6136,8 @@ function beginLoopRecording() {
     loopRecorderNode.port.onmessage = (e) => {
       loopRecorderNode.port.onmessage = null;
       recordedFrames = e.data;
-      mainRecorderMix.disconnect(loopRecorderNode);
       processLoopFromFrames(recordedFrames);
     };
-    mainRecorderMix.connect(loopRecorderNode);
     loopRecorderNode.port.postMessage('start');
   } else {
       recordedChunks = [];
@@ -7637,7 +7645,7 @@ function sequencerTriggerCue(cueKey) {
   if (!video || !cuePoints[cueKey]) return;
   selectedCueKey = cueKey;
   clearSuperKnobHistory();
-  const fadeTime = 0.002; // keep ultra-low latency
+  const fadeTime = 0.004; // slightly longer fade to reduce cue clicks
   const now = audioContext.currentTime;
   const EPS = 0.005; // avoid hard 0 which can click on some streams
 
@@ -7863,7 +7871,7 @@ function onKeyDown(e) {
     if (video && cuePoints[e.key] !== undefined) {
       selectedCueKey = e.key;
       clearSuperKnobHistory();
-      const fadeTime = 0.002; // keep ultra-low latency
+      const fadeTime = 0.004; // slightly longer fade to reduce cue clicks
       const now = audioContext.currentTime;
       const EPS = 0.005; // avoid hard 0 which can click on some streams
       // Fade out the audio

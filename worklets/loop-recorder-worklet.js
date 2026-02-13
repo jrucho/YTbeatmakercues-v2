@@ -4,7 +4,7 @@ class LoopRecorder extends AudioWorkletProcessor {
     this.recording = false;
     this.buffers = [];
     this.preRollBuffers = [];
-    this.maxPreRollFrames = 8; // ~20ms at 48kHz with 128-sample quantum
+    this.maxPreRollFrames = 16; // ~40ms at 48kHz with 128-sample quantum
 
     this.port.onmessage = (event) => {
       const data = event.data;
