@@ -606,6 +606,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       loopDurations = new Array(MAX_AUDIO_LOOPS).fill(0),
       loopStartOffsets = new Array(MAX_AUDIO_LOOPS).fill(0),
       masterLoopIndex = null,
+      audioRecordingSynced = false,
+      audioRecordingSyncDuration = null,
       // Video Looper
       videoLooperState = "idle",
       videoMediaRecorder = null,
@@ -767,6 +769,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       midiLoopBpms = new Array(MAX_MIDI_LOOPS).fill(null),
       midiLoopStartDelays = new Array(MAX_MIDI_LOOPS).fill(null),
       midiLoopEventTimers = Array.from({length: MAX_MIDI_LOOPS}, () => new Set()),
+      midiLoopRecordingSynced = new Array(MAX_MIDI_LOOPS).fill(false),
       activeMidiLoopIndex = 0,
       midiRecordingStart = 0,
       midiStopPressTime = 0,
@@ -3004,12 +3007,10 @@ function finalizeLoopBuffer(buf) {
 
   pushUndoState();
   let exactDur = buf.length / buf.sampleRate;
-  if (!baseLoopDuration) {
-    baseLoopDuration = exactDur;
-    loopsBPM = Math.round((60 * 4) / baseLoopDuration);
-  } else {
-    const bars = Math.max(1, Math.round(exactDur / baseLoopDuration));
-    const target = bars * baseLoopDuration;
+  const syncDur = audioRecordingSynced ? (audioRecordingSyncDuration || getActiveSyncLoopDuration()) : null;
+  if (syncDur) {
+    const bars = Math.max(1, Math.round(exactDur / syncDur));
+    const target = bars * syncDur;
     if (Math.abs(target - exactDur) > 0.0005) {
       const frames = Math.round(target * buf.sampleRate);
       const out = audioContext.createBuffer(buf.numberOfChannels, frames, buf.sampleRate);
@@ -3020,6 +3021,12 @@ function finalizeLoopBuffer(buf) {
     }
     exactDur = target;
   }
+  if (!baseLoopDuration) {
+    baseLoopDuration = exactDur;
+    loopsBPM = Math.round((60 * 4) / baseLoopDuration);
+  }
+  audioRecordingSynced = false;
+  audioRecordingSyncDuration = null;
   loopDurations[activeLoopIndex] = exactDur;
   audioLoopRates[activeLoopIndex] = 1;
   audioLoopBuffers[activeLoopIndex] = buf;
@@ -6091,6 +6098,9 @@ function beginLoopRecording() {
       looper.recording = { start: audioContext.currentTime, chunks: [] };
       looper._updateState("recording");
     }
+    const syncDur = getActiveSyncLoopDuration();
+    audioRecordingSynced = hasAnyLoopPlaying() && Boolean(syncDur);
+    audioRecordingSyncDuration = audioRecordingSynced ? syncDur : null;
     if (!clock.isRunning) {
       clock.start(audioContext.currentTime);
     }
@@ -6103,9 +6113,9 @@ function beginLoopRecording() {
 function startRecording() {
   ensureAudioContext().then(() => {
     if (!audioContext) return;
-    if (recordingNewLoop && looperState !== "idle" && baseLoopDuration) {
+    if (recordingNewLoop && hasAnyLoopPlaying() && getActiveSyncLoopDuration()) {
       const now = audioContext.currentTime;
-      let d = baseLoopDuration;
+      let d = getActiveSyncLoopDuration();
       if (pitchTarget === "loop") d /= getCurrentPitchRate();
       const elapsed = (now - loopStartAbsoluteTime) % d;
       const remain = d - elapsed;
@@ -6131,11 +6141,11 @@ function stopRecordingAndPlay() {
 function scheduleStopRecording() {
   ensureAudioContext().then(() => {
     if (!audioContext || looperState !== "recording") return;
-    if (!baseLoopDuration || loopStartAbsoluteTime === null) {
+    if (!audioRecordingSynced || !audioRecordingSyncDuration || loopStartAbsoluteTime === null) {
       stopRecordingAndPlay();
       return;
     }
-    let d = baseLoopDuration;
+    let d = audioRecordingSyncDuration;
     if (pitchTarget === "loop") d /= getCurrentPitchRate();
     const now = audioContext.currentTime;
     const elapsed = (now - loopStartAbsoluteTime) % d;
@@ -6258,7 +6268,7 @@ function schedulePlayLoop(index) {
     if (!audioContext) return;
     if (pendingStopTimeouts[index]) { clearTimeout(pendingStopTimeouts[index]); pendingStopTimeouts[index] = null; }
     let when = audioContext.currentTime + PLAY_PADDING;
-    if (loopSource && baseLoopDuration && loopStartAbsoluteTime) {
+    if ((loopSource || midiLoopPlaying.some(Boolean)) && clock.isRunning) {
       when = getNextBarTime(when);
     }
     playSingleLoop(index, when, 0);
@@ -6451,9 +6461,16 @@ function stopLoop(index) {
     return;
   }
   let now = audioContext.currentTime;
-  let d = baseLoopDuration;
+  const hasOtherPlaying = loopPlaying.some((isPlaying, i) => i !== index && isPlaying) || midiLoopPlaying.some(Boolean);
+  let d = hasOtherPlaying ? (getActiveSyncLoopDuration() || baseLoopDuration) : (loopDurations[index] || baseLoopDuration);
+  if (!d || !Number.isFinite(d)) {
+    stopLoopImmediately(index);
+    return;
+  }
   if (pitchTarget === "loop") d /= getCurrentPitchRate();
-  let elapsed = (now - loopStartAbsoluteTime) % d;
+  const origin = (loopStartAbsoluteTime || 0) + (loopStartOffsets[index] || 0);
+  let elapsed = (now - origin) % d;
+  if (elapsed < 0) elapsed += d;
   let remain = d - elapsed;
   const src = loopSources[index];
   if (src) {
@@ -8357,8 +8374,24 @@ function getClock() {
 }
 
 // ─── MIDI LOOPERS ───────────────────────────────────────────────
+function hasAnyLoopPlaying() {
+  return loopPlaying.some(Boolean) || midiLoopPlaying.some(Boolean);
+}
+
+function getActiveSyncLoopDuration() {
+  if (!clock.isRunning || !hasAnyLoopPlaying()) return null;
+  if (baseLoopDuration && Number.isFinite(baseLoopDuration) && baseLoopDuration > 0) {
+    return baseLoopDuration;
+  }
+  if (clock && Number.isFinite(clock.bpm) && clock.bpm > 0) {
+    return clock.barDuration();
+  }
+  return null;
+}
+
 function getNextMidiBarTime(after) {
-  return after;
+  if (!clock.isRunning || !hasAnyLoopPlaying()) return after;
+  return clock.nextBarTime(after / 1000) * 1000;
 }
 
 function updateMidiMasterLoopIndex() {}
@@ -8369,6 +8402,7 @@ function beginMidiLoopRecording(idx, startTime = nowMs()) {
   midiLoopEvents[idx] = [];
   midiRecordingStart = startTime;
   midiLoopBpms[idx] = null;
+  midiLoopRecordingSynced[idx] = hasAnyLoopPlaying() && clock.isRunning;
   ensureLoopers();
   const looper = loopers.midi[idx];
   if (looper) {
@@ -8438,7 +8472,16 @@ function finalizeMidiLoopRecording(idx, autoPlay = true) {
     const resolved = resolveBpmForMidiLoop(capture, durationSec);
     let loopDurationMs = rawDur;
     let loopBpm = null;
-    if (resolved) {
+    if (midiLoopRecordingSynced[idx] && clock.isRunning) {
+      const barMs = clock.barDuration() * 1000;
+      const bars = Math.max(1, Math.round(rawDur / barMs));
+      loopDurationMs = bars * barMs;
+      loopBpm = clock.bpm;
+      if (looper) {
+        looper.baseBpm = loopBpm;
+        looper.lengthBars = bars;
+      }
+    } else if (resolved) {
       loopDurationMs = resolved.duration * 1000;
       loopBpm = resolved.bpm;
       if (looper) {
@@ -8468,7 +8511,8 @@ function finalizeMidiLoopRecording(idx, autoPlay = true) {
     }
     updateMidiMasterLoopIndex();
     if (autoPlay) {
-      const start = Math.max(stopTime, nowMs());
+      const unsnappedStart = Math.max(stopTime, nowMs());
+      const start = midiLoopRecordingSynced[idx] ? getNextMidiBarTime(unsnappedStart) : unsnappedStart;
       playMidiLoop(idx, 0, start);
     }
   } else if (midiLoopStates[idx] === 'overdubbing') {
@@ -8488,7 +8532,8 @@ function playMidiLoop(idx, offset = 0, startTime = null) {
   const dur = midiLoopDurations[idx];
   if (!dur) return;
   const now = nowMs();
-  const start = (startTime !== null) ? startTime : now;
+  const shouldSyncStart = startTime === null && midiLoopPlaying.some((isPlaying, i) => i !== idx && isPlaying) && clock.isRunning;
+  const start = (startTime !== null) ? startTime : (shouldSyncStart ? getNextMidiBarTime(now) : now);
   const normOffset = ((offset % dur) + dur) % dur;
   const firstCycleStart = start - normOffset;
   const delay = Math.max(0, firstCycleStart - now);
@@ -8549,6 +8594,7 @@ function stopMidiLoop(idx) {
     timers.clear();
   }
   midiLoopPlaying[idx] = false;
+  midiLoopRecordingSynced[idx] = false;
   midiLoopStates[idx] = midiLoopEvents[idx].length ? 'stopped' : 'idle';
   if (midiOverdubStartTimeouts[idx]) { clearTimeout(midiOverdubStartTimeouts[idx]); midiOverdubStartTimeouts[idx] = null; }
   if (midiStopTimeouts[idx]) {
