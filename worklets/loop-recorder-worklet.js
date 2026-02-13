@@ -4,15 +4,15 @@ class LoopRecorder extends AudioWorkletProcessor {
     this.recording = false;
     this.buffers = [];
     this.preRollBuffers = [];
-    this.maxPreRollFrames = 4; // ~10ms at 48kHz with 128-sample quantum
+    this.maxPreRollFrames = 2; // ~5ms at 48kHz with 128-sample quantum
 
     this.port.onmessage = (event) => {
       const data = event.data;
       if (data === 'start') {
         this.recording = true;
         // Keep a tiny preroll so the first transient isn't chopped.
-        const seed = this.preRollBuffers.length > 1 ? this.preRollBuffers.slice(0, -1) : [];
-        // Drop the most recent preroll frame to avoid doubled attack perception at record onset.
+        const seed = this.preRollBuffers.length > 1 ? [this.preRollBuffers[0]] : [];
+        // Use only the oldest tiny preroll frame to avoid doubled attacks while still catching start transients.
         this.buffers = seed.map(frame => frame.map(ch => new Float32Array(ch)));
       } else if (data === 'stop') {
         this.recording = false;
