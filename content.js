@@ -6284,11 +6284,16 @@ function scheduleResumeLoop(index) {
       clearTimeout(pendingStopTimeouts[index]);
       pendingStopTimeouts[index] = null;
     }
-    const when = audioContext.currentTime + PLAY_PADDING;
     const dur = loopDurations[index] || baseLoopDuration;
+    const hasOtherSyncAnchor = loopPlaying.some((isPlaying, i) => i !== index && isAudioLoopEffectivelyPlaying(i)) || midiLoopPlaying.some(Boolean);
+    let when = audioContext.currentTime + PLAY_PADDING;
+    if (hasOtherSyncAnchor && clock.isRunning) {
+      when = getNextBarTime(when);
+    }
     let offset = 0;
     if (dur && loopStartAbsoluteTime !== null) {
-      const elapsed = when - loopStartAbsoluteTime - loopStartOffsets[index];
+      const phaseAnchor = loopStartAbsoluteTime + (loopStartOffsets[index] || 0);
+      const elapsed = when - phaseAnchor;
       offset = ((elapsed % dur) + dur) % dur;
     }
     playSingleLoop(index, when, offset);
@@ -6323,7 +6328,7 @@ function stopLoopSource(index) {
   loopSources[index] = null;
   loopGainNodes[index] = null;
   loopPlaying[index] = false;
-  loopStartOffsets[index] = 0;
+  if (!audioLoopBuffers[index]) loopStartOffsets[index] = 0;
   if (pendingStopTimeouts[index]) { clearTimeout(pendingStopTimeouts[index]); pendingStopTimeouts[index] = null; }
   if (loopSource === src) loopSource = loopSources.find(s => s) || null;
   if (index === masterLoopIndex) {
@@ -8623,6 +8628,14 @@ function resumeMidiLoop(idx) {
   const dur = midiLoopDurations[idx];
   if (!dur) return;
   const now = nowMs();
+  const hasOtherSyncAnchor = midiLoopPlaying.some((isPlaying, i) => i !== idx && isPlaying) || loopPlaying.some((isPlaying, i) => isAudioLoopEffectivelyPlaying(i));
+  if (hasOtherSyncAnchor && clock.isRunning) {
+    const start = getNextMidiBarTime(now);
+    const anchorMs = clock.startTime * 1000;
+    const offset = ((start - anchorMs) % dur + dur) % dur;
+    playMidiLoop(idx, offset, start);
+    return;
+  }
   let offset = 0;
   if (midiLoopStartTimes[idx]) {
     offset = (now - midiLoopStartTimes[idx]) % dur;
