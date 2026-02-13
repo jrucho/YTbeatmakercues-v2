@@ -2643,6 +2643,7 @@ hideYouTubePopups();
                   saveCuePointsToURL();
                   updateCueMarkers();
                   refreshCuesButton();
+                  if (window.refreshMinimalState) window.refreshMinimalState();
                   return; // skip original to avoid playback
                 }
                 break;
