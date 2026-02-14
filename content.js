@@ -246,7 +246,10 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   let outputDeviceSelect = null;
   let inputDeviceSelect = null;
   let monitorInputSelect = null;
+  let midiDeviceSelect = null;
   let monitorToggleBtn = null;
+  let midiAccess = null;
+  let selectedMidiInputId = localStorage.getItem('ytbm_selectedMidiInputId') || 'all';
   let currentOutputNode = null;
   let externalOutputDest = null;
   let outputAudio = null;
@@ -2552,47 +2555,6 @@ function triggerPadCue(padIndex) {
   document.head.appendChild(style);
 }
 hideYouTubePopups();
-  
-  // Attach pulse‑show hook to every MIDI input
-  if (shouldRunOnThisPage() && !isSampletteEmbed && navigator.requestMIDIAccess) {
-    navigator.requestMIDIAccess().then(access => {
-      function hook(port) {
-        if (!port || port.type !== 'input') return;
-        if (port._ytbmHooked) return; // avoid duplicate wrappers
-        port._ytbmHooked = true;
-        const orig = port.onmidimessage;
-        port.onmidimessage = function(ev) {
-          if (unhideOnInput) pulseShowYTControls();
-          const [status, note, velocity] = ev.data;
-          const command = status & 0xf0;
-          // Handle Note On for cue marking
-          if (command === 0x90 && velocity > 0) {
-            for (const [key, midiNote] of Object.entries(midiNotes.cues)) {
-              if (midiNote === note) {
-                const vid = getVideoElement();
-                if (vid && getCueTime(key) === undefined) {
-                  pushUndoState();
-                  cueInputMode = 'midi';
-                  setCueAtKey(key, vid.currentTime);
-                  saveCuePointsToURL();
-                  updateCueMarkers();
-                  refreshCuesButton();
-                  return; // skip original to avoid playback
-                }
-                break;
-              }
-            }
-          }
-          // Fallback to original handler
-          if (orig) orig.call(this, ev);
-        };
-      }
-      access.inputs.forEach(hook);
-      access.addEventListener('statechange', e => {
-        if (e.port) hook(e.port);
-      });
-    }).catch(console.warn);
-  }
   
   function updateCompUIButtons(label, color) {
     if (loFiCompButton) { loFiCompButton.innerText = "Comp: " + label; loFiCompButton.style.backgroundColor = color; }
@@ -9008,38 +8970,61 @@ function addControls() {
 
   const midiToggleRow = document.createElement('div');
   midiToggleRow.style.display = 'flex';
+  midiToggleRow.style.gap = '6px';
   midiToggleRow.style.marginBottom = '8px';
+
   const midiToggle = document.createElement("button");
   midiToggle.className = "looper-btn";
   midiToggle.innerText = "Use MIDI Loopers";
+  midiToggle.style.flex = '1 1 50%';
   midiToggle.addEventListener("click", () => {
     useMidiLoopers = !useMidiLoopers;
     midiToggle.innerText = useMidiLoopers ? "Use Audio Loopers" : "Use MIDI Loopers";
     updateLooperButtonColor();
   });
   midiToggleRow.appendChild(midiToggle);
-  cw.appendChild(midiToggleRow);
 
-  const extendedMidiRow = document.createElement('div');
-  extendedMidiRow.style.display = 'flex';
-  extendedMidiRow.style.alignItems = 'center';
-  extendedMidiRow.style.gap = '8px';
-  extendedMidiRow.style.marginBottom = '8px';
-  const extendedMidiLabel = document.createElement('label');
-  extendedMidiLabel.textContent = 'Extended MIDI Cue Mode';
-  extendedMidiLabel.style.fontSize = '12px';
-  const extendedMidiToggle = document.createElement('input');
-  extendedMidiToggle.type = 'checkbox';
-  extendedMidiToggle.checked = extendedMidiCueMode;
-  extendedMidiToggle.addEventListener('change', () => {
-    extendedMidiCueMode = !!extendedMidiToggle.checked;
+  const extendedMidiBtn = document.createElement('button');
+  extendedMidiBtn.className = 'looper-btn';
+  extendedMidiBtn.style.flex = '1 1 50%';
+  const syncExtendedMidiBtn = () => {
+    extendedMidiBtn.innerText = extendedMidiCueMode ? 'Extended MIDI Cues: On' : 'Extended MIDI Cues: Off';
+    extendedMidiBtn.style.background = extendedMidiCueMode ? '#2a6' : '#333';
+  };
+  syncExtendedMidiBtn();
+  extendedMidiBtn.addEventListener('click', () => {
+    extendedMidiCueMode = !extendedMidiCueMode;
     localStorage.setItem('ytbm_extendedMidiCueMode', extendedMidiCueMode ? '1' : '0');
+    syncExtendedMidiBtn();
     refreshCuesButton();
     if (window.refreshMinimalState) window.refreshMinimalState();
   });
-  extendedMidiRow.appendChild(extendedMidiToggle);
-  extendedMidiRow.appendChild(extendedMidiLabel);
-  cw.appendChild(extendedMidiRow);
+  midiToggleRow.appendChild(extendedMidiBtn);
+  cw.appendChild(midiToggleRow);
+
+  const midiInputRow = document.createElement('div');
+  midiInputRow.style.display = 'flex';
+  midiInputRow.style.alignItems = 'center';
+  midiInputRow.style.gap = '8px';
+  midiInputRow.style.marginBottom = '8px';
+
+  const midiInputLabel = document.createElement('span');
+  midiInputLabel.className = 'ytbm-panel-label';
+  midiInputLabel.textContent = 'MIDI Device';
+  midiInputRow.appendChild(midiInputLabel);
+
+  midiDeviceSelect = document.createElement('select');
+  midiDeviceSelect.className = 'looper-btn';
+  midiDeviceSelect.style.flex = '1 1 auto';
+  midiDeviceSelect.title = 'Choose a specific MIDI input or keep Auto to listen to all';
+  midiDeviceSelect.addEventListener('change', () => {
+    selectedMidiInputId = midiDeviceSelect.value || 'all';
+    localStorage.setItem('ytbm_selectedMidiInputId', selectedMidiInputId);
+    attachMidiInputHandlers();
+  });
+  midiInputRow.appendChild(midiDeviceSelect);
+  cw.appendChild(midiInputRow);
+  populateMidiInputSelect();
 
   const createSampleRow = (type, label) => {
     const container = document.createElement("div");
@@ -9802,12 +9787,41 @@ function toggleSampleMute(which) {
 /**************************************
  * MIDI
  **************************************/
+function shouldUseMidiInput(input) {
+  return selectedMidiInputId === 'all' || input.id === selectedMidiInputId;
+}
+
+function populateMidiInputSelect() {
+  if (!midiDeviceSelect || !midiAccess) return;
+  midiDeviceSelect.innerHTML = '';
+  midiDeviceSelect.appendChild(new Option('Auto (All MIDI Inputs)', 'all'));
+  midiAccess.inputs.forEach(input => {
+    const label = input.name || input.manufacturer || `MIDI Input ${input.id}`;
+    midiDeviceSelect.appendChild(new Option(label, input.id));
+  });
+  const hasSelected = Array.from(midiDeviceSelect.options).some(opt => opt.value === selectedMidiInputId);
+  if (!hasSelected) selectedMidiInputId = 'all';
+  midiDeviceSelect.value = selectedMidiInputId;
+}
+
+function attachMidiInputHandlers() {
+  if (!midiAccess) return;
+  midiAccess.inputs.forEach(input => {
+    input.onmidimessage = shouldUseMidiInput(input) ? handleMIDIMessage : null;
+  });
+  populateMidiInputSelect();
+}
+
 async function initializeMIDI() {
   try {
-    let access = await navigator.requestMIDIAccess({ sysex: false });
-    access.inputs.forEach(inp => {
-      inp.onmidimessage = handleMIDIMessage;
-    });
+    midiAccess = await navigator.requestMIDIAccess({ sysex: false });
+    attachMidiInputHandlers();
+    if (!midiAccess._ytbmStateHooked) {
+      midiAccess.addEventListener('statechange', () => {
+        attachMidiInputHandlers();
+      });
+      midiAccess._ytbmStateHooked = true;
+    }
   } catch (e) {
     console.warn("MIDI unavailable:", e);
   }
@@ -9823,6 +9837,8 @@ function handleMIDIMessage(e) {
   }
   lastMidiTimestamp = e.timeStamp;
   lastMidiData = [...e.data];
+
+  if (unhideOnInput) pulseShowYTControls();
 
   let [st, note, velocity = 0] = e.data;
   const command = st & 0xf0;
