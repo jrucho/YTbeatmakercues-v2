@@ -3,17 +3,13 @@ class LoopRecorder extends AudioWorkletProcessor {
     super();
     this.recording = false;
     this.buffers = [];
-    this.preRollBuffers = [];
-    this.maxPreRollFrames = 2; // ~5ms at 48kHz with 128-sample quantum
 
     this.port.onmessage = (event) => {
       const data = event.data;
       if (data === 'start') {
         this.recording = true;
-        // Keep a tiny preroll so the first transient isn't chopped.
-        const seed = this.preRollBuffers.length > 1 ? [this.preRollBuffers[0]] : [];
-        // Use only the oldest tiny preroll frame to avoid doubled attacks while still catching start transients.
-        this.buffers = seed.map(frame => frame.map(ch => new Float32Array(ch)));
+        // Strict clean-start capture: no preroll seeding to avoid doubled onsets.
+        this.buffers = [];
       } else if (data === 'stop') {
         this.recording = false;
         this.port.postMessage(this.buffers);
@@ -28,11 +24,6 @@ class LoopRecorder extends AudioWorkletProcessor {
       const frame = [];
       for (let channel = 0; channel < input.length; channel++) {
         frame[channel] = new Float32Array(input[channel]);
-      }
-
-      this.preRollBuffers.push(frame);
-      if (this.preRollBuffers.length > this.maxPreRollFrames) {
-        this.preRollBuffers.shift();
       }
 
       if (this.recording) {
