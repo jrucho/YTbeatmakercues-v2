@@ -652,8 +652,6 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       masterLoopIndex = null,
       audioRecordingSynced = false,
       audioRecordingSyncDuration = null,
-      recordingStartAudioTime = null,
-      recordingTargetDuration = null,
       // Video Looper
       videoLooperState = "idle",
       videoMediaRecorder = null,
@@ -3050,42 +3048,34 @@ function processLoopFromFrames(frames) {
   finalizeLoopBuffer(buf);
 }
 
-function fitLoopBufferToTargetDuration(buf) {
-  if (!recordingTargetDuration || !Number.isFinite(recordingTargetDuration) || recordingTargetDuration <= 0) {
-    return buf;
-  }
-  const targetFrames = Math.max(1, Math.round(recordingTargetDuration * buf.sampleRate));
-  if (Math.abs(targetFrames - buf.length) <= 1) return buf;
-  const out = audioContext.createBuffer(buf.numberOfChannels, targetFrames, buf.sampleRate);
-  const copyFrames = Math.min(buf.length, targetFrames);
-  for (let c = 0; c < buf.numberOfChannels; c++) {
-    out.getChannelData(c).set(buf.getChannelData(c).subarray(0, copyFrames));
-  }
-  return out;
-}
-
 function finalizeLoopBuffer(buf) {
-  buf = fitLoopBufferToTargetDuration(buf);
-
   // Older versions trimmed leading/trailing silence which sometimes
   // chopped short percussive sounds like hihats. Remove the automatic
   // trimming so the loop is kept exactly as recorded.
 
   let peak = measurePeak(buf);
   if (peak > 1.0) scaleBuffer(buf, 1.0 / peak);
-  // Keep loop boundaries exact to avoid doubled first-hit/transient overlap.
-  // (Boundary crossfade can layer tail+attack for very percussive loops.)
-  // crossfadeLoop(buf, LOOP_CROSSFADE);
+  // Smooth the transition between loop boundaries
+  crossfadeLoop(buf, LOOP_CROSSFADE);
 
   pushUndoState();
-  // Keep exact recorded duration (older behavior): no post-record snap/stretch.
   let exactDur = buf.length / buf.sampleRate;
   if (!baseLoopDuration) {
     baseLoopDuration = exactDur;
     loopsBPM = Math.round((60 * 4) / baseLoopDuration);
+  } else {
+    const bars = Math.max(1, Math.round(exactDur / baseLoopDuration));
+    const target = bars * baseLoopDuration;
+    if (Math.abs(target - exactDur) > 0.0005) {
+      const frames = Math.round(target * buf.sampleRate);
+      const out = audioContext.createBuffer(buf.numberOfChannels, frames, buf.sampleRate);
+      for (let c = 0; c < buf.numberOfChannels; c++) {
+        out.getChannelData(c).set(buf.getChannelData(c).subarray(0, frames));
+      }
+      buf = out;
+    }
+    exactDur = target;
   }
-  audioRecordingSynced = false;
-  audioRecordingSyncDuration = null;
   loopDurations[activeLoopIndex] = exactDur;
   audioLoopRates[activeLoopIndex] = 1;
   audioLoopBuffers[activeLoopIndex] = buf;
@@ -3120,8 +3110,6 @@ function finalizeLoopBuffer(buf) {
     playLoop();
   }
   scheduledStopTime = null;
-  recordingStartAudioTime = null;
-  recordingTargetDuration = null;
   updateLooperButtonColor();
   updateExportButtonColor();
   if (window.refreshMinimalState) window.refreshMinimalState();
@@ -6122,24 +6110,36 @@ async function loadAudio(path) {
  * Audio Looper
  **************************************/
 function beginLoopRecording() {
-  ensureAudioContext().then(() => {
+  ensureAudioContext().then(async () => {
     if (!audioContext) return;
     scheduledStopTime = null;
-    recordingStartAudioTime = audioContext.currentTime;
-    recordingTargetDuration = null;
     bus1RecGain.gain.value = videoAudioEnabled ? 1 : 1;
     bus2RecGain.gain.value = 1;
     bus3RecGain.gain.value = 0;
     bus4RecGain.gain.value = 1;
 
-    // Restore original looper capture path: MediaRecorder only.
-    recordedChunks = [];
-    mediaRecorder = new MediaRecorder(destinationNode.stream);
-    mediaRecorder.ondataavailable = e => {
-      if (e.data.size > 0) recordedChunks.push(e.data);
+    if (audioContext.audioWorklet) {
+      if (!loopRecorderNode) {
+        loopRecorderNode = await createLoopRecorderNode(audioContext);
+      }
+    recordedFrames = [];
+    loopRecorderNode.port.onmessage = (e) => {
+      loopRecorderNode.port.onmessage = null;
+      recordedFrames = e.data;
+      mainRecorderMix.disconnect(loopRecorderNode);
+      processLoopFromFrames(recordedFrames);
     };
-    mediaRecorder.onstop = processLoopFromBlob;
-    mediaRecorder.start();
+    mainRecorderMix.connect(loopRecorderNode);
+    loopRecorderNode.port.postMessage('start');
+  } else {
+      recordedChunks = [];
+      mediaRecorder = new MediaRecorder(destinationNode.stream);
+      mediaRecorder.ondataavailable = e => {
+        if (e.data.size > 0) recordedChunks.push(e.data);
+      };
+      mediaRecorder.onstop = processLoopFromBlob;
+      mediaRecorder.start();
+    }
 
     looperState = "recording";
     ensureLoopers();
@@ -6160,16 +6160,27 @@ function beginLoopRecording() {
 function startRecording() {
   ensureAudioContext().then(() => {
     if (!audioContext) return;
-    if (!recordingNewLoop && looperState !== "idle") return;
-    beginLoopRecording();
+    if (recordingNewLoop && looperState !== "idle" && baseLoopDuration) {
+      const now = audioContext.currentTime;
+      let d = baseLoopDuration;
+      if (pitchTarget === "loop") d /= getCurrentPitchRate();
+      const elapsed = (now - loopStartAbsoluteTime) % d;
+      const remain = d - elapsed;
+      if (newLoopStartTimeout) clearTimeout(newLoopStartTimeout);
+      newLoopStartTimeout = setTimeout(() => {
+        beginLoopRecording();
+      }, remain * 1000);
+    } else {
+      if (!recordingNewLoop && looperState !== "idle") return;
+      beginLoopRecording();
+    }
   });
 }
 
 function stopRecordingAndPlay() {
-  if (mediaRecorder && mediaRecorder.state === "recording") {
-    if (!recordingTargetDuration && recordingStartAudioTime !== null && audioContext) {
-      recordingTargetDuration = Math.max(0.001, audioContext.currentTime - recordingStartAudioTime);
-    }
+  if (loopRecorderNode) {
+    loopRecorderNode.port.postMessage('stop');
+  } else if (mediaRecorder && mediaRecorder.state === "recording") {
     mediaRecorder.stop();
   }
 }
@@ -6187,9 +6198,6 @@ function scheduleStopRecording() {
     const elapsed = (now - loopStartAbsoluteTime) % d;
     const remain = d - elapsed;
     scheduledStopTime = now + remain;
-    if (recordingStartAudioTime !== null) {
-      recordingTargetDuration = Math.max(0.001, scheduledStopTime - recordingStartAudioTime);
-    }
     setTimeout(() => {
       if (looperState === "recording") stopRecordingAndPlay();
     }, remain * 1000);
