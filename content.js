@@ -7622,17 +7622,29 @@ document.addEventListener("keydown", e => {
 });
 
 function sequencerTriggerCue(cueKey) {
-  const targetTime = getCueTime(cueKey);
-  if (targetTime === undefined) return;
+  const video = getVideoElement();
+  if (!video || getCueTime(cueKey) === undefined) return;
   selectedCueKey = cueKey;
   clearSuperKnobHistory();
-
-  // Route cue jumps through the existing two-deck crossfade path to reduce click artifacts
-  // without touching buffer sizes, scheduling, or audio routing topology.
-  safeSeekVideo(null, targetTime);
+  const fadeTime = 0.002; // 50ms fade
+  const now = audioContext.currentTime;
+  
+  // Cancel any scheduled changes and ramp down the gain
+  videoGain.gain.cancelScheduledValues(now);
+  videoGain.gain.setValueAtTime(videoGain.gain.value, now);
+  videoGain.gain.linearRampToValueAtTime(0, now + fadeTime);
+  
+  // After the fade out, jump to the new cue and fade back in
+  setTimeout(() => {
+    video.currentTime = getCueTime(cueKey);
+    const t = audioContext.currentTime;
+    videoGain.gain.setValueAtTime(0, t);
+    videoGain.gain.linearRampToValueAtTime(1, t + fadeTime);
+  }, fadeTime * 1000);
 
   recordMidiEvent('cue', cueKey);
-  console.log(`Sequencer triggered cue ${cueKey} at time ${targetTime}`);
+  
+  console.log(`Sequencer triggered cue ${cueKey} at time ${getCueTime(cueKey)}`);
 }
 
 function isTypingInTextField(e) {
