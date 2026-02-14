@@ -652,6 +652,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       masterLoopIndex = null,
       audioRecordingSynced = false,
       audioRecordingSyncDuration = null,
+      recordingStartAudioTime = null,
+      recordingTargetDuration = null,
       // Video Looper
       videoLooperState = "idle",
       videoMediaRecorder = null,
@@ -3048,7 +3050,23 @@ function processLoopFromFrames(frames) {
   finalizeLoopBuffer(buf);
 }
 
+function fitLoopBufferToTargetDuration(buf) {
+  if (!recordingTargetDuration || !Number.isFinite(recordingTargetDuration) || recordingTargetDuration <= 0) {
+    return buf;
+  }
+  const targetFrames = Math.max(1, Math.round(recordingTargetDuration * buf.sampleRate));
+  if (Math.abs(targetFrames - buf.length) <= 1) return buf;
+  const out = audioContext.createBuffer(buf.numberOfChannels, targetFrames, buf.sampleRate);
+  const copyFrames = Math.min(buf.length, targetFrames);
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    out.getChannelData(c).set(buf.getChannelData(c).subarray(0, copyFrames));
+  }
+  return out;
+}
+
 function finalizeLoopBuffer(buf) {
+  buf = fitLoopBufferToTargetDuration(buf);
+
   // Older versions trimmed leading/trailing silence which sometimes
   // chopped short percussive sounds like hihats. Remove the automatic
   // trimming so the loop is kept exactly as recorded.
@@ -3102,6 +3120,8 @@ function finalizeLoopBuffer(buf) {
     playLoop();
   }
   scheduledStopTime = null;
+  recordingStartAudioTime = null;
+  recordingTargetDuration = null;
   updateLooperButtonColor();
   updateExportButtonColor();
   if (window.refreshMinimalState) window.refreshMinimalState();
@@ -6105,6 +6125,8 @@ function beginLoopRecording() {
   ensureAudioContext().then(() => {
     if (!audioContext) return;
     scheduledStopTime = null;
+    recordingStartAudioTime = audioContext.currentTime;
+    recordingTargetDuration = null;
     bus1RecGain.gain.value = videoAudioEnabled ? 1 : 1;
     bus2RecGain.gain.value = 1;
     bus3RecGain.gain.value = 0;
@@ -6145,6 +6167,9 @@ function startRecording() {
 
 function stopRecordingAndPlay() {
   if (mediaRecorder && mediaRecorder.state === "recording") {
+    if (!recordingTargetDuration && recordingStartAudioTime !== null && audioContext) {
+      recordingTargetDuration = Math.max(0.001, audioContext.currentTime - recordingStartAudioTime);
+    }
     mediaRecorder.stop();
   }
 }
@@ -6162,6 +6187,9 @@ function scheduleStopRecording() {
     const elapsed = (now - loopStartAbsoluteTime) % d;
     const remain = d - elapsed;
     scheduledStopTime = now + remain;
+    if (recordingStartAudioTime !== null) {
+      recordingTargetDuration = Math.max(0.001, scheduledStopTime - recordingStartAudioTime);
+    }
     setTimeout(() => {
       if (looperState === "recording") stopRecordingAndPlay();
     }, remain * 1000);
