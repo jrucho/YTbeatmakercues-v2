@@ -6115,7 +6115,7 @@ async function loadAudio(path) {
  * Audio Looper
  **************************************/
 function beginLoopRecording() {
-  ensureAudioContext().then(async () => {
+  ensureAudioContext().then(() => {
     if (!audioContext) return;
     scheduledStopTime = null;
     bus1RecGain.gain.value = videoAudioEnabled ? 1 : 1;
@@ -6123,28 +6123,14 @@ function beginLoopRecording() {
     bus3RecGain.gain.value = 0;
     bus4RecGain.gain.value = 1;
 
-    if (audioContext.audioWorklet) {
-      if (!loopRecorderNode) {
-        loopRecorderNode = await createLoopRecorderNode(audioContext);
-      }
-    recordedFrames = [];
-    loopRecorderNode.port.onmessage = (e) => {
-      loopRecorderNode.port.onmessage = null;
-      recordedFrames = e.data;
-      mainRecorderMix.disconnect(loopRecorderNode);
-      processLoopFromFrames(recordedFrames);
+    // Restore original looper capture path: MediaRecorder only.
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(destinationNode.stream);
+    mediaRecorder.ondataavailable = e => {
+      if (e.data.size > 0) recordedChunks.push(e.data);
     };
-    mainRecorderMix.connect(loopRecorderNode);
-    loopRecorderNode.port.postMessage('start');
-  } else {
-      recordedChunks = [];
-      mediaRecorder = new MediaRecorder(destinationNode.stream);
-      mediaRecorder.ondataavailable = e => {
-        if (e.data.size > 0) recordedChunks.push(e.data);
-      };
-      mediaRecorder.onstop = processLoopFromBlob;
-      mediaRecorder.start();
-    }
+    mediaRecorder.onstop = processLoopFromBlob;
+    mediaRecorder.start();
 
     looperState = "recording";
     ensureLoopers();
@@ -6171,9 +6157,7 @@ function startRecording() {
 }
 
 function stopRecordingAndPlay() {
-  if (loopRecorderNode) {
-    loopRecorderNode.port.postMessage('stop');
-  } else if (mediaRecorder && mediaRecorder.state === "recording") {
+  if (mediaRecorder && mediaRecorder.state === "recording") {
     mediaRecorder.stop();
   }
 }
