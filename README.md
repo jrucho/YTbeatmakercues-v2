@@ -24,7 +24,7 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 
 ## New in 2.1
 - Cue workflow remains low-latency and numerically consistent: keyboard stays at 1–9 and 0 (10 max), while connecting a MIDI controller automatically expands to 1..16 by default (optional Extended Mode up to 256 available in Advanced View).
-- Smart loopers: when a loop is already playing, new loops sync; when all loopers are stopped, new loops run free and independent.
+- Smart loopers: when a loop is already playing, new loops sync; when all loopers are stopped, new loops run free and independent. (Note: loopers currently trigger on release instead of press. This will be corrected in the next update.)
 - MIDI SHIFT double-tap is now more reliable for pause/stop behavior on controllers.
 - MIDI Mapping now includes **Back 5s** and **Forward 5s** assignable transport actions.
 
