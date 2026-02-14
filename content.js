@@ -108,7 +108,7 @@ async function suggestCuesFromTransients() {
 
   const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
   topPeaks.forEach((p, i) => {
-    cuePoints[keys[i]] = p.t;
+    setCueAtKey(keys[i], p.t);
   });
 
   saveCuePointsToURL();
@@ -730,6 +730,9 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       shiftDownTime = 0,
       shiftUsedAsModifier = false,
       lastShiftTapTime = 0,
+      lastMidiShiftReleaseTime = 0,
+      cueInputMode = 'keyboard',
+      extendedMidiCueMode = localStorage.getItem('ytbm_extendedMidiCueMode') === '1',
       pitchDownInterval = null,
       pitchUpInterval = null,
       // Track last processed MIDI message to filter duplicates
@@ -2222,7 +2225,8 @@ for (let i = 0; i < 10; i++) {
     const vid = getVideoElement();
     if (modTouchActive && vid) {
       pushUndoState();
-      cuePoints[cueKey] = vid.currentTime;
+      cueInputMode = 'keyboard';
+      setCueAtKey(cueKey, vid.currentTime);
       saveCuePointsToURL();
       updateCueMarkers();
       refreshCuesButton();
@@ -2428,10 +2432,10 @@ function triggerPadCue(padIndex) {
   // 2 – jump to the linked cue using the cross‑fade helper
   const vid = getVideoElement();
   const cueKey = (padIndex === 9) ? "0" : String(padIndex + 1);
-  if (vid && cuePoints[cueKey] !== undefined) {
+  if (vid && getCueTime(cueKey) !== undefined) {
     selectedCueKey = cueKey;
     clearSuperKnobHistory();
-    safeSeekVideo(null, cuePoints[cueKey]);  // routes into jumpToCue()
+    safeSeekVideo(null, getCueTime(cueKey));  // routes into jumpToCue()
   }
 }
   
@@ -2566,9 +2570,10 @@ hideYouTubePopups();
             for (const [key, midiNote] of Object.entries(midiNotes.cues)) {
               if (midiNote === note) {
                 const vid = getVideoElement();
-                if (vid && cuePoints[key] === undefined) {
+                if (vid && getCueTime(key) === undefined) {
                   pushUndoState();
-                  cuePoints[key] = vid.currentTime;
+                  cueInputMode = 'midi';
+                  setCueAtKey(key, vid.currentTime);
                   saveCuePointsToURL();
                   updateCueMarkers();
                   refreshCuesButton();
@@ -2624,9 +2629,10 @@ document.addEventListener(
             const key = e.key;
       const vid = getVideoElement();
       // If this cue isn't marked yet, mark it silently and skip playback
-      if (cuePoints[key] === undefined && vid) {
+      if (getCueTime(key) === undefined && vid) {
         pushUndoState();
-        cuePoints[key] = vid.currentTime;
+        cueInputMode = 'keyboard';
+        setCueAtKey(key, vid.currentTime);
         saveCuePointsToURL();
         updateCueMarkers();
         refreshCuesButton();
@@ -2910,7 +2916,8 @@ document.addEventListener(
         e.stopImmediatePropagation();
         // Now mark the cue point:
         pushUndoState();
-        cuePoints[e.key] = t;
+        cueInputMode = 'keyboard';
+        setCueAtKey(e.key, t);
         saveCuePointsToURL();
         updateCueMarkers();
         refreshCuesButton();
@@ -4146,6 +4153,7 @@ function onMinimalPointerUp(e) {
       return;
     }
     if (e.altKey) {
+      cueInputMode = 'keyboard';
       randomizeCuesInOneClick();
       refreshMinimalState();
       return;
@@ -4252,8 +4260,8 @@ function onMinimalPointerUp(e) {
 
     if (minimalCuesLabel && cuesButtonMin) {
       const cc = Object.keys(cuePoints).length;
-      minimalCuesLabel.textContent = cc ? `Cues ${cc}/10` : "Cues";
-      cuesButtonMin.dataset.mode = cc >= 10 ? "erase" : "add";
+      minimalCuesLabel.textContent = cc ? `Cues ${getCueCountLabel()}` : "Cues";
+      cuesButtonMin.dataset.mode = cc >= getCueModeLimit() ? "erase" : "add";
     }
 
     updateMinimalLoopButtonColor(loopButtonMin);
@@ -6003,7 +6011,7 @@ function onMarkerDoubleClick(key) {
 
 // Add or Update Cue
 function addCue(key, time) {
-  cuePoints[key] = time;
+  setCueAtKey(key, time);
   saveCuePoints();
   updateCueMarkers();
 }
@@ -6127,6 +6135,11 @@ function scheduleStopRecording() {
   });
 }
 
+
+function hasActiveSyncLoop() {
+  return loopSources.some((src, i) => !!src && !pendingStopTimeouts[i]);
+}
+
 function playLoop(startTime = null) {
   ensureAudioContext().then(() => {
     if (!audioContext) return;
@@ -6180,9 +6193,10 @@ function playNewLoop(index) {
     if (pitchTarget === "loop") rate *= getCurrentPitchRate();
     src.playbackRate.value = rate;
     src.connect(g).connect(loopAudioGain);
-    const when = loopSource ? getNextBarTime(audioContext.currentTime + PLAY_PADDING) : (audioContext.currentTime + PLAY_PADDING);
+    const shouldSync = hasActiveSyncLoop();
+    const when = shouldSync ? getNextBarTime(audioContext.currentTime + PLAY_PADDING) : (audioContext.currentTime + PLAY_PADDING);
     src.start(when);
-    if (!loopSource) {
+    if (!hasActiveSyncLoop()) {
       if (!clock.isRunning) {
         clock.start(when);
       }
@@ -6211,10 +6225,10 @@ function playSingleLoop(index, startTime = null, offset = 0) {
     if (pitchTarget === "loop") rate *= getCurrentPitchRate();
     src.playbackRate.value = rate;
     src.connect(g).connect(loopAudioGain);
-    const when = startTime !== null ? startTime : (loopSource ? getNextBarTime(audioContext.currentTime + PLAY_PADDING) : audioContext.currentTime);
+    const when = startTime !== null ? startTime : (hasActiveSyncLoop() ? getNextBarTime(audioContext.currentTime + PLAY_PADDING) : audioContext.currentTime);
     const off = Math.max(0, offset % (audioLoopBuffers[index].duration || 1e-6));
     src.start(when, off);
-    if (!loopSource) {
+    if (!hasActiveSyncLoop()) {
       if (!clock.isRunning) {
         clock.start(when);
       }
@@ -6238,7 +6252,7 @@ function schedulePlayLoop(index) {
     if (!audioContext) return;
     if (pendingStopTimeouts[index]) { clearTimeout(pendingStopTimeouts[index]); pendingStopTimeouts[index] = null; }
     let when = audioContext.currentTime + PLAY_PADDING;
-    if (loopSource && baseLoopDuration && loopStartAbsoluteTime) {
+    if (hasActiveSyncLoop() && baseLoopDuration && loopStartAbsoluteTime) {
       when = getNextBarTime(when);
     }
     playSingleLoop(index, when, 0);
@@ -6844,6 +6858,79 @@ function saveUserSampleDataURL(type, dataURL) {
 /**************************************
  * Cue Points
  **************************************/
+
+function getCueModeLimit() {
+  if (cueInputMode === 'keyboard') return 10;
+  if (extendedMidiCueMode) return 256;
+  return 16;
+}
+
+function getCueCountLabel() {
+  const c = Object.keys(cuePoints).length;
+  if (cueInputMode === 'keyboard') return `${c}/10`;
+  const denom = extendedMidiCueMode ? c : Math.max(c, 16);
+  return `${c}/${denom}`;
+}
+
+function sortCueKeysForDisplay(keys) {
+  return keys.sort((a, b) => {
+    const an = Number(a);
+    const bn = Number(b);
+    const aNum = Number.isFinite(an);
+    const bNum = Number.isFinite(bn);
+    if (aNum && bNum) return an - bn;
+    if (aNum) return -1;
+    if (bNum) return 1;
+    return String(a).localeCompare(String(b));
+  });
+}
+
+function getMidiCueKeyForInput(note, channel) {
+  for (let i = 1; i <= 10; i++) {
+    if (Number(midiNotes.cues[String(i % 10)]) === Number(note)) return String(i);
+  }
+  const keys = sortCueKeysForDisplay(Object.keys(cuePoints));
+  const existing = keys.find(k => {
+    const cue = cuePoints[k];
+    return cue && cue.midi && cue.midi.note === note && cue.midi.channel === channel;
+  });
+  if (existing) return existing;
+  const limit = getCueModeLimit();
+  if (keys.length >= limit) return null;
+  for (let i = 1; i <= limit; i++) {
+    const k = String(i);
+    if (!(k in cuePoints)) return k;
+  }
+  return null;
+}
+
+function setCueAtKey(key, time, meta = null) {
+  cuePoints[key] = {
+    time,
+    ...(meta ? { midi: meta } : {})
+  };
+}
+
+function getCueTime(key) {
+  const cue = cuePoints[key];
+  if (cue === undefined) return undefined;
+  if (typeof cue === 'number') return cue;
+  if (cue && typeof cue.time === 'number') return cue.time;
+  return undefined;
+}
+
+function normalizeCuePoints() {
+  const normalized = {};
+  const entries = Object.entries(cuePoints);
+  entries.forEach(([k, v]) => {
+    if (typeof v === 'number') {
+      normalized[k] = { time: v };
+    } else if (v && typeof v === 'object' && typeof v.time === 'number') {
+      normalized[k] = v;
+    }
+  });
+  cuePoints = normalized;
+}
 function pasteCuesFromLink() {
   let pasted = prompt("Paste YouTube link with cues:");
   if (!pasted) return;
@@ -6855,7 +6942,7 @@ function pasteCuesFromLink() {
       cuePoints = {};
       param.split(",").forEach(pair => {
         let [k, t] = pair.split(":");
-        if (k && t) cuePoints[k] = parseFloat(t);
+        if (k && t) setCueAtKey(k, parseFloat(t));
       });
       saveCuePointsToURL();
       updateCueMarkers();
@@ -6874,15 +6961,22 @@ function randomizeCuesInOneClick() {
   const vid = getVideoElement();
   if (!vid || !vid.duration) return;
   pushUndoState();
+  const targetCount = cueInputMode === 'midi' ? 16 : 10;
   const cues = [];
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < targetCount; i++) {
     cues.push(Math.random() * vid.duration);
   }
   cues.sort((a, b) => a - b);
-  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
   cuePoints = {};
-  for (let i = 0; i < keys.length; i++) {
-    cuePoints[keys[i]] = cues[i];
+  if (cueInputMode === 'midi') {
+    for (let i = 1; i <= targetCount; i++) {
+      setCueAtKey(String(i), cues[i - 1]);
+    }
+  } else {
+    const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+    for (let i = 0; i < keys.length; i++) {
+      setCueAtKey(keys[i], cues[i]);
+    }
   }
   saveCuePointsToURL();
   updateCueMarkers();
@@ -6898,9 +6992,10 @@ function loadCuePoints() {
   let storedCuePoints = localStorage.getItem("cuePoints");
   if (storedCuePoints) {
     cuePoints = JSON.parse(storedCuePoints);
+    normalizeCuePoints();
   } else {
     // Set default cue points or random ones
-    cuePoints = { "1": 10, "2": 20, "3": 30 };
+    cuePoints = { "1": { time: 10 }, "2": { time: 20 }, "3": { time: 30 } };
   }
 }
 
@@ -6908,7 +7003,7 @@ function loadCuePoints() {
 function saveCuePoints() {
   localStorage.setItem("cuePoints", JSON.stringify(cuePoints));
   let url = new URL(window.location.href);
-  let cueParam = Object.entries(cuePoints).map(([key, time]) => `${key}:${time}`).join(',');
+  let cueParam = Object.entries(cuePoints).map(([key]) => `${key}:${getCueTime(key)}`).join(',');
   url.searchParams.set('cue_points', cueParam);
   window.history.replaceState(null, "", url);
 }
@@ -6940,8 +7035,9 @@ function loadCuePointsAtStartup() {
         const obj = JSON.parse(stored);
         // Only keep cues within the video duration.
         for (let key in obj) {
-          if (obj[key] <= vid.duration) {
-            cuePoints[key] = obj[key];
+          const val = (typeof obj[key] === "number") ? obj[key] : (obj[key] && typeof obj[key].time === "number" ? obj[key].time : null);
+          if (val !== null && val <= vid.duration) {
+            setCueAtKey(key, val, obj[key]?.midi || null);
           }
         }
       } catch (e) {
@@ -6978,11 +7074,12 @@ function loadCuePointsFromURLParam() {
   p.split(",").forEach(pair => {
     let [k, t] = pair.split(":");
     if (k && t) {
-      cuePoints[k] = parseFloat(t);
+      setCueAtKey(k, parseFloat(t));
       foundAny = true;
     }
   });
   if (foundAny) {
+    normalizeCuePoints();
     updateCueMarkers();
     refreshCuesButton();
   }
@@ -7000,12 +7097,13 @@ function getCurrentVideoID() {
 
 function saveCuePointsToURL() {
   let u = new URL(window.location.href);
-  let s = Object.entries(cuePoints).map(([k, t]) => k + ":" + t.toFixed(3)).join(",");
+  let s = Object.keys(cuePoints).map((k) => { const t = getCueTime(k); return t === undefined ? null : (k + ":" + t.toFixed(3)); }).filter(Boolean).join(",");
   u.searchParams.set("cue_points", s);
   window.history.replaceState(null, "", u);
 
   let vidID = getCurrentVideoID();
   if (vidID) {
+    normalizeCuePoints();
     localStorage.setItem("ytbm_cues_" + vidID, JSON.stringify(cuePoints));
   }
 }
@@ -7064,7 +7162,9 @@ function updateCueMarkers() {
   if (!vid || !vid.duration) return;
 
   // For each cue
-  Object.entries(cuePoints).forEach(([key, time]) => {
+  sortCueKeysForDisplay(Object.keys(cuePoints)).forEach((key) => {
+    const time = getCueTime(key);
+    if (time === undefined) return;
     const marker = document.createElement("div");
     marker.className = "cue-marker";
 
@@ -7161,7 +7261,7 @@ function onDocumentMouseUp(e) {
   pushUndoState();
   let rx = e.clientX - progressBarRect.left;
   let pc = Math.max(0, Math.min(1, rx / progressBarRect.width));
-  cuePoints[draggingCueIndex] = pc * vid.duration;
+  setCueAtKey(draggingCueIndex, pc * vid.duration);
   saveCuePointsToURL();
   draggingMarker = null;
   draggingCueIndex = null;
@@ -7189,7 +7289,7 @@ function addCueAtTime(t) {
   if (c >= 10) return;
   pushUndoState();
   let k = ["1","2","3","4","5","6","7","8","9","0"].find(key => !(key in cuePoints)) || "0";
-  cuePoints[k] = t;
+  setCueAtKey(k, t);
   saveCuePointsToURL();
   updateCueMarkers();
   refreshCuesButton();
@@ -7200,10 +7300,16 @@ function addCueAtCurrentVideoTime() {
   let vid = getVideoElement();
   if (!vid) return;
   let c = Object.keys(cuePoints).length;
-  if (c >= 10) return;
+  const limit = getCueModeLimit();
+  if (c >= limit) return;
   pushUndoState();
-  let k = ["1","2","3","4","5","6","7","8","9","0"].find(key => !(key in cuePoints)) || "0";
-  cuePoints[k] = vid.currentTime;
+  let k;
+  if (cueInputMode === 'midi') {
+    k = sortCueKeysForDisplay(Array.from({ length: limit }, (_, i) => String(i + 1))).find(key => !(key in cuePoints));
+  } else {
+    k = ["1","2","3","4","5","6","7","8","9","0"].find(key => !(key in cuePoints)) || "0";
+  }
+  setCueAtKey(k, vid.currentTime);
   saveCuePointsToURL();
   updateCueMarkers();
   refreshCuesButton();
@@ -7213,11 +7319,11 @@ function addCueAtCurrentVideoTime() {
 function adjustSelectedCue(dt) {
   if (!selectedCueKey) return;
   const vid = getVideoElement();
-  if (!vid || cuePoints[selectedCueKey] === undefined) return;
+  if (!vid || getCueTime(selectedCueKey) === undefined) return;
   const dur = vid.duration || Infinity;
-  let t = cuePoints[selectedCueKey] + dt;
+  let t = getCueTime(selectedCueKey) + dt;
   t = Math.max(0, Math.min(dur, t));
-  cuePoints[selectedCueKey] = t;
+  setCueAtKey(selectedCueKey, t);
   scheduleSaveCuePoints();
   updateCueMarkers();
   refreshCuesButton();
@@ -7403,8 +7509,10 @@ function computeSuperKnobDelta(val) {
 function refreshCuesButton() {
   if (!cuesButton) return;
   let c = Object.keys(cuePoints).length;
-  if (c >= 10) {
-    cuesButton.innerText = `EraseCues(${c}/10)`;
+  const limit = getCueModeLimit();
+  const countLabel = getCueCountLabel();
+  if (c >= limit) {
+    cuesButton.innerText = `EraseCues(${countLabel})`;
     cuesButton.style.background = "#C22";
     cuesButton.onclick = () => {
       pushUndoState();
@@ -7415,7 +7523,7 @@ function refreshCuesButton() {
       if (window.refreshMinimalState) window.refreshMinimalState();
     };
   } else {
-    cuesButton.innerText = `AddCue(${c}/10)`;
+    cuesButton.innerText = `AddCue(${countLabel})`;
     cuesButton.style.background = "#333";
     cuesButton.onclick = e => {
       if (e.ctrlKey || e.metaKey) {
@@ -7437,7 +7545,7 @@ function refreshCuesButton() {
 function copyCueLink() {
   let url = new URL(window.location.href);
   let s = Object.entries(cuePoints)
-    .map(([k, t]) => k + ":" + t.toFixed(3))
+    .map(([k]) => { const t = getCueTime(k); return t === undefined ? null : (k + ":" + t.toFixed(3)); }).filter(Boolean)
     .join(",");
   url.searchParams.set("cue_points", s);
   let fullLink = url.toString();
@@ -7528,7 +7636,7 @@ document.addEventListener("keydown", e => {
 
 function sequencerTriggerCue(cueKey) {
   const video = getVideoElement();
-  if (!video || !cuePoints[cueKey]) return;
+  if (!video || getCueTime(cueKey) === undefined) return;
   selectedCueKey = cueKey;
   clearSuperKnobHistory();
   const fadeTime = 0.002; // 50ms fade
@@ -7541,7 +7649,7 @@ function sequencerTriggerCue(cueKey) {
   
   // After the fade out, jump to the new cue and fade back in
   setTimeout(() => {
-    video.currentTime = cuePoints[cueKey];
+    video.currentTime = getCueTime(cueKey);
     const t = audioContext.currentTime;
     videoGain.gain.setValueAtTime(0, t);
     videoGain.gain.linearRampToValueAtTime(1, t + fadeTime);
@@ -7549,7 +7657,7 @@ function sequencerTriggerCue(cueKey) {
 
   recordMidiEvent('cue', cueKey);
   
-  console.log(`Sequencer triggered cue ${cueKey} at time ${cuePoints[cueKey]}`);
+  console.log(`Sequencer triggered cue ${cueKey} at time ${getCueTime(cueKey)}`);
 }
 
 function isTypingInTextField(e) {
@@ -7753,7 +7861,7 @@ function onKeyDown(e) {
   // Trigger cue points when keys 1-0 are pressed.
   if ((e.key >= "1" && e.key <= "9") || e.key === "0") {
     let video = getVideoElement();
-    if (video && cuePoints[e.key] !== undefined) {
+    if (video && getCueTime(e.key) !== undefined) {
       selectedCueKey = e.key;
       clearSuperKnobHistory();
       const fadeTime = 0.002; // 50ms fade duration
@@ -7764,7 +7872,7 @@ function onKeyDown(e) {
       videoGain.gain.linearRampToValueAtTime(0, now + fadeTime);
       // After fade out, change cue and fade back in
       setTimeout(() => {
-        video.currentTime = cuePoints[e.key];
+        video.currentTime = getCueTime(e.key);
         const t = audioContext.currentTime;
         videoGain.gain.setValueAtTime(0, t);
         videoGain.gain.linearRampToValueAtTime(1, t + fadeTime);
@@ -7877,7 +7985,8 @@ function onKeyDown(e) {
     e.stopPropagation();
 
     pushUndoState();
-    cuePoints[e.key] = vid.currentTime;
+    cueInputMode = 'keyboard';
+    setCueAtKey(e.key, vid.currentTime);
     saveCuePointsToURL();
     updateCueMarkers();
     refreshCuesButton();
@@ -8911,6 +9020,27 @@ function addControls() {
   midiToggleRow.appendChild(midiToggle);
   cw.appendChild(midiToggleRow);
 
+  const extendedMidiRow = document.createElement('div');
+  extendedMidiRow.style.display = 'flex';
+  extendedMidiRow.style.alignItems = 'center';
+  extendedMidiRow.style.gap = '8px';
+  extendedMidiRow.style.marginBottom = '8px';
+  const extendedMidiLabel = document.createElement('label');
+  extendedMidiLabel.textContent = 'Extended MIDI Cue Mode';
+  extendedMidiLabel.style.fontSize = '12px';
+  const extendedMidiToggle = document.createElement('input');
+  extendedMidiToggle.type = 'checkbox';
+  extendedMidiToggle.checked = extendedMidiCueMode;
+  extendedMidiToggle.addEventListener('change', () => {
+    extendedMidiCueMode = !!extendedMidiToggle.checked;
+    localStorage.setItem('ytbm_extendedMidiCueMode', extendedMidiCueMode ? '1' : '0');
+    refreshCuesButton();
+    if (window.refreshMinimalState) window.refreshMinimalState();
+  });
+  extendedMidiRow.appendChild(extendedMidiToggle);
+  extendedMidiRow.appendChild(extendedMidiLabel);
+  cw.appendChild(extendedMidiRow);
+
   const createSampleRow = (type, label) => {
     const container = document.createElement("div");
     container.style.display = "flex";
@@ -9102,6 +9232,7 @@ function addControls() {
   randomCuesButton.addEventListener("click", (e) => {
     if (e.metaKey || e.ctrlKey) {
       pushUndoState();
+      cueInputMode = 'keyboard';
       randomizeCuesInOneClick();
     } else {
       suggestCuesFromTransients();
@@ -9693,8 +9824,9 @@ function handleMIDIMessage(e) {
   lastMidiTimestamp = e.timeStamp;
   lastMidiData = [...e.data];
 
-  let [st, note] = e.data;
+  let [st, note, velocity = 0] = e.data;
   const command = st & 0xf0;
+  const channel = st & 0x0f;
 
   if (useMidiLoopers && (command === 144 || command === 128)) {
     if (command === 144 && e.data[2] > 0) {
@@ -9708,11 +9840,11 @@ function handleMIDIMessage(e) {
     shiftUsedAsModifier = true;
   }
 
-  if (st === 144 && note === midiNotes.instrumentToggle) {
+  if (command === 144 && velocity > 0 && note === midiNotes.instrumentToggle) {
     showInstrumentWindowToggle();
     return;
   }
-  if (st === 144 && note === midiNotes.fxPadToggle) {
+  if (command === 144 && velocity > 0 && note === midiNotes.fxPadToggle) {
     showFxPadWindowToggle();
     return;
   }
@@ -9734,21 +9866,23 @@ function handleMIDIMessage(e) {
   }
 
   if (note === midiNotes.shift) {
-    if (st === 144) {
+    if (command === 144 && velocity > 0) {
       isModPressed = true;
       shiftDownTime = Date.now();
       shiftUsedAsModifier = false;
-    } else if (st === 128) {
+    } else if (command === 128 || (command === 144 && velocity === 0)) {
       isModPressed = false;
-      const holdMs = Date.now() - shiftDownTime;
-      if (!shiftUsedAsModifier && holdMs < clickDelay) {
+      const now = Date.now();
+      const holdMs = now - shiftDownTime;
+      if (!shiftUsedAsModifier && holdMs < clickDelay && (now - lastMidiShiftReleaseTime) > 40) {
         handleShiftTap();
       }
+      lastMidiShiftReleaseTime = now;
     }
     return;
 
   }
-  if (currentlyDetectingMidi && st === 144) {
+  if (currentlyDetectingMidi && command === 144 && velocity > 0) {
     if (midiNotes[currentlyDetectingMidi] !== undefined) {
       // Could be a base field or a cue
       if (typeof midiNotes[currentlyDetectingMidi] === 'number') {
@@ -9789,8 +9923,9 @@ function handleMIDIMessage(e) {
         }
       }
     }
-  } else if (st === 144) {
+  } else if (command === 144 && velocity > 0) {
         if (Number(note) === Number(midiNotes.randomCues)) {
+      cueInputMode = 'midi';
       randomizeCuesInOneClick();
       return;
     }
@@ -9877,27 +10012,26 @@ function handleMIDIMessage(e) {
     if (note === midiNotes.reverbToggle) toggleReverb();
     if (note === midiNotes.cassetteToggle) toggleCassette();
 
-    for (let [k, v] of Object.entries(midiNotes.cues)) {
-      if (v === note) {
-        let vid = getVideoElement();
-        if (!vid) return;
-        if (isModPressed) {
-          pushUndoState();
-          cuePoints[k] = vid.currentTime;
-          saveCuePointsToURL();
-          updateCueMarkers();
-          refreshCuesButton();
-          if (window.refreshMinimalState) window.refreshMinimalState();
-        } else {
-          if (k in cuePoints) {
-        selectedCueKey = k;
-        // jump with a 50 ms cross-fade, same as the keyboard path
-        sequencerTriggerCue(k);
-          }
-        }
+    const isMappedCueNote = Object.values(midiNotes.cues).some(v => Number(v) === Number(note));
+    if (isMappedCueNote) {
+      let vid = getVideoElement();
+      if (!vid) return;
+      cueInputMode = 'midi';
+      const cueKey = getMidiCueKeyForInput(note, channel);
+      if (!cueKey) return;
+      if (isModPressed || getCueTime(cueKey) === undefined) {
+        pushUndoState();
+        setCueAtKey(cueKey, vid.currentTime, { note, channel });
+        saveCuePointsToURL();
+        updateCueMarkers();
+        refreshCuesButton();
+        if (window.refreshMinimalState) window.refreshMinimalState();
+      } else {
+        selectedCueKey = cueKey;
+        sequencerTriggerCue(cueKey);
       }
     }
-  } else if (st === 128) {
+  } else if (command === 128 || (command === 144 && velocity === 0)) {
     if (note === midiNotes.pitchDown) stopPitchDownRepeat();
     if (note === midiNotes.pitchUp) stopPitchUpRepeat();
     if (note === midiNotes.looperA) { activeLoopIndex = 0; activeMidiLoopIndex = 0; if (!isModPressed) onLooperButtonMouseUp(); }
