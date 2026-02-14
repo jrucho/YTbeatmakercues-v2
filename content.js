@@ -4223,7 +4223,8 @@ function onMinimalPointerUp(e) {
     if (minimalCuesLabel && cuesButtonMin) {
       const cc = Object.keys(cuePoints).length;
       minimalCuesLabel.textContent = cc ? `Cues ${getCueCountLabel()}` : "Cues";
-      cuesButtonMin.dataset.mode = cc >= getCueModeLimit() ? "erase" : "add";
+      const minIsFull = (cueInputMode === 'keyboard' && cc >= 10) || cc >= 16 || cc >= getCueModeLimit();
+      cuesButtonMin.dataset.mode = minIsFull ? "erase" : "add";
     }
 
     updateMinimalLoopButtonColor(loopButtonMin);
@@ -6829,7 +6830,8 @@ function getCueModeLimit() {
 
 function getCueCountLabel() {
   const c = Object.keys(cuePoints).length;
-  if (cueInputMode === 'keyboard') return `${c}/10`;
+  // Always reflect real state; never show misleading 16/10 when cue count exceeds keyboard range.
+  if (cueInputMode === 'keyboard' && c <= 10) return `${c}/10`;
   const denom = extendedMidiCueMode ? c : Math.max(c, 16);
   return `${c}/${denom}`;
 }
@@ -7503,7 +7505,7 @@ function refreshCuesButton() {
   const limit = getCueModeLimit();
   const countLabel = getCueCountLabel();
   const keyboardFull = cueInputMode === 'keyboard' && c >= 10;
-  const midiDefaultFull = cueInputMode === 'midi' && c >= 16;
+  const midiDefaultFull = c >= 16;
   const hardLimitFull = c >= limit;
   if (keyboardFull || midiDefaultFull || hardLimitFull) {
     cuesButton.innerText = `EraseCues(${countLabel})`;
@@ -7633,7 +7635,7 @@ function sequencerTriggerCue(cueKey) {
   if (!video || getCueTime(cueKey) === undefined) return;
   selectedCueKey = cueKey;
   clearSuperKnobHistory();
-  const fadeTime = 0.0025; // 2.5ms fade for cue click handling
+  const fadeTime = 0.003; // 3ms fade for cue click handling
   const now = audioContext.currentTime;
   
   // Cancel any scheduled changes and ramp down the gain
