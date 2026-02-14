@@ -1,9 +1,14 @@
 {
   "manifest_version": 3,
   "name": "YouTube Beatmaker Extension",
-  "version": "2.0.3",
+  "version": "2.1.0",
   "description": "Mark cue points, play drum sounds, and customize your experience on YouTube.",
-  "permissions": ["storage", "activeTab", "scripting", "unlimitedStorage"],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "unlimitedStorage"
+  ],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://www.youtube-nocookie.com/*",
@@ -21,24 +26,32 @@
         "https://samplette.io/*"
       ],
       "all_frames": true,
-      "js": ["content.js"],
-      "css": ["style.css"]
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "style.css"
+      ]
     }
   ],
-  "web_accessible_resources": [{
-    "resources": [
-      "sounds/*",
-      "sp303-compressor-worklet.js",
-      "sp404-compressor-worklet.js",
-      "worklets/cassette-processor-worklet.js",
-      "worklets/loop-recorder-worklet.js",
-      "worklets/vinyl-break-worklet.js",
-      "worklets/stutter-proc-worklet.js",
-      "worklets/phaser-proc-worklet.js",
-      "worklets/bit-dec-worklet.js",
-      "worklets/bit12-proc-worklet.js"
-    ],
-    "matches": ["<all_urls>"]
-  }],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "sounds/*",
+        "sp303-compressor-worklet.js",
+        "sp404-compressor-worklet.js",
+        "worklets/cassette-processor-worklet.js",
+        "worklets/loop-recorder-worklet.js",
+        "worklets/vinyl-break-worklet.js",
+        "worklets/stutter-proc-worklet.js",
+        "worklets/phaser-proc-worklet.js",
+        "worklets/bit-dec-worklet.js",
+        "worklets/bit12-proc-worklet.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
   "options_page": "options.html"
 }
