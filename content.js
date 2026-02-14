@@ -4594,16 +4594,6 @@ async function setupAudioNodes() {
 
   await setupFxPadNodes();
 
-  if (audioContext.audioWorklet && !loopRecorderNode) {
-    try {
-      loopRecorderNode = await createLoopRecorderNode(audioContext);
-      mainRecorderMix.connect(loopRecorderNode);
-    } catch (err) {
-      console.warn('Loop recorder worklet unavailable, falling back to MediaRecorder.', err);
-      loopRecorderNode = null;
-    }
-  }
-
   applyAllFXRouting();
 }
 
@@ -6140,8 +6130,10 @@ function beginLoopRecording() {
     loopRecorderNode.port.onmessage = (e) => {
       loopRecorderNode.port.onmessage = null;
       recordedFrames = e.data;
+      mainRecorderMix.disconnect(loopRecorderNode);
       processLoopFromFrames(recordedFrames);
     };
+    mainRecorderMix.connect(loopRecorderNode);
     loopRecorderNode.port.postMessage('start');
   } else {
       recordedChunks = [];
@@ -6160,9 +6152,6 @@ function beginLoopRecording() {
       looper.recording = { start: audioContext.currentTime, chunks: [] };
       looper._updateState("recording");
     }
-    const syncDur = getActiveSyncLoopDuration();
-    audioRecordingSynced = hasAnyLoopPlaying() && Boolean(syncDur);
-    audioRecordingSyncDuration = audioRecordingSynced ? syncDur : null;
     if (!clock.isRunning) {
       clock.start(audioContext.currentTime);
     }
@@ -6191,11 +6180,11 @@ function stopRecordingAndPlay() {
 function scheduleStopRecording() {
   ensureAudioContext().then(() => {
     if (!audioContext || looperState !== "recording") return;
-    if (!audioRecordingSynced || !audioRecordingSyncDuration || loopStartAbsoluteTime === null) {
+    if (!baseLoopDuration || loopStartAbsoluteTime === null) {
       stopRecordingAndPlay();
       return;
     }
-    let d = audioRecordingSyncDuration;
+    let d = baseLoopDuration;
     if (pitchTarget === "loop") d /= getCurrentPitchRate();
     const now = audioContext.currentTime;
     const elapsed = (now - loopStartAbsoluteTime) % d;
