@@ -556,7 +556,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
           pitchUp: 43,
           pitchMode: 72,
           sidechainTap: 25,
-          cues: { 1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40, 0: 41 },
+          cues: { 1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40, 0: 41, 11: 52, 12: 53, 13: 54, 14: 55, 15: 56, 16: 57 },
           looperA: 34,
           looperB: 60,
           looperC: 61,
@@ -6852,12 +6852,16 @@ function getKeyboardCueStorageOrder() {
   return ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
 }
 
+function getMidiMappedCueStorageOrder() {
+  return ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "11", "12", "13", "14", "15", "16"];
+}
+
 function getDisplayCueNumberFromStorageKey(key) {
   return key === "0" ? "10" : String(key);
 }
 
 function getMidiCueKeyForInput(note, channel) {
-  const storageOrder = getKeyboardCueStorageOrder();
+  const storageOrder = getMidiMappedCueStorageOrder();
   const isExtended = !!extendedMidiCueMode;
 
   // In normal MIDI mode, all channels/banks share the same mapped cue slots (1..10).
@@ -7626,7 +7630,7 @@ function sequencerTriggerCue(cueKey) {
   if (!video || getCueTime(cueKey) === undefined) return;
   selectedCueKey = cueKey;
   clearSuperKnobHistory();
-  const fadeTime = 0.002; // 50ms fade
+  const fadeTime = 0.004; // 4ms fade for smoother cue click handling
   const now = audioContext.currentTime;
   
   // Cancel any scheduled changes and ramp down the gain
@@ -10494,10 +10498,10 @@ function buildMIDIMapWindow() {
       <input data-midiname="sidechainTap" value="${escapeHtml(String(midiNotes.sidechainTap))}" type="number">
       <button data-detect="sidechainTap" class="detect-midi-btn">Detect</button>
     </div>
-    <h4>Cues (1..10)</h4>
+    <h4>Cues (1..16)</h4>
     <div class="midimap-cues">
   `;
-  for (let k of getKeyboardCueStorageOrder()) {
+  for (let k of getMidiMappedCueStorageOrder()) {
     const cueLabel = getDisplayCueNumberFromStorageKey(k);
     out += `
       <div class="midimap-row">
@@ -10735,7 +10739,7 @@ function syncMidiNotesFromWindow() {
       if (!isNaN(v)) midiNotes[key] = v;
     });
 
-  /* cue fields 0‑9 */
+  /* cue fields 1‑16 (storage keys include 0 for cue 10) */
   midiMapWindowContainer
     .querySelectorAll("input[data-midicue]")
     .forEach(inp => {
@@ -12028,7 +12032,19 @@ function refreshSamplePackDropdown() {
 /**************************************
  * Mappings to Local Storage
  **************************************/
+
+function ensureMidiCueMappings() {
+  const fallback = { 1: 48, 2: 49, 3: 50, 4: 51, 5: 44, 6: 45, 7: 46, 8: 47, 9: 40, 0: 41, 11: 52, 12: 53, 13: 54, 14: 55, 15: 56, 16: 57 };
+  if (!midiNotes.cues) midiNotes.cues = {};
+  for (const key of Object.keys(fallback)) {
+    if (typeof midiNotes.cues[key] !== 'number' || Number.isNaN(midiNotes.cues[key])) {
+      midiNotes.cues[key] = fallback[key];
+    }
+  }
+}
+
 async function loadMappingsFromLocalStorage() {
+  ensureMidiCueMappings();
   let s = localStorage.getItem("ytbm_mappings");
   if (!s) return;
   try {
@@ -12050,6 +12066,7 @@ async function loadMappingsFromLocalStorage() {
     if (o.midiNotes) {
       Object.assign(midiNotes, o.midiNotes);
       if (!midiNotes.cues) midiNotes.cues = {};
+      ensureMidiCueMappings();
     }
     if (o.activeSamplePackNames) {
       activeSamplePackNames = o.activeSamplePackNames;
