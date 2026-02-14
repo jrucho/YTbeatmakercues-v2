@@ -2644,7 +2644,7 @@ hideYouTubePopups();
                 if (vid && cuePoints[cueKey] === undefined && canAddCueKey(cueKey)) {
                   pushUndoState();
                   cuePoints[cueKey] = vid.currentTime;
-                  saveCuePointsToURL();
+                  scheduleSaveCuePoints();
                   updateCueMarkers();
                   refreshCuesButton();
                   if (window.refreshMinimalState) window.refreshMinimalState();
@@ -10123,7 +10123,7 @@ function handleMIDIMessage(e) {
           if (!canAddCueKey(cueKey)) continue;
           pushUndoState();
           cuePoints[cueKey] = vid.currentTime;
-          saveCuePointsToURL();
+          scheduleSaveCuePoints();
           updateCueMarkers();
           refreshCuesButton();
           if (window.refreshMinimalState) window.refreshMinimalState();
