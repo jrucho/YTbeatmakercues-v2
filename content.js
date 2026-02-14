@@ -8165,6 +8165,17 @@ function onLooperButtonMouseDown(e) {
     }
     return onMidiLooperButtonMouseDown();
   }
+
+  const shouldStartRecordingImmediately =
+    (looperState === "idle" && !audioLoopBuffers[activeLoopIndex]) ||
+    (looperState !== "idle" && !audioLoopBuffers[activeLoopIndex]);
+
+  if (shouldStartRecordingImmediately) {
+    if (looperState !== "idle") recordingNewLoop = true;
+    startRecording();
+    skipLooperMouseUp[activeLoopIndex] = true;
+  }
+
   const now = Date.now();
 
   // 1) Record this press time
@@ -8265,6 +8276,16 @@ function singlePressAudioLooperAction() {
 }
 
 function onMidiLooperButtonMouseDown() {
+  const idx = activeMidiLoopIndex;
+  const state = midiLoopStates[idx];
+  const shouldStartRecordingImmediately =
+    (state === 'idle' || state === 'stopped') && !midiLoopEvents[idx].length;
+
+  if (shouldStartRecordingImmediately) {
+    startMidiLoopRecording(idx);
+    skipLooperMouseUp[idx] = true;
+  }
+
   const now = Date.now();
   midiPressTimes.push(now);
   const cutoff = now - clickDelay;
@@ -9983,13 +10004,14 @@ function handleMIDIMessage(e) {
 
   if (note === midiNotes.shift) {
     if (command === 144 && velocity > 0) {
-      if (!isModPressed) {
-        handleShiftTap('midi');
-      }
       isModPressed = true;
       shiftDownTime = Date.now();
       shiftUsedAsModifier = false;
     } else if (command === 128 || (command === 144 && velocity === 0)) {
+      const holdMs = Date.now() - shiftDownTime;
+      if (!shiftUsedAsModifier && holdMs < clickDelay) {
+        handleShiftTap('midi');
+      }
       isModPressed = false;
       lastMidiShiftReleaseTime = Date.now();
     }
@@ -10156,10 +10178,10 @@ function handleMIDIMessage(e) {
   } else if (command === 128 || (command === 144 && velocity === 0)) {
     if (note === midiNotes.pitchDown) stopPitchDownRepeat();
     if (note === midiNotes.pitchUp) stopPitchUpRepeat();
-    if (note === midiNotes.looperA) { activeLoopIndex = 0; activeMidiLoopIndex = 0; if (!isModPressed) onLooperButtonMouseUp(); }
-    if (note === midiNotes.looperB) { activeLoopIndex = 1; activeMidiLoopIndex = 1; if (!isModPressed) onLooperButtonMouseUp(); }
-    if (note === midiNotes.looperC) { activeLoopIndex = 2; activeMidiLoopIndex = 2; if (!isModPressed) onLooperButtonMouseUp(); }
-    if (note === midiNotes.looperD) { activeLoopIndex = 3; activeMidiLoopIndex = 3; if (!isModPressed) onLooperButtonMouseUp(); }
+    if (note === midiNotes.looperA) { activeLoopIndex = 0; activeMidiLoopIndex = 0; if (skipLooperMouseUp[0]) { skipLooperMouseUp[0] = false; } else if (!isModPressed) onLooperButtonMouseUp(); }
+    if (note === midiNotes.looperB) { activeLoopIndex = 1; activeMidiLoopIndex = 1; if (skipLooperMouseUp[1]) { skipLooperMouseUp[1] = false; } else if (!isModPressed) onLooperButtonMouseUp(); }
+    if (note === midiNotes.looperC) { activeLoopIndex = 2; activeMidiLoopIndex = 2; if (skipLooperMouseUp[2]) { skipLooperMouseUp[2] = false; } else if (!isModPressed) onLooperButtonMouseUp(); }
+    if (note === midiNotes.looperD) { activeLoopIndex = 3; activeMidiLoopIndex = 3; if (skipLooperMouseUp[3]) { skipLooperMouseUp[3] = false; } else if (!isModPressed) onLooperButtonMouseUp(); }
     // if (note === midiNotes.undo) onUndoButtonMouseUp();
     if (note === midiNotes.videoLooper) onVideoLooperButtonMouseUp();
   }
