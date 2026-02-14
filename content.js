@@ -6103,6 +6103,31 @@ function hasActiveSyncLoop() {
   return loopSources.some((src, i) => !!src && !pendingStopTimeouts[i]);
 }
 
+function hasActiveMidiSyncLoop(excludeIndex = null) {
+  return midiLoopPlaying.some((isPlaying, i) => {
+    if (!isPlaying) return false;
+    if (excludeIndex !== null && i === excludeIndex) return false;
+    const state = midiLoopStates[i];
+    return state === 'playing' || state === 'overdubbing';
+  });
+}
+
+function getNextMidiLoopAlignedStart(afterMs, excludeIndex = null) {
+  let best = null;
+  for (let i = 0; i < MAX_MIDI_LOOPS; i++) {
+    if (excludeIndex !== null && i === excludeIndex) continue;
+    if (!midiLoopPlaying[i]) continue;
+    if (midiLoopStates[i] !== 'playing' && midiLoopStates[i] !== 'overdubbing') continue;
+    const dur = midiLoopDurations[i];
+    const start = midiLoopStartTimes[i];
+    if (!dur || !start) continue;
+    const cycles = Math.max(0, Math.ceil((afterMs - start) / dur));
+    const candidate = start + cycles * dur;
+    if (best === null || candidate < best) best = candidate;
+  }
+  return best;
+}
+
 function playLoop(startTime = null) {
   ensureAudioContext().then(() => {
     if (!audioContext) return;
@@ -8582,7 +8607,13 @@ function playMidiLoop(idx, offset = 0, startTime = null) {
   const dur = midiLoopDurations[idx];
   if (!dur) return;
   const now = nowMs();
-  const start = (startTime !== null) ? startTime : now;
+  let start = (startTime !== null) ? startTime : now;
+  if (startTime === null && hasActiveMidiSyncLoop(idx)) {
+    const aligned = getNextMidiLoopAlignedStart(now, idx);
+    if (aligned !== null) {
+      start = aligned;
+    }
+  }
   const normOffset = ((offset % dur) + dur) % dur;
   const firstCycleStart = start - normOffset;
   const delay = Math.max(0, firstCycleStart - now);
