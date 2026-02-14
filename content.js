@@ -4223,7 +4223,7 @@ function onMinimalPointerUp(e) {
     if (minimalCuesLabel && cuesButtonMin) {
       const cc = Object.keys(cuePoints).length;
       minimalCuesLabel.textContent = cc ? `Cues ${getCueCountLabel()}` : "Cues";
-      const minIsFull = (cueInputMode === 'keyboard' && cc >= 10) || cc >= 16 || cc >= getCueModeLimit();
+      const minIsFull = isCueCountAtFullState() || cc >= getCueModeLimit();
       cuesButtonMin.dataset.mode = minIsFull ? "erase" : "add";
     }
 
@@ -6828,12 +6828,23 @@ function getCueModeLimit() {
   return 16;
 }
 
+function getCueCountState() {
+  const count = Object.keys(cuePoints).length;
+  if (cueInputMode === 'keyboard' && count <= 10) {
+    return { count, denom: 10 };
+  }
+  const denom = extendedMidiCueMode ? count : Math.max(count, 16);
+  return { count, denom };
+}
+
 function getCueCountLabel() {
-  const c = Object.keys(cuePoints).length;
-  // Always reflect real state; never show misleading 16/10 when cue count exceeds keyboard range.
-  if (cueInputMode === 'keyboard' && c <= 10) return `${c}/10`;
-  const denom = extendedMidiCueMode ? c : Math.max(c, 16);
-  return `${c}/${denom}`;
+  const { count, denom } = getCueCountState();
+  return `${count}/${denom}`;
+}
+
+function isCueCountAtFullState() {
+  const { count, denom } = getCueCountState();
+  return count > 0 && count === denom;
 }
 
 function sortCueKeysForDisplay(keys) {
@@ -7504,10 +7515,9 @@ function refreshCuesButton() {
   let c = Object.keys(cuePoints).length;
   const limit = getCueModeLimit();
   const countLabel = getCueCountLabel();
-  const keyboardFull = cueInputMode === 'keyboard' && c >= 10;
-  const midiDefaultFull = c >= 16;
+  const visualFull = isCueCountAtFullState();
   const hardLimitFull = c >= limit;
-  if (keyboardFull || midiDefaultFull || hardLimitFull) {
+  if (visualFull || hardLimitFull) {
     cuesButton.innerText = `EraseCues(${countLabel})`;
     cuesButton.style.background = "#C22";
     cuesButton.onclick = () => {
@@ -7635,19 +7645,20 @@ function sequencerTriggerCue(cueKey) {
   if (!video || getCueTime(cueKey) === undefined) return;
   selectedCueKey = cueKey;
   clearSuperKnobHistory();
-  const fadeTime = 0.003; // 3ms fade for cue click handling
+  const fadeTime = 0.002; // 2ms fade for cue click handling
+  const gainFloor = 0.0001; // avoid hard-zero discontinuity clicks
   const now = audioContext.currentTime;
-  
-  // Cancel any scheduled changes and ramp down the gain
+
+  // Cancel any scheduled changes and ramp down the gain (without hard-zero)
   videoGain.gain.cancelScheduledValues(now);
-  videoGain.gain.setValueAtTime(videoGain.gain.value, now);
-  videoGain.gain.linearRampToValueAtTime(0, now + fadeTime);
-  
+  videoGain.gain.setValueAtTime(Math.max(gainFloor, videoGain.gain.value), now);
+  videoGain.gain.linearRampToValueAtTime(gainFloor, now + fadeTime);
+
   // After the fade out, jump to the new cue and fade back in
   setTimeout(() => {
     video.currentTime = getCueTime(cueKey);
     const t = audioContext.currentTime;
-    videoGain.gain.setValueAtTime(0, t);
+    videoGain.gain.setValueAtTime(gainFloor, t);
     videoGain.gain.linearRampToValueAtTime(1, t + fadeTime);
   }, fadeTime * 1000);
 
