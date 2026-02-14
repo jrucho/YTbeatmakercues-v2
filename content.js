@@ -8555,6 +8555,28 @@ function stopMidiLoopRecording(idx) {
   updateLooperButtonColor();
 }
 
+function normalizeMidiLoopEvents(events, loopDurationMs) {
+  if (!Array.isArray(events) || !events.length || !loopDurationMs || !isFinite(loopDurationMs)) return [];
+  const boundarySnapMs = Math.min(12, Math.max(3, loopDurationMs * 0.002));
+  const dedupeWindowMs = 10;
+  const normalized = events.map(ev => {
+    let t = ((Number(ev.time) % loopDurationMs) + loopDurationMs) % loopDurationMs;
+    if (t >= loopDurationMs - boundarySnapMs) t = 0;
+    return { ...ev, time: t };
+  }).sort((a, b) => a.time - b.time);
+
+  const out = [];
+  for (const ev of normalized) {
+    const prev = out[out.length - 1];
+    const samePayload = prev && prev.type === ev.type && JSON.stringify(prev.payload) === JSON.stringify(ev.payload);
+    if (samePayload && Math.abs(prev.time - ev.time) <= dedupeWindowMs) {
+      continue;
+    }
+    out.push(ev);
+  }
+  return out;
+}
+
 function finalizeMidiLoopRecording(idx, autoPlay = true) {
   pushUndoState();
   midiStopTimeouts[idx] = null;
@@ -8600,11 +8622,13 @@ function finalizeMidiLoopRecording(idx, autoPlay = true) {
       looper.baseBpm = null;
       looper.lengthBars = 0;
     }
+    const normalizedEvents = normalizeMidiLoopEvents(midiLoopEvents[idx], loopDurationMs);
+    midiLoopEvents[idx] = normalizedEvents;
     midiLoopDurations[idx] = loopDurationMs;
     midiLoopBpms[idx] = loopBpm;
     midiLoopStates[idx] = 'playing';
     if (looper) {
-      looper.events = capture.map(ev => ({ ...ev }));
+      looper.events = normalizedEvents.map(ev => ({ time: ev.time / 1000, type: ev.type, payload: ev.payload }));
       looper._updateState("playing");
       looper.capture = [];
     }
