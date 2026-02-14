@@ -8167,8 +8167,7 @@ function onLooperButtonMouseDown(e) {
   }
 
   const shouldStartRecordingImmediately =
-    (looperState === "idle" && !audioLoopBuffers[activeLoopIndex]) ||
-    (looperState !== "idle" && !audioLoopBuffers[activeLoopIndex]);
+    looperState !== "recording" && !audioLoopBuffers[activeLoopIndex];
 
   if (shouldStartRecordingImmediately) {
     if (looperState !== "idle") recordingNewLoop = true;
