@@ -3055,8 +3055,9 @@ function finalizeLoopBuffer(buf) {
 
   let peak = measurePeak(buf);
   if (peak > 1.0) scaleBuffer(buf, 1.0 / peak);
-  // Smooth the transition between loop boundaries
-  crossfadeLoop(buf, LOOP_CROSSFADE);
+  // Keep loop boundaries exact to avoid doubled first-hit/transient overlap.
+  // (Boundary crossfade can layer tail+attack for very percussive loops.)
+  // crossfadeLoop(buf, LOOP_CROSSFADE);
 
   pushUndoState();
   let exactDur = buf.length / buf.sampleRate;
