@@ -572,6 +572,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         randomCues: 28,
         instrumentToggle: 27,
         fxPadToggle: 26,
+        seekBack5: 24,
+        seekForward5: 23,
         superKnob: 71,         // MIDI CC to move selected cue
         fxPadX: 16,            // MIDI CC for FX pad X axis
         fxPadY: 17             // MIDI CC for FX pad Y axis
@@ -733,6 +735,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       shiftDownTime = 0,
       shiftUsedAsModifier = false,
       lastShiftTapTime = 0,
+      lastMidiShiftTapTime = 0,
       lastMidiShiftReleaseTime = 0,
       cueInputMode = 'keyboard',
       extendedMidiCueMode = localStorage.getItem('ytbm_extendedMidiCueMode') === '1',
@@ -5865,6 +5868,14 @@ function safeSeekVideo(_, time) {
   jumpToCue(time);
 }
 
+function seekVideoBySeconds(deltaSeconds) {
+  const vid = getVideoElement();
+  if (!vid) return;
+  const maxTime = Number.isFinite(vid.duration) ? Math.max(0, vid.duration) : Number.POSITIVE_INFINITY;
+  const target = Math.max(0, Math.min(maxTime, vid.currentTime + deltaSeconds));
+  safeSeekVideo(null, target);
+}
+
 // Define global variable for Reels support:
 var enableReelsSupport = true;
 
@@ -8075,18 +8086,24 @@ function onKeyUp(e) {
 addTrackedListener(document, "keydown", onKeyDown, true);
 addTrackedListener(document, "keyup", onKeyUp, true);
 
-function handleShiftTap() {
+function handleShiftTap(source = 'keyboard') {
   const vid = getVideoElement();
   if (!vid) return;
   const now = Date.now();
+  const lastTap = source === 'midi' ? lastMidiShiftTapTime : lastShiftTapTime;
   if (!vid.paused) {
-    if (now - lastShiftTapTime < clickDelay) {
+    if (now - lastTap < clickDelay) {
       vid.pause();
+      if (source === 'midi') lastMidiShiftTapTime = 0;
+      else lastShiftTapTime = 0;
+      return;
     }
-    lastShiftTapTime = now;
+    if (source === 'midi') lastMidiShiftTapTime = now;
+    else lastShiftTapTime = now;
   } else {
     vid.play().catch(() => {});
-    lastShiftTapTime = 0;
+    if (source === 'midi') lastMidiShiftTapTime = 0;
+    else lastShiftTapTime = 0;
   }
 }
 
@@ -9962,17 +9979,15 @@ function handleMIDIMessage(e) {
 
   if (note === midiNotes.shift) {
     if (command === 144 && velocity > 0) {
+      if (!isModPressed) {
+        handleShiftTap('midi');
+      }
       isModPressed = true;
       shiftDownTime = Date.now();
       shiftUsedAsModifier = false;
     } else if (command === 128 || (command === 144 && velocity === 0)) {
       isModPressed = false;
-      const now = Date.now();
-      const holdMs = now - shiftDownTime;
-      if (!shiftUsedAsModifier && holdMs < clickDelay && (now - lastMidiShiftReleaseTime) > 40) {
-        handleShiftTap();
-      }
-      lastMidiShiftReleaseTime = now;
+      lastMidiShiftReleaseTime = Date.now();
     }
     return;
 
@@ -10106,6 +10121,14 @@ function handleMIDIMessage(e) {
     if (note === midiNotes.compToggle) toggleCompressor();
     if (note === midiNotes.reverbToggle) toggleReverb();
     if (note === midiNotes.cassetteToggle) toggleCassette();
+    if (note === midiNotes.seekBack5) {
+      seekVideoBySeconds(-5);
+      return;
+    }
+    if (note === midiNotes.seekForward5) {
+      seekVideoBySeconds(5);
+      return;
+    }
 
     const isMappedCueNote = Object.values(midiNotes.cues).some(v => Number(v) === Number(note));
     if (isMappedCueNote) {
@@ -10592,6 +10615,16 @@ function buildMIDIMapWindow() {
       <label>VideoLoop:</label>
       <input data-midiname="videoLooper" value="${escapeHtml(String(midiNotes.videoLooper))}" type="number">
       <button data-detect="videoLooper" class="detect-midi-btn">Detect</button>
+    </div>
+    <div class="midimap-row">
+      <label>Back 5s:</label>
+      <input data-midiname="seekBack5" value="${escapeHtml(String(midiNotes.seekBack5))}" type="number">
+      <button data-detect="seekBack5" class="detect-midi-btn">Detect</button>
+    </div>
+    <div class="midimap-row">
+      <label>Forward 5s:</label>
+      <input data-midiname="seekForward5" value="${escapeHtml(String(midiNotes.seekForward5))}" type="number">
+      <button data-detect="seekForward5" class="detect-midi-btn">Detect</button>
     </div>
     <h4>EQ/Compressor Toggles</h4>
     <div class="midimap-row">
@@ -12092,8 +12125,18 @@ function ensureMidiCueMappings() {
   }
 }
 
+function ensureMidiUtilityMappings() {
+  if (typeof midiNotes.seekBack5 !== 'number' || Number.isNaN(midiNotes.seekBack5)) {
+    midiNotes.seekBack5 = 24;
+  }
+  if (typeof midiNotes.seekForward5 !== 'number' || Number.isNaN(midiNotes.seekForward5)) {
+    midiNotes.seekForward5 = 23;
+  }
+}
+
 async function loadMappingsFromLocalStorage() {
   ensureMidiCueMappings();
+  ensureMidiUtilityMappings();
   let s = localStorage.getItem("ytbm_mappings");
   if (!s) return;
   try {
@@ -12116,6 +12159,7 @@ async function loadMappingsFromLocalStorage() {
       Object.assign(midiNotes, o.midiNotes);
       if (!midiNotes.cues) midiNotes.cues = {};
       ensureMidiCueMappings();
+      ensureMidiUtilityMappings();
     }
     if (o.activeSamplePackNames) {
       activeSamplePackNames = o.activeSamplePackNames;
