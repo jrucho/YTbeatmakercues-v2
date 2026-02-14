@@ -2504,7 +2504,7 @@ function triggerPadCue(padIndex) {
   if (vid && cuePoints[cueKey] !== undefined) {
     selectedCueKey = cueKey;
     clearSuperKnobHistory();
-    safeSeekVideoFast(cuePoints[cueKey]);  // instant cue jump for pad feel
+    safeSeekVideo(null, cuePoints[cueKey]);  // routes into jumpToCue()
   }
 }
   
@@ -2998,32 +2998,6 @@ document.addEventListener(
 
 const MAX_UNDO_STATES = 20;
 
-function shouldApplyLoopCrossfade(buffer, fadeTime) {
-  if (!fadeTime || fadeTime <= 0) return false;
-  const edgeSamples = Math.min(Math.floor(buffer.sampleRate * Math.min(0.01, fadeTime * 4)), Math.floor(buffer.length / 8));
-  if (edgeSamples < 8) return false;
-  let edgeEnergy = 0, midEnergy = 0;
-  let edgeCount = 0, midCount = 0;
-  const midStart = Math.floor(buffer.length * 0.4);
-  const midEnd = Math.floor(buffer.length * 0.6);
-  for (let c = 0; c < buffer.numberOfChannels; c++) {
-    const d = buffer.getChannelData(c);
-    for (let i = 0; i < edgeSamples; i++) {
-      edgeEnergy += d[i] * d[i];
-      edgeEnergy += d[d.length - 1 - i] * d[d.length - 1 - i];
-      edgeCount += 2;
-    }
-    for (let i = midStart; i < midEnd; i++) {
-      midEnergy += d[i] * d[i];
-      midCount++;
-    }
-  }
-  const edgeRms = Math.sqrt(edgeEnergy / Math.max(1, edgeCount));
-  const midRms = Math.sqrt(midEnergy / Math.max(1, midCount));
-  // Skip crossfade if strong edge transients are present (prevents doubled attack feel).
-  return edgeRms < (midRms * 1.35 || 0.02);
-}
-
 function crossfadeLoop(buffer, fadeTime) {
   const fadeSamples = Math.floor(buffer.sampleRate * fadeTime);
   for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
@@ -3081,10 +3055,8 @@ function finalizeLoopBuffer(buf) {
 
   let peak = measurePeak(buf);
   if (peak > 1.0) scaleBuffer(buf, 1.0 / peak);
-  // Smooth loop boundaries only when edges are not transient-heavy.
-  if (shouldApplyLoopCrossfade(buf, LOOP_CROSSFADE)) {
-    crossfadeLoop(buf, LOOP_CROSSFADE);
-  }
+  // Smooth the transition between loop boundaries
+  crossfadeLoop(buf, LOOP_CROSSFADE);
 
   pushUndoState();
   let exactDur = buf.length / buf.sampleRate;
@@ -6012,12 +5984,6 @@ function safeSeekVideo(_, time) {
   jumpToCue(time);
 }
 
-function safeSeekVideoFast(time) {
-  const vid = getVideoElement();
-  if (!vid) return;
-  vid.currentTime = time;
-}
-
 // Define global variable for Reels support:
 var enableReelsSupport = true;
 
@@ -7683,11 +7649,25 @@ function sequencerTriggerCue(cueKey) {
   if (!video || !cuePoints[cueKey]) return;
   selectedCueKey = cueKey;
   clearSuperKnobHistory();
-  // Route through the unified jumpToCue() crossfade path for smoother, click-free jumps.
-  safeSeekVideo(null, cuePoints[cueKey]);
+  const fadeTime = 0.004; // slightly longer fade to reduce cue clicks
+  const now = audioContext.currentTime;
+  const EPS = 0.005; // avoid hard 0 which can click on some streams
+
+  // Cancel any scheduled changes and ramp down the gain
+  videoGain.gain.cancelScheduledValues(now);
+  videoGain.gain.setValueAtTime(Math.max(EPS, videoGain.gain.value), now);
+  videoGain.gain.linearRampToValueAtTime(EPS, now + fadeTime);
+
+  // After the fade out, jump to the new cue and fade back in
+  setTimeout(() => {
+    video.currentTime = cuePoints[cueKey];
+    const t = audioContext.currentTime;
+    videoGain.gain.setValueAtTime(EPS, t);
+    videoGain.gain.linearRampToValueAtTime(1, t + fadeTime);
+  }, fadeTime * 1000);
 
   recordMidiEvent('cue', cueKey);
-
+  
   console.log(`Sequencer triggered cue ${cueKey} at time ${cuePoints[cueKey]}`);
 }
 
@@ -7895,8 +7875,20 @@ function onKeyDown(e) {
     if (video && cuePoints[e.key] !== undefined) {
       selectedCueKey = e.key;
       clearSuperKnobHistory();
-      // Route through unified jumpToCue() crossfade path.
-      safeSeekVideoFast(cuePoints[e.key]);
+      const fadeTime = 0.004; // slightly longer fade to reduce cue clicks
+      const now = audioContext.currentTime;
+      const EPS = 0.005; // avoid hard 0 which can click on some streams
+      // Fade out the audio
+      videoGain.gain.cancelScheduledValues(now);
+      videoGain.gain.setValueAtTime(Math.max(EPS, videoGain.gain.value), now);
+      videoGain.gain.linearRampToValueAtTime(EPS, now + fadeTime);
+      // After fade out, change cue and fade back in
+      setTimeout(() => {
+        video.currentTime = cuePoints[e.key];
+        const t = audioContext.currentTime;
+        videoGain.gain.setValueAtTime(EPS, t);
+        videoGain.gain.linearRampToValueAtTime(1, t + fadeTime);
+      }, fadeTime * 1000);
     }
   }
   

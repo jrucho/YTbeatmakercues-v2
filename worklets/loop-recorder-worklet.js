@@ -3,7 +3,6 @@ class LoopRecorder extends AudioWorkletProcessor {
     super();
     this.recording = false;
     this.buffers = [];
-    this.skipFrames = 0;
 
     this.port.onmessage = (event) => {
       const data = event.data;
@@ -11,8 +10,6 @@ class LoopRecorder extends AudioWorkletProcessor {
         this.recording = true;
         // Strict clean-start capture: no preroll seeding to avoid doubled onsets.
         this.buffers = [];
-        // Skip one render quantum after arm to avoid edge-frame glitches from start boundary.
-        this.skipFrames = 1;
       } else if (data === 'stop') {
         this.recording = false;
         this.port.postMessage(this.buffers);
@@ -30,11 +27,7 @@ class LoopRecorder extends AudioWorkletProcessor {
       }
 
       if (this.recording) {
-        if (this.skipFrames > 0) {
-          this.skipFrames -= 1;
-        } else {
-          this.buffers.push(frame);
-        }
+        this.buffers.push(frame);
       }
     }
 
