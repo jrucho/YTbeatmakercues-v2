@@ -7502,7 +7502,10 @@ function refreshCuesButton() {
   let c = Object.keys(cuePoints).length;
   const limit = getCueModeLimit();
   const countLabel = getCueCountLabel();
-  if (c >= limit) {
+  const keyboardFull = cueInputMode === 'keyboard' && c >= 10;
+  const midiDefaultFull = cueInputMode === 'midi' && c >= 16;
+  const hardLimitFull = c >= limit;
+  if (keyboardFull || midiDefaultFull || hardLimitFull) {
     cuesButton.innerText = `EraseCues(${countLabel})`;
     cuesButton.style.background = "#C22";
     cuesButton.onclick = () => {
@@ -7630,7 +7633,7 @@ function sequencerTriggerCue(cueKey) {
   if (!video || getCueTime(cueKey) === undefined) return;
   selectedCueKey = cueKey;
   clearSuperKnobHistory();
-  const fadeTime = 0.004; // 4ms fade for smoother cue click handling
+  const fadeTime = 0.0025; // 2.5ms fade for cue click handling
   const now = audioContext.currentTime;
   
   // Cancel any scheduled changes and ramp down the gain
