@@ -2929,7 +2929,8 @@ async function processLoopFromBlob() {
   finalizeLoopBuffer(buf);
 }
 
-function processLoopFromFrames(frames) {
+function processLoopFromFrames(capture) {
+  const frames = Array.isArray(capture) ? capture : (capture?.buffers || []);
   if (!frames || !frames.length) return;
   const channels = frames.reduce((m, f) => Math.max(m, f.length), 0);
   const length = frames.reduce((t, f) => t + (f[0] ? f[0].length : 0), 0);
@@ -2943,18 +2944,48 @@ function processLoopFromFrames(frames) {
     }
     offset += len;
   }
-  finalizeLoopBuffer(buf);
+  const timing = {
+    actualStartTime: (capture && !Array.isArray(capture) && Number.isFinite(capture.startFrame))
+      ? (capture.startFrame / audioContext.sampleRate)
+      : null,
+    actualEndTime: (capture && !Array.isArray(capture) && Number.isFinite(capture.endFrame))
+      ? (capture.endFrame / audioContext.sampleRate)
+      : null,
+  };
+  finalizeLoopBuffer(buf, timing);
 }
 
-function finalizeLoopBuffer(buf) {
+function finalizeLoopBuffer(buf, timing = {}) {
   let targetDuration = null;
   if (recordingStartTime !== null && recordingStopTargetTime !== null) {
     targetDuration = Math.max(0, recordingStopTargetTime - recordingStartTime);
   }
+  const actualStartTime = Number.isFinite(timing.actualStartTime) ? timing.actualStartTime : null;
 
   // Older versions trimmed leading/trailing silence which sometimes
   // chopped short percussive sounds like hihats. Remove the automatic
   // trimming so the loop is kept exactly as recorded.
+
+  if (actualStartTime !== null && recordingStartTime !== null) {
+    const startOffsetSec = actualStartTime - recordingStartTime;
+    const startOffsetFrames = Math.round(startOffsetSec * buf.sampleRate);
+    if (startOffsetFrames !== 0) {
+      const shifted = audioContext.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
+      for (let c = 0; c < buf.numberOfChannels; c++) {
+        const src = buf.getChannelData(c);
+        const dst = shifted.getChannelData(c);
+        if (startOffsetFrames > 0) {
+          const copy = Math.max(0, Math.min(src.length, dst.length - startOffsetFrames));
+          if (copy > 0) dst.set(src.subarray(0, copy), startOffsetFrames);
+        } else {
+          const trim = -startOffsetFrames;
+          const copy = Math.max(0, Math.min(src.length - trim, dst.length));
+          if (copy > 0) dst.set(src.subarray(trim, trim + copy), 0);
+        }
+      }
+      buf = shifted;
+    }
+  }
 
   if (targetDuration && targetDuration > 0) {
     const targetFrames = Math.max(1, Math.round(targetDuration * buf.sampleRate));
