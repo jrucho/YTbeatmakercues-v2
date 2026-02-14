@@ -10153,6 +10153,7 @@ function handleMIDIMessage(e) {
       activeMidiLoopIndex = 0;
       if (isModPressed) {
         if (useMidiLoopers) eraseMidiLoop(0); else eraseAudioLoopAt(0);
+        skipLooperMouseUp[0] = true;
       } else if (isMetaKeyDown && isAltKeyDown && useMidiLoopers) {
         quantizeMidiLoop(0);
         skipLooperMouseUp[0] = true;
@@ -10166,6 +10167,7 @@ function handleMIDIMessage(e) {
       activeMidiLoopIndex = 1;
       if (isModPressed) {
         if (useMidiLoopers) eraseMidiLoop(1); else eraseAudioLoopAt(1);
+        skipLooperMouseUp[1] = true;
       } else if (isMetaKeyDown && isAltKeyDown && useMidiLoopers) {
         quantizeMidiLoop(1);
         skipLooperMouseUp[1] = true;
@@ -10179,6 +10181,7 @@ function handleMIDIMessage(e) {
       activeMidiLoopIndex = 2;
       if (isModPressed) {
         if (useMidiLoopers) eraseMidiLoop(2); else eraseAudioLoopAt(2);
+        skipLooperMouseUp[2] = true;
       } else if (isMetaKeyDown && isAltKeyDown && useMidiLoopers) {
         quantizeMidiLoop(2);
         skipLooperMouseUp[2] = true;
@@ -10192,6 +10195,7 @@ function handleMIDIMessage(e) {
       activeMidiLoopIndex = 3;
       if (isModPressed) {
         if (useMidiLoopers) eraseMidiLoop(3); else eraseAudioLoopAt(3);
+        skipLooperMouseUp[3] = true;
       } else if (isMetaKeyDown && isAltKeyDown && useMidiLoopers) {
         quantizeMidiLoop(3);
         skipLooperMouseUp[3] = true;
