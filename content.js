@@ -3060,21 +3060,8 @@ function finalizeLoopBuffer(buf) {
   // crossfadeLoop(buf, LOOP_CROSSFADE);
 
   pushUndoState();
+  // Keep exact recorded duration (older behavior): no post-record snap/stretch.
   let exactDur = buf.length / buf.sampleRate;
-  const syncDur = audioRecordingSynced ? (audioRecordingSyncDuration || getActiveSyncLoopDuration()) : null;
-  if (syncDur) {
-    const bars = Math.max(1, Math.round(exactDur / syncDur));
-    const target = bars * syncDur;
-    if (Math.abs(target - exactDur) > 0.0005) {
-      const frames = Math.round(target * buf.sampleRate);
-      const out = audioContext.createBuffer(buf.numberOfChannels, frames, buf.sampleRate);
-      for (let c = 0; c < buf.numberOfChannels; c++) {
-        out.getChannelData(c).set(buf.getChannelData(c).subarray(0, frames));
-      }
-      buf = out;
-    }
-    exactDur = target;
-  }
   if (!baseLoopDuration) {
     baseLoopDuration = exactDur;
     loopsBPM = Math.round((60 * 4) / baseLoopDuration);
