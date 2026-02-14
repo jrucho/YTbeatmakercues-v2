@@ -2504,7 +2504,7 @@ function triggerPadCue(padIndex) {
   if (vid && cuePoints[cueKey] !== undefined) {
     selectedCueKey = cueKey;
     clearSuperKnobHistory();
-    safeSeekVideo(null, cuePoints[cueKey]);  // routes into jumpToCue()
+    safeSeekVideoFast(cuePoints[cueKey]);  // instant cue jump for pad feel
   }
 }
   
@@ -2998,6 +2998,32 @@ document.addEventListener(
 
 const MAX_UNDO_STATES = 20;
 
+function shouldApplyLoopCrossfade(buffer, fadeTime) {
+  if (!fadeTime || fadeTime <= 0) return false;
+  const edgeSamples = Math.min(Math.floor(buffer.sampleRate * Math.min(0.01, fadeTime * 4)), Math.floor(buffer.length / 8));
+  if (edgeSamples < 8) return false;
+  let edgeEnergy = 0, midEnergy = 0;
+  let edgeCount = 0, midCount = 0;
+  const midStart = Math.floor(buffer.length * 0.4);
+  const midEnd = Math.floor(buffer.length * 0.6);
+  for (let c = 0; c < buffer.numberOfChannels; c++) {
+    const d = buffer.getChannelData(c);
+    for (let i = 0; i < edgeSamples; i++) {
+      edgeEnergy += d[i] * d[i];
+      edgeEnergy += d[d.length - 1 - i] * d[d.length - 1 - i];
+      edgeCount += 2;
+    }
+    for (let i = midStart; i < midEnd; i++) {
+      midEnergy += d[i] * d[i];
+      midCount++;
+    }
+  }
+  const edgeRms = Math.sqrt(edgeEnergy / Math.max(1, edgeCount));
+  const midRms = Math.sqrt(midEnergy / Math.max(1, midCount));
+  // Skip crossfade if strong edge transients are present (prevents doubled attack feel).
+  return edgeRms < (midRms * 1.35 || 0.02);
+}
+
 function crossfadeLoop(buffer, fadeTime) {
   const fadeSamples = Math.floor(buffer.sampleRate * fadeTime);
   for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
@@ -3055,8 +3081,10 @@ function finalizeLoopBuffer(buf) {
 
   let peak = measurePeak(buf);
   if (peak > 1.0) scaleBuffer(buf, 1.0 / peak);
-  // Smooth the transition between loop boundaries
-  crossfadeLoop(buf, LOOP_CROSSFADE);
+  // Smooth loop boundaries only when edges are not transient-heavy.
+  if (shouldApplyLoopCrossfade(buf, LOOP_CROSSFADE)) {
+    crossfadeLoop(buf, LOOP_CROSSFADE);
+  }
 
   pushUndoState();
   let exactDur = buf.length / buf.sampleRate;
@@ -5984,6 +6012,12 @@ function safeSeekVideo(_, time) {
   jumpToCue(time);
 }
 
+function safeSeekVideoFast(time) {
+  const vid = getVideoElement();
+  if (!vid) return;
+  vid.currentTime = time;
+}
+
 // Define global variable for Reels support:
 var enableReelsSupport = true;
 
@@ -7862,7 +7896,7 @@ function onKeyDown(e) {
       selectedCueKey = e.key;
       clearSuperKnobHistory();
       // Route through unified jumpToCue() crossfade path.
-      safeSeekVideo(null, cuePoints[e.key]);
+      safeSeekVideoFast(cuePoints[e.key]);
     }
   }
   
