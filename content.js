@@ -7645,7 +7645,7 @@ function sequencerTriggerCue(cueKey) {
   if (!video || getCueTime(cueKey) === undefined) return;
   selectedCueKey = cueKey;
   clearSuperKnobHistory();
-  const fadeTime = 0.002; // 2ms fade for cue click handling
+  const fadeTime = 0.003; // 3ms fade for cue click handling
   const gainFloor = 0.0001; // avoid hard-zero discontinuity clicks
   const now = audioContext.currentTime;
 
