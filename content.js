@@ -6858,16 +6858,30 @@ function getDisplayCueNumberFromStorageKey(key) {
 
 function getMidiCueKeyForInput(note, channel) {
   const storageOrder = getKeyboardCueStorageOrder();
-  for (let i = 0; i < storageOrder.length; i++) {
-    const storageKey = storageOrder[i];
-    if (Number(midiNotes.cues[storageKey]) === Number(note)) return String(i + 1);
+  const isExtended = !!extendedMidiCueMode;
+
+  // In normal MIDI mode, all channels/banks share the same mapped cue slots (1..10).
+  // In extended mode, only MIDI channel 1 keeps these base slots; other channels map to unique cues.
+  if (!isExtended || channel === 0) {
+    for (let i = 0; i < storageOrder.length; i++) {
+      const storageKey = storageOrder[i];
+      if (Number(midiNotes.cues[storageKey]) === Number(note)) return String(i + 1);
+    }
   }
+
   const keys = sortCueKeysForDisplay(Object.keys(cuePoints));
   const existing = keys.find(k => {
     const cue = cuePoints[k];
-    return cue && cue.midi && cue.midi.note === note && cue.midi.channel === channel;
+    if (!cue || !cue.midi) return false;
+    if (!isExtended) {
+      // Normal mode: same note on any channel should trigger the same cue.
+      return cue.midi.note === note;
+    }
+    // Extended mode: each channel+note pair is unique.
+    return cue.midi.note === note && cue.midi.channel === channel;
   });
   if (existing) return existing;
+
   const limit = getCueModeLimit();
   if (keys.length >= limit) return null;
   for (let i = 1; i <= limit; i++) {
