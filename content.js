@@ -6847,9 +6847,20 @@ function sortCueKeysForDisplay(keys) {
   });
 }
 
+
+function getKeyboardCueStorageOrder() {
+  return ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+}
+
+function getDisplayCueNumberFromStorageKey(key) {
+  return key === "0" ? "10" : String(key);
+}
+
 function getMidiCueKeyForInput(note, channel) {
-  for (let i = 1; i <= 10; i++) {
-    if (Number(midiNotes.cues[String(i % 10)]) === Number(note)) return String(i);
+  const storageOrder = getKeyboardCueStorageOrder();
+  for (let i = 0; i < storageOrder.length; i++) {
+    const storageKey = storageOrder[i];
+    if (Number(midiNotes.cues[storageKey]) === Number(note)) return String(i + 1);
   }
   const keys = sortCueKeysForDisplay(Object.keys(cuePoints));
   const existing = keys.find(k => {
@@ -7846,6 +7857,7 @@ function onKeyDown(e) {
   if (k === extensionKeys.randomCues.toLowerCase()) {
     e.preventDefault();
     e.stopPropagation();
+    cueInputMode = 'keyboard';
     randomizeCuesInOneClick();
     return;
   }
@@ -10468,13 +10480,14 @@ function buildMIDIMapWindow() {
       <input data-midiname="sidechainTap" value="${escapeHtml(String(midiNotes.sidechainTap))}" type="number">
       <button data-detect="sidechainTap" class="detect-midi-btn">Detect</button>
     </div>
-    <h4>Cues (0..9)</h4>
+    <h4>Cues (1..10)</h4>
     <div class="midimap-cues">
   `;
-  for (let k of Object.keys(midiNotes.cues)) {
+  for (let k of getKeyboardCueStorageOrder()) {
+    const cueLabel = getDisplayCueNumberFromStorageKey(k);
     out += `
       <div class="midimap-row">
-        <label>Cue ${k}:</label>
+        <label>Cue ${cueLabel}:</label>
         <input data-midicue="${k}" value="${escapeHtml(String(midiNotes.cues[k]))}" type="number">
         <button data-cuedetect="${k}" class="detect-midi-btn">Detect</button>
       </div>
