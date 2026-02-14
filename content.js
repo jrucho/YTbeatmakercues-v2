@@ -2953,10 +2953,8 @@ function finalizeLoopBuffer(buf) {
 
   pushUndoState();
   let exactDur = buf.length / buf.sampleRate;
-  if (!baseLoopDuration) {
-    baseLoopDuration = exactDur;
-    loopsBPM = Math.round((60 * 4) / baseLoopDuration);
-  } else {
+  const shouldSyncToExistingLoop = !!baseLoopDuration && hasActiveSyncLoop();
+  if (shouldSyncToExistingLoop) {
     const bars = Math.max(1, Math.round(exactDur / baseLoopDuration));
     const target = bars * baseLoopDuration;
     if (Math.abs(target - exactDur) > 0.0005) {
@@ -2968,6 +2966,9 @@ function finalizeLoopBuffer(buf) {
       buf = out;
     }
     exactDur = target;
+  } else {
+    baseLoopDuration = exactDur;
+    loopsBPM = Math.round((60 * 4) / baseLoopDuration);
   }
   loopDurations[activeLoopIndex] = exactDur;
   audioLoopRates[activeLoopIndex] = 1;
@@ -6082,7 +6083,8 @@ function stopRecordingAndPlay() {
 function scheduleStopRecording() {
   ensureAudioContext().then(() => {
     if (!audioContext || looperState !== "recording") return;
-    if (!baseLoopDuration || loopStartAbsoluteTime === null) {
+    const shouldSyncStop = !!baseLoopDuration && loopStartAbsoluteTime !== null && hasActiveSyncLoop();
+    if (!shouldSyncStop) {
       stopRecordingAndPlay();
       return;
     }
