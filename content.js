@@ -5873,7 +5873,11 @@ function seekVideoBySeconds(deltaSeconds) {
   if (!vid) return;
   const maxTime = Number.isFinite(vid.duration) ? Math.max(0, vid.duration) : Number.POSITIVE_INFINITY;
   const target = Math.max(0, Math.min(maxTime, vid.currentTime + deltaSeconds));
-  safeSeekVideo(null, target);
+  try {
+    vid.currentTime = target;
+  } catch {
+    safeSeekVideo(null, target);
+  }
 }
 
 // Define global variable for Reels support:

@@ -31,6 +31,7 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 - MIDI looper launch behavior now matches audio looper sync/free logic.
 - MIDI SHIFT double-tap is now more reliable for pause/stop behavior on controllers.
 - MIDI Mapping now includes **Back 5s** and **Forward 5s** assignable transport actions.
+- 5s skip transport now seeks instantly on one tap (no volume fade).
 - Cue workflow remains low-latency and numerically consistent:
   - Keyboard cues stay `1-9` and `0` (max 10).
   - MIDI cues stay numeric (`1..16`, optional extended mode up to 256).

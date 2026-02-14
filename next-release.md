@@ -7,6 +7,7 @@
 - MIDI loopers now follow the same smart sync/free behavior as audio loopers.
 - Fixed MIDI SHIFT double-tap detection reliability so pause/stop triggers consistently without repeated presses.
 - Added MIDI-mappable **Back 5s** and **Forward 5s** transport actions in MIDI Mapping.
+- 5s skip transport now performs immediate direct seek (single tap) without volume fade.
 - Keyboard cue workflow remains fixed to `1-9` and `0` (10 max), while MIDI keeps numeric cue flow (`1..16`, optional extended mode up to 256).
 - Cue counters now reflect real counts and full-state behavior correctly in minimal and advanced UI.
 
