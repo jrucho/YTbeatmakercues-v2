@@ -22,9 +22,15 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.1.1
+- Looper actions now trigger on button/key **press** (`mousedown` / note-on) instead of waiting for release, for audio, video, and MIDI loopers.
+- Single-press actions (record, play, overdub, stop-record) are now immediate for a lower-latency live feel.
+- Multi-press gestures remain available with press-first behavior: double press stops immediately, hold on second press erases, and triple press erases loop content.
+- Improved press-state cleanup on release to prevent duplicate trigger paths while preserving modifier-based behavior.
+
 ## New in 2.1
 - Cue workflow remains low-latency and numerically consistent: keyboard stays at 1–9 and 0 (10 max), while connecting a MIDI controller automatically expands to 1..16 by default (optional Extended Mode up to 256 available in Advanced View).
-- Smart loopers: when a loop is already playing, new loops sync; when all loopers are stopped, new loops run free and independent. (Note: loopers currently trigger on release instead of press. This will be corrected in the next update.)
+- Smart loopers: when a loop is already playing, new loops sync; when all loopers are stopped, new loops run free and independent.
 - MIDI SHIFT double-tap is now more reliable for pause/stop behavior on controllers.
 - MIDI Mapping now includes **Back 5s** and **Forward 5s** assignable transport actions.
 

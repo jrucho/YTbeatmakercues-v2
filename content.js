@@ -721,7 +721,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       undoIsDoublePress = false,
       // TRIPLE-PRESS TRACKING
       pressTimes = [],
-	    looperHoldTimer = null,
+      looperHoldTimer = null,
+      looperButtonIsDown = false,
       // Cue marker dragging
       draggingMarker = null,
       draggingCueIndex = null,
@@ -779,6 +780,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       midiIsDoublePress = false,
       midiLastClickTime = 0,
       midiDoublePressHoldStartTime = null,
+      midiLooperHoldTimer = null,
+      midiLooperButtonIsDown = false,
       midiPlaybackFlag = false,
       midiOverdubStartTimeouts = new Array(MAX_MIDI_LOOPS).fill(null),
       skipLooperMouseUp = new Array(MAX_MIDI_LOOPS).fill(false),
@@ -8163,6 +8166,8 @@ function onLooperButtonMouseDown(e) {
     }
     return onMidiLooperButtonMouseDown();
   }
+
+  looperButtonIsDown = true;
   const now = Date.now();
   pressTimes.push(now);
   const cutoff = now - clickDelay;
@@ -8170,14 +8175,18 @@ function onLooperButtonMouseDown(e) {
     pressTimes.shift();
   }
 
-  if (pressTimes.length === 3) {
-    const tFirst = pressTimes[0];
-    const tLast = pressTimes[2];
+  if (pressTimes.length >= 3) {
+    const tFirst = pressTimes[pressTimes.length - 3];
+    const tLast = pressTimes[pressTimes.length - 1];
     if (tLast - tFirst < clickDelay * 2) {
       eraseAudioLoop();
       pressTimes = [];
       isDoublePress = false;
       doublePressHoldStartTime = null;
+      if (looperHoldTimer) {
+        clearTimeout(looperHoldTimer);
+        looperHoldTimer = null;
+      }
       lastClickTime = now;
       return;
     }
@@ -8186,20 +8195,21 @@ function onLooperButtonMouseDown(e) {
   const delta = now - lastClickTime;
   if (delta < clickDelay) {
     isDoublePress = true;
-    const holdMs = doublePressHoldStartTime ? (now - doublePressHoldStartTime) : 0;
-    if (holdMs >= holdEraseDelay) {
-      eraseAudioLoop();
-    } else {
-      stopLoop(activeLoopIndex);
-    }
-    pressTimes = [];
-    isDoublePress = false;
-    doublePressHoldStartTime = null;
+    doublePressHoldStartTime = now;
+    stopLoop(activeLoopIndex);
+
+    if (looperHoldTimer) clearTimeout(looperHoldTimer);
+    looperHoldTimer = setTimeout(() => {
+      if (!looperButtonIsDown || !doublePressHoldStartTime) return;
+      if (Date.now() - doublePressHoldStartTime >= holdEraseDelay) {
+        eraseAudioLoop();
+        pressTimes = [];
+      }
+    }, holdEraseDelay);
   } else {
     isDoublePress = false;
-    doublePressHoldStartTime = now;
+    doublePressHoldStartTime = null;
     singlePressAudioLooperAction();
-    pressTimes = [];
   }
 
   lastClickTime = now;
@@ -8207,7 +8217,13 @@ function onLooperButtonMouseDown(e) {
 
 function onLooperButtonMouseUp() {
   if (useMidiLoopers) return onMidiLooperButtonMouseUp();
-  // All audio looper actions now execute on press.
+  looperButtonIsDown = false;
+  if (looperHoldTimer) {
+    clearTimeout(looperHoldTimer);
+    looperHoldTimer = null;
+  }
+  isDoublePress = false;
+  doublePressHoldStartTime = null;
 }
 
 function singlePressAudioLooperAction() {
@@ -8246,19 +8262,24 @@ function singlePressAudioLooperAction() {
 }
 
 function onMidiLooperButtonMouseDown() {
+  midiLooperButtonIsDown = true;
   const now = Date.now();
   midiPressTimes.push(now);
   const cutoff = now - clickDelay;
   while (midiPressTimes.length && midiPressTimes[0] < cutoff) midiPressTimes.shift();
 
-  if (midiPressTimes.length === 3) {
-    const tFirst = midiPressTimes[0];
-    const tLast = midiPressTimes[2];
+  if (midiPressTimes.length >= 3) {
+    const tFirst = midiPressTimes[midiPressTimes.length - 3];
+    const tLast = midiPressTimes[midiPressTimes.length - 1];
     if (tLast - tFirst < clickDelay * 2) {
       eraseMidiLoop(activeMidiLoopIndex);
       midiPressTimes = [];
       midiIsDoublePress = false;
       midiDoublePressHoldStartTime = null;
+      if (midiLooperHoldTimer) {
+        clearTimeout(midiLooperHoldTimer);
+        midiLooperHoldTimer = null;
+      }
       midiLastClickTime = now;
       midiMultiLaunch = false;
       return;
@@ -8268,30 +8289,41 @@ function onMidiLooperButtonMouseDown() {
   const delta = now - midiLastClickTime;
   if (delta < clickDelay) {
     midiIsDoublePress = true;
-    const holdMs = midiDoublePressHoldStartTime ? (now - midiDoublePressHoldStartTime) : 0;
-    if (holdMs >= holdEraseDelay) {
-      eraseMidiLoop(activeMidiLoopIndex);
-    } else {
-      const idx = activeMidiLoopIndex;
-      if (midiOverdubStartTimeouts[idx]) { clearTimeout(midiOverdubStartTimeouts[idx]); midiOverdubStartTimeouts[idx] = null; }
-      if (midiLoopStates[idx] === 'overdubbing') midiLoopStates[idx] = 'playing';
-      stopMidiLoop(idx);
-      updateLooperButtonColor();
+    midiDoublePressHoldStartTime = now;
+
+    const idx = activeMidiLoopIndex;
+    if (midiOverdubStartTimeouts[idx]) {
+      clearTimeout(midiOverdubStartTimeouts[idx]);
+      midiOverdubStartTimeouts[idx] = null;
     }
-    midiPressTimes = [];
-    midiIsDoublePress = false;
-    midiDoublePressHoldStartTime = null;
+    if (midiLoopStates[idx] === 'overdubbing') midiLoopStates[idx] = 'playing';
+    stopMidiLoop(idx);
+    updateLooperButtonColor();
+
+    if (midiLooperHoldTimer) clearTimeout(midiLooperHoldTimer);
+    midiLooperHoldTimer = setTimeout(() => {
+      if (!midiLooperButtonIsDown || !midiDoublePressHoldStartTime) return;
+      if (Date.now() - midiDoublePressHoldStartTime >= holdEraseDelay) {
+        eraseMidiLoop(activeMidiLoopIndex);
+        midiPressTimes = [];
+      }
+    }, holdEraseDelay);
   } else {
     midiIsDoublePress = false;
-    midiDoublePressHoldStartTime = now;
+    midiDoublePressHoldStartTime = null;
     singlePressMidiLooperAction();
-    midiPressTimes = [];
   }
   midiLastClickTime = now;
 }
 
 function onMidiLooperButtonMouseUp() {
-  // All MIDI looper actions now execute on press.
+  midiLooperButtonIsDown = false;
+  if (midiLooperHoldTimer) {
+    clearTimeout(midiLooperHoldTimer);
+    midiLooperHoldTimer = null;
+  }
+  midiIsDoublePress = false;
+  midiDoublePressHoldStartTime = null;
   midiMultiLaunch = false;
 }
 
