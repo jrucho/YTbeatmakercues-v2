@@ -1,7 +1,11 @@
-# Release 2.1
+# Release 2.1.1
 
 ## Clean changelog
-- Updated versioning to **2.1**.
+- Looper actions now execute on press for audio, video, and MIDI loopers.
+- Single-press record/play/overdub/stop-record actions now happen immediately on press.
+- Double-press stop and hold-to-erase gestures are now press-driven with release cleanup to avoid duplicate execution.
+- Triple-press erase gesture remains available with press timing windows.
+- Updated versioning to **2.1.1**.
 - Smart looper behavior is now consistent: if at least one loop is actively playing, new loops sync; if all loopers are stopped, new loops record and run in free tempo.
 - Fixed free-tempo audio recording length bug when recording a second loop after stopping a first loop.
 - MIDI loopers now follow the same smart sync/free behavior as audio loopers.
@@ -12,7 +16,10 @@
 - Cue counters now reflect real counts and full-state behavior correctly in minimal and advanced UI.
 
 ## Technical changelog
-- `manifest.json` version changed from `2.1.0` to `2.1`.
+- Reworked `onLooperButtonMouseDown`/`onLooperButtonMouseUp` and `onMidiLooperButtonMouseDown`/`onMidiLooperButtonMouseUp` to run gesture actions on press and use mouseup/note-off for cleanup only.
+- Added hold-erase timers tied to button-down state for audio and MIDI loopers so erase can occur during a held second press without waiting for release.
+- Updated video looper handlers so single and double press actions execute on `mousedown`.
+- `manifest.json` version changed from `2.1` to `2.1.1`.
 - Audio recording finalization now snaps to `baseLoopDuration` only when an active sync anchor exists (`hasActiveSyncLoop()`); otherwise recorded duration is kept as-is and becomes the new base reference.
 - Audio recording stop scheduling now quantizes stop only when an active sync anchor exists; otherwise it stops immediately in free mode.
 - Added MIDI sync-anchor helpers (`hasActiveMidiSyncLoop`, `getNextMidiLoopAlignedStart`) and updated `playMidiLoop()` to align only when another MIDI looper is actively running.
@@ -21,4 +28,4 @@
 - Preserved low-latency workflow: no buffer-size changes, no timing-engine replacement, and no audio path redesign.
 
 ## Short release notes
-Version **2.1** focuses on live reliability: smart looping now behaves consistently across audio and MIDI, free-tempo loop recording is stable when all loops are stopped, and cue handling remains fast, numeric, and visually correct without latency regression.
+Version **2.1.1** focuses on looper responsiveness: audio, video, and MIDI looper actions now execute on press with improved press/hold/triple gesture handling for live use.

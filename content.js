@@ -721,7 +721,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       undoIsDoublePress = false,
       // TRIPLE-PRESS TRACKING
       pressTimes = [],
-	    looperHoldTimer = null,
+      looperHoldTimer = null,
+      looperButtonIsDown = false,
       // Cue marker dragging
       draggingMarker = null,
       draggingCueIndex = null,
@@ -779,6 +780,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       midiIsDoublePress = false,
       midiLastClickTime = 0,
       midiDoublePressHoldStartTime = null,
+      midiLooperHoldTimer = null,
+      midiLooperButtonIsDown = false,
       midiPlaybackFlag = false,
       midiOverdubStartTimeouts = new Array(MAX_MIDI_LOOPS).fill(null),
       skipLooperMouseUp = new Array(MAX_MIDI_LOOPS).fill(false),
@@ -6560,23 +6563,21 @@ function clearOverdubTimers() {
  * Video Looper
  **************************************/
 function onVideoLooperButtonMouseDown() {
-  let now = Date.now();
-  let delta = now - lastClickTimeVideo;
+  const now = Date.now();
+  const delta = now - lastClickTimeVideo;
   if (delta < clickDelay) {
     isDoublePressVideo = true;
-  } else {
-    isDoublePressVideo = false;
+    eraseVideoLoop();
+    lastClickTimeVideo = 0;
+    return;
   }
+  isDoublePressVideo = false;
+  singlePressActionVideo();
   lastClickTimeVideo = now;
 }
 
 function onVideoLooperButtonMouseUp() {
-  if (isDoublePressVideo) {
-    eraseVideoLoop();
-    isDoublePressVideo = false;
-  } else {
-    singlePressActionVideo();
-  }
+  // All video looper actions now execute on press.
 }
 
 function singlePressActionVideo() {
@@ -8165,25 +8166,50 @@ function onLooperButtonMouseDown(e) {
     }
     return onMidiLooperButtonMouseDown();
   }
+
+  looperButtonIsDown = true;
   const now = Date.now();
-
-  // 1) Record this press time
   pressTimes.push(now);
-
-  // 2) Clear out old presses (older than ~300ms)
   const cutoff = now - clickDelay;
   while (pressTimes.length && pressTimes[0] < cutoff) {
     pressTimes.shift();
   }
 
-  // 3) Check if this press is within 300ms of the last press => double press
+  if (pressTimes.length >= 3) {
+    const tFirst = pressTimes[pressTimes.length - 3];
+    const tLast = pressTimes[pressTimes.length - 1];
+    if (tLast - tFirst < clickDelay * 2) {
+      eraseAudioLoop();
+      pressTimes = [];
+      isDoublePress = false;
+      doublePressHoldStartTime = null;
+      if (looperHoldTimer) {
+        clearTimeout(looperHoldTimer);
+        looperHoldTimer = null;
+      }
+      lastClickTime = now;
+      return;
+    }
+  }
+
   const delta = now - lastClickTime;
   if (delta < clickDelay) {
     isDoublePress = true;
     doublePressHoldStartTime = now;
+    stopLoop(activeLoopIndex);
+
+    if (looperHoldTimer) clearTimeout(looperHoldTimer);
+    looperHoldTimer = setTimeout(() => {
+      if (!looperButtonIsDown || !doublePressHoldStartTime) return;
+      if (Date.now() - doublePressHoldStartTime >= holdEraseDelay) {
+        eraseAudioLoop();
+        pressTimes = [];
+      }
+    }, holdEraseDelay);
   } else {
     isDoublePress = false;
     doublePressHoldStartTime = null;
+    singlePressAudioLooperAction();
   }
 
   lastClickTime = now;
@@ -8191,42 +8217,13 @@ function onLooperButtonMouseDown(e) {
 
 function onLooperButtonMouseUp() {
   if (useMidiLoopers) return onMidiLooperButtonMouseUp();
-  // First check for triple press (3 quick presses within ~600ms)
-  if (pressTimes.length === 3) {
-    const tFirst = pressTimes[0];
-    const tLast  = pressTimes[2];
-    if (tLast - tFirst < clickDelay * 2) {
-      console.log("TRIPLE PRESS => ERASE AUDIO LOOP");
-      eraseAudioLoop();
-
-      // Clear out so we don't also do single/double logic
-      pressTimes = [];
-      isDoublePress = false;
-      return;
-    }
+  looperButtonIsDown = false;
+  if (looperHoldTimer) {
+    clearTimeout(looperHoldTimer);
+    looperHoldTimer = null;
   }
-
-  // If not triple, either double or single
-  if (isDoublePress) {
-    const holdMs = doublePressHoldStartTime ? (Date.now() - doublePressHoldStartTime) : 0;
-    if (holdMs >= holdEraseDelay) {
-      console.log("DOUBLE PRESS HOLD => ERASE AUDIO LOOP");
-      eraseAudioLoop();
-    } else {
-      console.log("DOUBLE PRESS => STOP LOOP");
-      stopLoop(activeLoopIndex);
-    }
-
-    isDoublePress = false;
-    pressTimes = [];
-    doublePressHoldStartTime = null;
-
-  } else {
-    // SINGLE PRESS => start or overdub or resume playback
-    console.log("SINGLE PRESS => START/OVERDUB/PLAY");
-    singlePressAudioLooperAction();
-    pressTimes = [];
-  }
+  isDoublePress = false;
+  doublePressHoldStartTime = null;
 }
 
 function singlePressAudioLooperAction() {
@@ -8265,46 +8262,68 @@ function singlePressAudioLooperAction() {
 }
 
 function onMidiLooperButtonMouseDown() {
+  midiLooperButtonIsDown = true;
   const now = Date.now();
   midiPressTimes.push(now);
   const cutoff = now - clickDelay;
   while (midiPressTimes.length && midiPressTimes[0] < cutoff) midiPressTimes.shift();
-  const delta = now - midiLastClickTime;
-  if (delta < clickDelay) { midiIsDoublePress = true; midiDoublePressHoldStartTime = now; }
-  else { midiIsDoublePress = false; midiDoublePressHoldStartTime = null; }
-  midiLastClickTime = now;
-}
 
-function onMidiLooperButtonMouseUp() {
-  if (midiPressTimes.length === 3) {
-    const tFirst = midiPressTimes[0];
-    const tLast = midiPressTimes[2];
+  if (midiPressTimes.length >= 3) {
+    const tFirst = midiPressTimes[midiPressTimes.length - 3];
+    const tLast = midiPressTimes[midiPressTimes.length - 1];
     if (tLast - tFirst < clickDelay * 2) {
       eraseMidiLoop(activeMidiLoopIndex);
       midiPressTimes = [];
       midiIsDoublePress = false;
+      midiDoublePressHoldStartTime = null;
+      if (midiLooperHoldTimer) {
+        clearTimeout(midiLooperHoldTimer);
+        midiLooperHoldTimer = null;
+      }
+      midiLastClickTime = now;
       midiMultiLaunch = false;
       return;
     }
   }
-  if (midiIsDoublePress) {
-    const holdMs = midiDoublePressHoldStartTime ? (Date.now() - midiDoublePressHoldStartTime) : 0;
-    if (holdMs >= holdEraseDelay) {
-      eraseMidiLoop(activeMidiLoopIndex);
-    } else {
-      const idx = activeMidiLoopIndex;
-      if (midiOverdubStartTimeouts[idx]) { clearTimeout(midiOverdubStartTimeouts[idx]); midiOverdubStartTimeouts[idx] = null; }
-      if (midiLoopStates[idx] === 'overdubbing') midiLoopStates[idx] = 'playing';
-      stopMidiLoop(idx);
-      updateLooperButtonColor();
+
+  const delta = now - midiLastClickTime;
+  if (delta < clickDelay) {
+    midiIsDoublePress = true;
+    midiDoublePressHoldStartTime = now;
+
+    const idx = activeMidiLoopIndex;
+    if (midiOverdubStartTimeouts[idx]) {
+      clearTimeout(midiOverdubStartTimeouts[idx]);
+      midiOverdubStartTimeouts[idx] = null;
     }
-    midiIsDoublePress = false;
-    midiPressTimes = [];
-    midiDoublePressHoldStartTime = null;
+    if (midiLoopStates[idx] === 'overdubbing') midiLoopStates[idx] = 'playing';
+    stopMidiLoop(idx);
+    updateLooperButtonColor();
+
+    if (midiLooperHoldTimer) clearTimeout(midiLooperHoldTimer);
+    midiLooperHoldTimer = setTimeout(() => {
+      if (!midiLooperButtonIsDown || !midiDoublePressHoldStartTime) return;
+      if (Date.now() - midiDoublePressHoldStartTime >= holdEraseDelay) {
+        eraseMidiLoop(activeMidiLoopIndex);
+        midiPressTimes = [];
+      }
+    }, holdEraseDelay);
   } else {
+    midiIsDoublePress = false;
+    midiDoublePressHoldStartTime = null;
     singlePressMidiLooperAction();
-    midiPressTimes = [];
   }
+  midiLastClickTime = now;
+}
+
+function onMidiLooperButtonMouseUp() {
+  midiLooperButtonIsDown = false;
+  if (midiLooperHoldTimer) {
+    clearTimeout(midiLooperHoldTimer);
+    midiLooperHoldTimer = null;
+  }
+  midiIsDoublePress = false;
+  midiDoublePressHoldStartTime = null;
   midiMultiLaunch = false;
 }
 
