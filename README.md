@@ -22,6 +22,11 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.1.2
+- Overdub loop recording is now locked to exact loop-cycle boundaries with sample-accurate recorder start/stop timing to reduce intermittent drift.
+- Improved second-layer overdub reliability: the recorder now captures and applies audio using tighter boundary handling to avoid random gaps/click-like "gasp" moments.
+- Added safer overdub fallback behavior so empty/partial captures do not leave the looper in a bad state.
+
 ## New in 2.1.1
 - Looper actions now trigger on button/key **press** (`mousedown` / note-on) instead of waiting for release, for audio, video, and MIDI loopers.
 - Single-press actions (record, play, overdub, stop-record) are now immediate for a lower-latency live feel.

@@ -589,6 +589,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       recordedChunks = [],
       loopRecorderNode = null,
       recordedFrames = [],
+      overdubRecordedFrames = [],
       loopBuffer = null,
       loopSource = null,
       audioLoopBuffers = new Array(MAX_AUDIO_LOOPS).fill(null),
@@ -2919,6 +2920,30 @@ function getNextBarTime(afterTime) {
     return anchor;
   }
   return clock.nextBarTime(anchor);
+}
+
+function getEffectiveBaseLoopDuration() {
+  if (!baseLoopDuration) return 0;
+  let duration = baseLoopDuration;
+  if (pitchTarget === "loop") {
+    duration /= getCurrentPitchRate();
+  }
+  return duration > 0 ? duration : 0;
+}
+
+function getNextLoopCycleTime(afterTime) {
+  const anchor = typeof afterTime === "number" ? afterTime : (audioContext ? audioContext.currentTime : clock.getNow());
+  const cycleDuration = getEffectiveBaseLoopDuration();
+  if (!cycleDuration || loopStartAbsoluteTime === null || !isFinite(loopStartAbsoluteTime)) {
+    return getNextBarTime(anchor);
+  }
+  const elapsed = anchor - loopStartAbsoluteTime;
+  const cyclesAhead = Math.max(0, Math.ceil(elapsed / cycleDuration));
+  let target = loopStartAbsoluteTime + cyclesAhead * cycleDuration;
+  if (target <= anchor + 1e-6) {
+    target += cycleDuration;
+  }
+  return target;
 }
 
 
@@ -6202,7 +6227,7 @@ function playNewLoop(index) {
     src.playbackRate.value = rate;
     src.connect(g).connect(loopAudioGain);
     const shouldSync = hasActiveSyncLoop();
-    const when = shouldSync ? getNextBarTime(audioContext.currentTime + PLAY_PADDING) : (audioContext.currentTime + PLAY_PADDING);
+    const when = shouldSync ? getNextLoopCycleTime(audioContext.currentTime + PLAY_PADDING) : (audioContext.currentTime + PLAY_PADDING);
     src.start(when);
     if (!hasActiveSyncLoop()) {
       if (!clock.isRunning) {
@@ -6233,7 +6258,7 @@ function playSingleLoop(index, startTime = null, offset = 0) {
     if (pitchTarget === "loop") rate *= getCurrentPitchRate();
     src.playbackRate.value = rate;
     src.connect(g).connect(loopAudioGain);
-    const when = startTime !== null ? startTime : (hasActiveSyncLoop() ? getNextBarTime(audioContext.currentTime + PLAY_PADDING) : audioContext.currentTime);
+    const when = startTime !== null ? startTime : (hasActiveSyncLoop() ? getNextLoopCycleTime(audioContext.currentTime + PLAY_PADDING) : audioContext.currentTime);
     const off = Math.max(0, offset % (audioLoopBuffers[index].duration || 1e-6));
     src.start(when, off);
     if (!hasActiveSyncLoop()) {
@@ -6261,7 +6286,7 @@ function schedulePlayLoop(index) {
     if (pendingStopTimeouts[index]) { clearTimeout(pendingStopTimeouts[index]); pendingStopTimeouts[index] = null; }
     let when = audioContext.currentTime + PLAY_PADDING;
     if (hasActiveSyncLoop() && baseLoopDuration && loopStartAbsoluteTime) {
-      when = getNextBarTime(when);
+      when = getNextLoopCycleTime(when);
     }
     playSingleLoop(index, when, 0);
     if (masterLoopIndex === null) masterLoopIndex = index;
@@ -6357,37 +6382,131 @@ function doOverdubCycle() {
   bus3RecGain.gain.value = 0;
   bus4RecGain.gain.value = 1;
 
-  let d = loopBuffer.duration;
-  let now = audioContext.currentTime;
-  let elapsed = (now - loopStartAbsoluteTime) % d;
-  let remain = d - elapsed;
-
-  overdubStartTimeout = setTimeout(() => startOverdubRecording(d), remain * 1000);
+  const d = getEffectiveBaseLoopDuration() || loopBuffer.duration;
+  const startAt = getNextLoopCycleTime(audioContext.currentTime + PLAY_PADDING);
+  startOverdubRecording(d, startAt);
 }
 
-function startOverdubRecording(loopDur) {
+function startOverdubRecording(loopDur, startAt = null) {
   bus3RecGain.gain.value = 0;
 
-  recordedChunks = [];
-  mediaRecorder = new MediaRecorder(destinationNode.stream);
-  mediaRecorder.ondataavailable = e => {
-    if (e.data.size > 0) recordedChunks.push(e.data);
-  };
-  mediaRecorder.onstop = processOverdub;
-  mediaRecorder.start();
+  const targetStart = typeof startAt === "number" ? startAt : (audioContext.currentTime + PLAY_PADDING);
+  const stopAt = targetStart + loopDur;
 
-  overdubStopTimeout = setTimeout(() => {
-    if (mediaRecorder && mediaRecorder.state === "recording") {
-      mediaRecorder.stop();
-    }
-  }, loopDur * 1000);
+  if (audioContext.audioWorklet) {
+    const startWithWorklet = async () => {
+      if (!loopRecorderNode) {
+        loopRecorderNode = await createLoopRecorderNode(audioContext);
+      }
+      overdubRecordedFrames = [];
+      loopRecorderNode.port.onmessage = (e) => {
+        loopRecorderNode.port.onmessage = null;
+        overdubRecordedFrames = e.data;
+        try { mainRecorderMix.disconnect(loopRecorderNode); } catch {}
+        processOverdubFromFrames(overdubRecordedFrames);
+      };
+      mainRecorderMix.connect(loopRecorderNode);
+      loopRecorderNode.port.postMessage({ type: 'start', atTime: targetStart });
+      loopRecorderNode.port.postMessage({ type: 'stop', atTime: stopAt });
+      overdubStopTimeout = setTimeout(() => {
+        if (looperState === "overdubbing" && loopRecorderNode) {
+          loopRecorderNode.port.postMessage('stop');
+        }
+      }, Math.max(0, stopAt - audioContext.currentTime + 0.05) * 1000);
+    };
+    startWithWorklet().catch((err) => {
+      console.warn("Overdub worklet path failed, falling back to MediaRecorder", err);
+      startOverdubWithMediaRecorder(loopDur, targetStart);
+    });
+    return;
+  }
+
+  startOverdubWithMediaRecorder(loopDur, targetStart);
 }
 
-async function processOverdub() {
+function startOverdubWithMediaRecorder(loopDur, startAt = null) {
+  const startDelayMs = Math.max(0, ((typeof startAt === "number" ? startAt : audioContext.currentTime) - audioContext.currentTime) * 1000);
+  overdubStartTimeout = setTimeout(() => {
+    if (looperState !== "overdubbing") return;
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(destinationNode.stream);
+    mediaRecorder.ondataavailable = e => {
+      if (e.data.size > 0) recordedChunks.push(e.data);
+    };
+    mediaRecorder.onstop = processOverdubFromBlob;
+    mediaRecorder.start();
+
+    overdubStopTimeout = setTimeout(() => {
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+      }
+    }, loopDur * 1000);
+  }, startDelayMs);
+}
+
+function finishOverdubWithoutApply() {
+  looperState = "playing";
+  const looper = loopers.audio[activeLoopIndex];
+  if (looper) looper._updateState("playing");
+  updateLooperButtonColor();
+  updateExportButtonColor();
+  if (window.refreshMinimalState) window.refreshMinimalState();
+}
+
+async function processOverdubFromBlob() {
   if (looperState !== "overdubbing") return;
-  let blob = new Blob(recordedChunks, { type: "audio/webm" });
-  let arr = await blob.arrayBuffer();
-  let overdubBuf = await audioContext.decodeAudioData(arr);
+  if (!recordedChunks.length) {
+    finishOverdubWithoutApply();
+    return;
+  }
+  const blob = new Blob(recordedChunks, { type: "audio/webm" });
+  const arr = await blob.arrayBuffer();
+  const overdubBuf = await audioContext.decodeAudioData(arr);
+  applyOverdubToLoop(overdubBuf);
+}
+
+function processOverdubFromFrames(frames) {
+  if (looperState !== "overdubbing") return;
+  if (!frames || !frames.length) {
+    finishOverdubWithoutApply();
+    return;
+  }
+  const channels = frames.reduce((m, f) => Math.max(m, f.length), 0);
+  const length = frames.reduce((t, f) => t + (f[0] ? f[0].length : 0), 0);
+  if (!length || !channels) {
+    finishOverdubWithoutApply();
+    return;
+  }
+  const overdubBuf = audioContext.createBuffer(channels, length, audioContext.sampleRate);
+  let offset = 0;
+  for (const block of frames) {
+    const len = block[0] ? block[0].length : 0;
+    for (let c = 0; c < channels; c++) {
+      const src = block[c] || block[0] || new Float32Array(len);
+      overdubBuf.getChannelData(c).set(src, offset);
+    }
+    offset += len;
+  }
+  applyOverdubToLoop(overdubBuf);
+}
+
+
+function fitBufferToLoopLength(buf, targetFrames) {
+  if (!buf || !targetFrames || targetFrames <= 0) return buf;
+  if (buf.length === targetFrames) return buf;
+  const out = audioContext.createBuffer(buf.numberOfChannels, targetFrames, buf.sampleRate);
+  const copyFrames = Math.min(buf.length, targetFrames);
+  for (let c = 0; c < out.numberOfChannels; c++) {
+    out.getChannelData(c).set(buf.getChannelData(c).subarray(0, copyFrames), 0);
+  }
+  return out;
+}
+
+function applyOverdubToLoop(overdubBuf) {
+  if (looperState !== "overdubbing" || !loopBuffer || !overdubBuf) return;
+
+  const targetFrames = loopBuffer.length;
+  overdubBuf = fitBufferToLoopLength(overdubBuf, targetFrames);
 
   let peak = measurePeak(overdubBuf);
   if (peak > 1.0) scaleBuffer(overdubBuf, 1.0 / peak);
@@ -6395,6 +6514,7 @@ async function processOverdub() {
 
   pushUndoState();
   loopBuffer = mixBuffers(loopBuffer, overdubBuf);
+  loopBuffer = fitBufferToLoopLength(loopBuffer, targetFrames);
   applyFadeToBuffer(loopBuffer, 0.01);
   audioLoopBuffers[activeLoopIndex] = loopBuffer;
 
@@ -6408,6 +6528,10 @@ async function processOverdub() {
 function stopOverdubImmediately() {
   if (looperState === "overdubbing") {
     clearOverdubTimers();
+    if (loopRecorderNode) {
+      try { loopRecorderNode.port.postMessage('stop'); } catch {}
+      return;
+    }
     if (mediaRecorder && mediaRecorder.state === "recording") {
       mediaRecorder.stop();
     } else {
