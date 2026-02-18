@@ -6383,15 +6383,15 @@ function doOverdubCycle() {
   bus4RecGain.gain.value = 1;
 
   const d = getEffectiveBaseLoopDuration() || loopBuffer.duration;
-  const now = audioContext.currentTime;
-  const elapsed = ((now - loopStartAbsoluteTime) % d + d) % d;
-  const remain = d - elapsed;
-
-  overdubStartTimeout = setTimeout(() => startOverdubRecording(d), remain * 1000);
+  const startAt = getNextLoopCycleTime(audioContext.currentTime + PLAY_PADDING);
+  startOverdubRecording(d, startAt);
 }
 
-function startOverdubRecording(loopDur) {
+function startOverdubRecording(loopDur, startAt = null) {
   bus3RecGain.gain.value = 0;
+
+  const targetStart = typeof startAt === "number" ? startAt : (audioContext.currentTime + PLAY_PADDING);
+  const stopAt = targetStart + loopDur;
 
   if (audioContext.audioWorklet) {
     const startWithWorklet = async () => {
@@ -6406,41 +6406,59 @@ function startOverdubRecording(loopDur) {
         processOverdubFromFrames(overdubRecordedFrames);
       };
       mainRecorderMix.connect(loopRecorderNode);
-      loopRecorderNode.port.postMessage('start');
+      loopRecorderNode.port.postMessage({ type: 'start', atTime: targetStart });
+      loopRecorderNode.port.postMessage({ type: 'stop', atTime: stopAt });
       overdubStopTimeout = setTimeout(() => {
         if (looperState === "overdubbing" && loopRecorderNode) {
           loopRecorderNode.port.postMessage('stop');
         }
-      }, loopDur * 1000);
+      }, Math.max(0, stopAt - audioContext.currentTime + 0.05) * 1000);
     };
     startWithWorklet().catch((err) => {
       console.warn("Overdub worklet path failed, falling back to MediaRecorder", err);
-      startOverdubWithMediaRecorder(loopDur);
+      startOverdubWithMediaRecorder(loopDur, targetStart);
     });
     return;
   }
 
-  startOverdubWithMediaRecorder(loopDur);
+  startOverdubWithMediaRecorder(loopDur, targetStart);
 }
 
-function startOverdubWithMediaRecorder(loopDur) {
-  recordedChunks = [];
-  mediaRecorder = new MediaRecorder(destinationNode.stream);
-  mediaRecorder.ondataavailable = e => {
-    if (e.data.size > 0) recordedChunks.push(e.data);
-  };
-  mediaRecorder.onstop = processOverdubFromBlob;
-  mediaRecorder.start();
+function startOverdubWithMediaRecorder(loopDur, startAt = null) {
+  const startDelayMs = Math.max(0, ((typeof startAt === "number" ? startAt : audioContext.currentTime) - audioContext.currentTime) * 1000);
+  overdubStartTimeout = setTimeout(() => {
+    if (looperState !== "overdubbing") return;
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(destinationNode.stream);
+    mediaRecorder.ondataavailable = e => {
+      if (e.data.size > 0) recordedChunks.push(e.data);
+    };
+    mediaRecorder.onstop = processOverdubFromBlob;
+    mediaRecorder.start();
 
-  overdubStopTimeout = setTimeout(() => {
-    if (mediaRecorder && mediaRecorder.state === "recording") {
-      mediaRecorder.stop();
-    }
-  }, loopDur * 1000);
+    overdubStopTimeout = setTimeout(() => {
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+      }
+    }, loopDur * 1000);
+  }, startDelayMs);
+}
+
+function finishOverdubWithoutApply() {
+  looperState = "playing";
+  const looper = loopers.audio[activeLoopIndex];
+  if (looper) looper._updateState("playing");
+  updateLooperButtonColor();
+  updateExportButtonColor();
+  if (window.refreshMinimalState) window.refreshMinimalState();
 }
 
 async function processOverdubFromBlob() {
   if (looperState !== "overdubbing") return;
+  if (!recordedChunks.length) {
+    finishOverdubWithoutApply();
+    return;
+  }
   const blob = new Blob(recordedChunks, { type: "audio/webm" });
   const arr = await blob.arrayBuffer();
   const overdubBuf = await audioContext.decodeAudioData(arr);
@@ -6449,9 +6467,16 @@ async function processOverdubFromBlob() {
 
 function processOverdubFromFrames(frames) {
   if (looperState !== "overdubbing") return;
-  if (!frames || !frames.length) return;
+  if (!frames || !frames.length) {
+    finishOverdubWithoutApply();
+    return;
+  }
   const channels = frames.reduce((m, f) => Math.max(m, f.length), 0);
   const length = frames.reduce((t, f) => t + (f[0] ? f[0].length : 0), 0);
+  if (!length || !channels) {
+    finishOverdubWithoutApply();
+    return;
+  }
   const overdubBuf = audioContext.createBuffer(channels, length, audioContext.sampleRate);
   let offset = 0;
   for (const block of frames) {
@@ -6464,6 +6489,7 @@ function processOverdubFromFrames(frames) {
   }
   applyOverdubToLoop(overdubBuf);
 }
+
 
 function fitBufferToLoopLength(buf, targetFrames) {
   if (!buf || !targetFrames || targetFrames <= 0) return buf;
