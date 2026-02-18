@@ -2921,6 +2921,30 @@ function getNextBarTime(afterTime) {
   return clock.nextBarTime(anchor);
 }
 
+function getEffectiveBaseLoopDuration() {
+  if (!baseLoopDuration) return 0;
+  let duration = baseLoopDuration;
+  if (pitchTarget === "loop") {
+    duration /= getCurrentPitchRate();
+  }
+  return duration > 0 ? duration : 0;
+}
+
+function getNextLoopCycleTime(afterTime) {
+  const anchor = typeof afterTime === "number" ? afterTime : (audioContext ? audioContext.currentTime : clock.getNow());
+  const cycleDuration = getEffectiveBaseLoopDuration();
+  if (!cycleDuration || loopStartAbsoluteTime === null || !isFinite(loopStartAbsoluteTime)) {
+    return getNextBarTime(anchor);
+  }
+  const elapsed = anchor - loopStartAbsoluteTime;
+  const cyclesAhead = Math.max(0, Math.ceil(elapsed / cycleDuration));
+  let target = loopStartAbsoluteTime + cyclesAhead * cycleDuration;
+  if (target <= anchor + 1e-6) {
+    target += cycleDuration;
+  }
+  return target;
+}
+
 
 async function processLoopFromBlob() {
   if (looperState !== "recording") return;
@@ -6202,7 +6226,7 @@ function playNewLoop(index) {
     src.playbackRate.value = rate;
     src.connect(g).connect(loopAudioGain);
     const shouldSync = hasActiveSyncLoop();
-    const when = shouldSync ? getNextBarTime(audioContext.currentTime + PLAY_PADDING) : (audioContext.currentTime + PLAY_PADDING);
+    const when = shouldSync ? getNextLoopCycleTime(audioContext.currentTime + PLAY_PADDING) : (audioContext.currentTime + PLAY_PADDING);
     src.start(when);
     if (!hasActiveSyncLoop()) {
       if (!clock.isRunning) {
@@ -6233,7 +6257,7 @@ function playSingleLoop(index, startTime = null, offset = 0) {
     if (pitchTarget === "loop") rate *= getCurrentPitchRate();
     src.playbackRate.value = rate;
     src.connect(g).connect(loopAudioGain);
-    const when = startTime !== null ? startTime : (hasActiveSyncLoop() ? getNextBarTime(audioContext.currentTime + PLAY_PADDING) : audioContext.currentTime);
+    const when = startTime !== null ? startTime : (hasActiveSyncLoop() ? getNextLoopCycleTime(audioContext.currentTime + PLAY_PADDING) : audioContext.currentTime);
     const off = Math.max(0, offset % (audioLoopBuffers[index].duration || 1e-6));
     src.start(when, off);
     if (!hasActiveSyncLoop()) {
@@ -6261,7 +6285,7 @@ function schedulePlayLoop(index) {
     if (pendingStopTimeouts[index]) { clearTimeout(pendingStopTimeouts[index]); pendingStopTimeouts[index] = null; }
     let when = audioContext.currentTime + PLAY_PADDING;
     if (hasActiveSyncLoop() && baseLoopDuration && loopStartAbsoluteTime) {
-      when = getNextBarTime(when);
+      when = getNextLoopCycleTime(when);
     }
     playSingleLoop(index, when, 0);
     if (masterLoopIndex === null) masterLoopIndex = index;
