@@ -791,6 +791,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       midiRecordLines = new Array(MAX_MIDI_LOOPS).fill(null),
       midiRecordLinesMin = new Array(MAX_MIDI_LOOPS).fill(null),
       midiMultiLaunch = false,
+      audioMultiLaunch = false,
+      syncedFourLooperMode = localStorage.getItem('ytbm_syncedFourLooperMode') === '1',
       // 4-Bus Audio nodes
       audioContext = null,
       videoGain = null,
@@ -8291,6 +8293,12 @@ function onLooperButtonMouseDown(e) {
     return onMidiLooperButtonMouseDown();
   }
 
+  if (e) {
+    audioMultiLaunch = !!(e.metaKey || e.ctrlKey || e.shiftKey);
+  } else {
+    audioMultiLaunch = !!(isShiftKeyDown || isMetaKeyDown || isModPressed);
+  }
+
   looperButtonIsDown = true;
   const now = Date.now();
   pressTimes.push(now);
@@ -8339,9 +8347,22 @@ function onLooperButtonMouseDown(e) {
   lastClickTime = now;
 }
 
+function shouldAllowMultiLooperPlayback(looperType = 'midi') {
+  const multiLaunch = looperType === 'audio' ? audioMultiLaunch : midiMultiLaunch;
+  return multiLaunch || syncedFourLooperMode;
+}
+
+function stopOtherAudioLoops(targetIndex) {
+  for (let i = 0; i < MAX_AUDIO_LOOPS; i++) {
+    if (i === targetIndex) continue;
+    if (loopPlaying[i] || loopSources[i]) stopLoop(i);
+  }
+}
+
 function onLooperButtonMouseUp() {
   if (useMidiLoopers) return onMidiLooperButtonMouseUp();
   looperButtonIsDown = false;
+  audioMultiLaunch = false;
   if (looperHoldTimer) {
     clearTimeout(looperHoldTimer);
     looperHoldTimer = null;
@@ -8352,6 +8373,7 @@ function onLooperButtonMouseUp() {
 
 function singlePressAudioLooperAction() {
   if (looperState === "idle") {
+    if (!shouldAllowMultiLooperPlayback('audio')) stopOtherAudioLoops(activeLoopIndex);
     if (audioLoopBuffers[activeLoopIndex]) {
       looperState = "playing";
       loopPlaying[activeLoopIndex] = true;
@@ -8370,9 +8392,11 @@ function singlePressAudioLooperAction() {
     scheduleStopRecording();
   } else {
     if (!audioLoopBuffers[activeLoopIndex]) {
+      if (!shouldAllowMultiLooperPlayback('audio')) stopOtherAudioLoops(activeLoopIndex);
       recordingNewLoop = true;
       startRecording();
     } else if (!loopPlaying[activeLoopIndex]) {
+      if (!shouldAllowMultiLooperPlayback('audio')) stopOtherAudioLoops(activeLoopIndex);
       loopPlaying[activeLoopIndex] = true;
       if (loopSources.some(Boolean)) {
         scheduleResumeLoop(activeLoopIndex);
@@ -8455,7 +8479,7 @@ function singlePressMidiLooperAction() {
   const idx = activeMidiLoopIndex;
   const state = midiLoopStates[idx];
   if (state === 'idle' || state === 'stopped') {
-    if (!midiMultiLaunch) {
+    if (!shouldAllowMultiLooperPlayback('midi')) {
       for (let i = 0; i < MAX_MIDI_LOOPS; i++) {
         if (i === idx) continue;
         if (midiLoopStates[i] === 'playing' || midiLoopStates[i] === 'overdubbing') {
@@ -8475,7 +8499,7 @@ function singlePressMidiLooperAction() {
     if (midiLoopPlaying[idx]) {
       startMidiLoopOverdub(idx);
     } else {
-      if (!midiMultiLaunch) {
+      if (!shouldAllowMultiLooperPlayback('midi')) {
         for (let i = 0; i < MAX_MIDI_LOOPS; i++) {
           if (i === idx) continue;
           if (midiLoopStates[i] === 'playing' || midiLoopStates[i] === 'overdubbing') {
@@ -9244,6 +9268,28 @@ function addControls() {
   });
   midiToggleRow.appendChild(extendedMidiBtn);
   cw.appendChild(midiToggleRow);
+
+  const looperModeRow = document.createElement('div');
+  looperModeRow.style.display = 'flex';
+  looperModeRow.style.gap = '6px';
+  looperModeRow.style.marginBottom = '8px';
+
+  const syncedLoopersBtn = document.createElement('button');
+  syncedLoopersBtn.className = 'looper-btn';
+  syncedLoopersBtn.style.flex = '1 1 100%';
+  const syncSyncedLoopersBtn = () => {
+    syncedLoopersBtn.innerText = syncedFourLooperMode ? '4 Loopers Sync: On (layer mode)' : '4 Loopers Sync: Off (pattern mode)';
+    syncedLoopersBtn.style.background = syncedFourLooperMode ? '#2a6' : '#333';
+  };
+  syncSyncedLoopersBtn();
+  syncedLoopersBtn.title = 'When enabled, loopers A/B/C/D stay layered and synced instead of switching exclusively.';
+  syncedLoopersBtn.addEventListener('click', () => {
+    syncedFourLooperMode = !syncedFourLooperMode;
+    localStorage.setItem('ytbm_syncedFourLooperMode', syncedFourLooperMode ? '1' : '0');
+    syncSyncedLoopersBtn();
+  });
+  looperModeRow.appendChild(syncedLoopersBtn);
+  cw.appendChild(looperModeRow);
 
   const midiInputRow = document.createElement('div');
   midiInputRow.style.display = 'flex';
