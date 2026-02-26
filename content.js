@@ -298,7 +298,11 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         saved = 'default';
         localStorage.setItem('ytbm_outputDeviceId', 'default');
       }
-      outputDeviceSelect.value = saved;
+      const hasSaved = Array.from(outputDeviceSelect.options).some(opt => opt.value === saved);
+      outputDeviceSelect.value = hasSaved ? saved : 'default';
+      if (!hasSaved) {
+        localStorage.setItem('ytbm_outputDeviceId', 'default');
+      }
       outputDeviceSelect.disabled = outputs.length === 0;
     } catch (err) {
       console.error('Failed to enumerate output devices', err);
@@ -340,7 +344,11 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         saved = 'default';
         localStorage.setItem('ytbm_inputDeviceId', 'default');
       }
-      inputDeviceSelect.value = saved;
+      const hasSaved = Array.from(inputDeviceSelect.options).some(opt => opt.value === saved);
+      inputDeviceSelect.value = hasSaved ? saved : 'default';
+      if (!hasSaved) {
+        localStorage.setItem('ytbm_inputDeviceId', 'default');
+      }
       inputDeviceSelect.disabled = inputs.length === 0;
     } catch (err) {
       console.error('Failed to enumerate input devices', err);
@@ -392,9 +400,16 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
           chrome.storage.local.set({ ytbm_monitorInputDeviceId: saved });
         }
       }
-      monitorInputSelect.value = saved;
+      const hasSaved = Array.from(monitorInputSelect.options).some(opt => opt.value === saved);
+      monitorInputSelect.value = hasSaved ? saved : 'off';
+      if (!hasSaved) {
+        localStorage.setItem('ytbm_monitorInputDeviceId', 'off');
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+          chrome.storage.local.set({ ytbm_monitorInputDeviceId: 'off' });
+        }
+      }
       monitorInputSelect.disabled = inputs.length === 0;
-      monitorMicDeviceId = saved;
+      monitorMicDeviceId = monitorInputSelect.value || 'off';
       applyMonitorSelection();
     } catch (err) {
       console.error('Failed to enumerate input devices', err);
