@@ -933,6 +933,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjSourceCanvas = null,
       vjSourceCtx = null,
       vjAnimationFrame = null,
+      vjRenderInterval = null,
       vjMonitorWindow = null,
       vjMonitorVideo = null,
       vjMonitorStream = null,
@@ -7525,8 +7526,7 @@ function drawVJPinsOverlay(ctx, w, h) {
   ctx.restore();
 }
 
-function drawVJFrame(tMs = performance.now()) {
-  vjAnimationFrame = requestAnimationFrame(drawVJFrame);
+function renderVJFrameCore(tMs = performance.now()) {
   if (!ensureVJCanvases() || !vjPreviewCtx || !vjOutputCtx) return;
   const vid = getVideoElement();
   if (!vid) return;
@@ -7551,18 +7551,35 @@ function drawVJFrame(tMs = performance.now()) {
   }
 }
 
+function drawVJFrame(tMs = performance.now()) {
+  vjAnimationFrame = requestAnimationFrame(drawVJFrame);
+  renderVJFrameCore(tMs);
+}
+
 function startVJRenderer() {
   ensureVJDefaults();
   ensureVJAnalyser();
   if (!vjPreviewCanvas || !vjPreviewCtx) return;
   if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
   if (!vjAnimationFrame) vjAnimationFrame = requestAnimationFrame(drawVJFrame);
+  // Fallback render pump keeps monitor stream alive when RAF is throttled
+  // (e.g. popup fullscreen/occluded main tab situations).
+  if (!vjRenderInterval) {
+    vjRenderInterval = setInterval(() => {
+      if (!vjModuleEnabled) return;
+      renderVJFrameCore(performance.now());
+    }, 1000 / 30);
+  }
 }
 
 function stopVJRenderer() {
   if (vjAnimationFrame) {
     cancelAnimationFrame(vjAnimationFrame);
     vjAnimationFrame = null;
+  }
+  if (vjRenderInterval) {
+    clearInterval(vjRenderInterval);
+    vjRenderInterval = null;
   }
 }
 
@@ -14185,6 +14202,19 @@ function runLooperDeterministicSimulation() {
   return { pass, checks, events };
 }
 window.runLooperDeterministicSimulation = runLooperDeterministicSimulation;
+
+
+// Keep VJ stream pumping when tab visibility changes (fullscreen monitor scenarios).
+document.addEventListener('visibilitychange', () => {
+  if (!vjModuleEnabled) return;
+  if (document.hidden) {
+    if (!vjRenderInterval) {
+      vjRenderInterval = setInterval(() => renderVJFrameCore(performance.now()), 1000 / 30);
+    }
+  } else if (vjRenderInterval && vjAnimationFrame) {
+    // keep one interval only if renderer is active; no-op (interval already used as fallback).
+  }
+});
 
 initialize();
 })();
