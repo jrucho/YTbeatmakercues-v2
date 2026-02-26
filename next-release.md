@@ -13,6 +13,7 @@ Release **2.2** introduces a full VJ (video jockey) module integrated with the l
 - Added MIDI-note handling for VJ FX controls and VJ text sequence toggling.
 - Added Cmd/Ctrl+Y shortcut and top-level VJ button integration for quick access.
 - Updated looper video capture routing so VJ output can be used as the visual source when VJ mode is enabled.
+- Fixed VJ-to-video-looper capture routing so video looper records the processed VJ output even when FX are enabled and/or the VJ panel is closed.
 - Reorganized Advanced panel layout under a cleaner **Packs (Advanced)** grouping.
 - Fixed output/input/monitor dropdowns so they default to visible fallback choices when saved device IDs are missing.
 - Updated extension version to **2.2** in `manifest.json`.

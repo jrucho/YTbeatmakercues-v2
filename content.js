@@ -6833,7 +6833,7 @@ function startVideoRecording() {
   // }
   // ————————————————————————————————————————————————
 
-  let captureStream = mv.captureStream?.() || null;
+  let captureStream = getVideoCaptureStreamForLooper(mv);
   if (!captureStream) {
     alert("Unable to capture video stream!");
     return;
@@ -7076,8 +7076,8 @@ function setVJModuleEnabled(enabled) {
   if (vjModuleEnabled) startVJRenderer(); else stopVJRenderer();
 }
 
-function ensureVJCanvases() {
-  if (!vjPreviewCanvas) return false;
+function ensureVJCanvases(requirePreview = false) {
+  if (requirePreview && !vjPreviewCanvas) return false;
   const vid = getVideoElement();
   if (!vid) return false;
   // Keep a stable 16:9 VJ stage while preserving input aspect inside it.
@@ -7098,11 +7098,13 @@ function ensureVJCanvases() {
     vjFeedbackCanvas = document.createElement('canvas');
     vjFeedbackCtx = vjFeedbackCanvas.getContext('2d', { alpha: false });
   }
-  if (vjPreviewCanvas.width !== w || vjPreviewCanvas.height !== h) {
-    vjPreviewCanvas.width = w;
-    vjPreviewCanvas.height = h;
+  if (vjPreviewCanvas) {
+    if (vjPreviewCanvas.width !== w || vjPreviewCanvas.height !== h) {
+      vjPreviewCanvas.width = w;
+      vjPreviewCanvas.height = h;
+    }
+    if (vjPreviewCanvas.style.aspectRatio !== '16 / 9') vjPreviewCanvas.style.aspectRatio = '16 / 9';
   }
-  if (vjPreviewCanvas.style.aspectRatio !== '16 / 9') vjPreviewCanvas.style.aspectRatio = '16 / 9';
   if (vjOutputCanvas.width !== w || vjOutputCanvas.height !== h) {
     vjOutputCanvas.width = w;
     vjOutputCanvas.height = h;
@@ -7469,22 +7471,24 @@ function drawVJPinsOverlay(ctx, w, h) {
 }
 
 function renderVJFrameCore(tMs = performance.now()) {
-  if (!ensureVJCanvases() || !vjPreviewCtx || !vjOutputCtx) return;
+  if (!ensureVJCanvases() || !vjOutputCtx) return;
   const vid = getVideoElement();
   if (!vid) return;
   updateVJBandLevels();
-  const w = vjPreviewCanvas.width, h = vjPreviewCanvas.height;
+  const w = vjOutputCanvas.width, h = vjOutputCanvas.height;
 
   // Render clean output (no pins) for monitor and capture.
   vjOutputCtx.fillStyle = '#000';
   vjOutputCtx.fillRect(0, 0, w, h);
   drawStreamMosaic(vjOutputCtx, vid, w, h, tMs);
 
-  // Preview mirrors output then overlays editable pins.
-  vjPreviewCtx.fillStyle = '#000';
-  vjPreviewCtx.fillRect(0, 0, w, h);
-  vjPreviewCtx.drawImage(vjOutputCanvas, 0, 0, w, h);
-  drawVJPinsOverlay(vjPreviewCtx, w, h);
+  // Preview mirrors output then overlays editable pins when the VJ panel is open.
+  if (vjPreviewCtx && vjPreviewCanvas) {
+    vjPreviewCtx.fillStyle = '#000';
+    vjPreviewCtx.fillRect(0, 0, w, h);
+    vjPreviewCtx.drawImage(vjOutputCanvas, 0, 0, w, h);
+    drawVJPinsOverlay(vjPreviewCtx, w, h);
+  }
 
   if (vjMonitorVideo && vjMonitorStream && vjMonitorVideo.srcObject !== vjMonitorStream) {
     vjMonitorVideo.srcObject = vjMonitorStream;
@@ -7500,7 +7504,6 @@ function drawVJFrame(tMs = performance.now()) {
 function startVJRenderer() {
   ensureVJDefaults();
   ensureVJAnalyser();
-  if (!vjPreviewCanvas || !vjPreviewCtx) return;
   if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
   if (!vjAnimationFrame) vjAnimationFrame = requestAnimationFrame(drawVJFrame);
   // Fallback render pump keeps monitor stream alive when RAF is throttled
@@ -8019,10 +8022,14 @@ function handleVJMidiNote(note, velocity, command) {
 
 function getVideoCaptureStreamForLooper(videoElement) {
   if (!videoElement) return null;
-  if (vjModuleEnabled && vjPreviewCanvas) {
+  if (vjModuleEnabled) {
     startVJRenderer();
-    if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
-    return vjMonitorStream;
+    ensureVJCanvases();
+    if (!vjMonitorStream && vjOutputCanvas && typeof vjOutputCanvas.captureStream === 'function') {
+      vjMonitorStream = vjOutputCanvas.captureStream(30);
+    }
+    const hasTrack = vjMonitorStream && vjMonitorStream.getVideoTracks && vjMonitorStream.getVideoTracks().length;
+    if (hasTrack) return vjMonitorStream;
   }
   return videoElement.captureStream?.() || null;
 }
