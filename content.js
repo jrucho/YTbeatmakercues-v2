@@ -3237,13 +3237,15 @@ function finalizeLoopBuffer(buf) {
   updateMasterLoopIndex();
 
   looperState = "playing";
-  if (wasNew && loopSources.some(Boolean)) {
+  if (scheduledStopTime !== null) {
+    // Preserve the musical boundary where recording was quantized to stop,
+    // even if decode/finalize takes a little time.
     const when = audioContext.currentTime + PLAY_PADDING;
-    let offset = 0;
-    if (scheduledStopTime !== null) {
-      offset = Math.max(0, audioContext.currentTime - scheduledStopTime);
-    }
+    const offset = Math.max(0, audioContext.currentTime - scheduledStopTime);
     playSingleLoop(activeLoopIndex, when, offset);
+  } else if (wasNew && loopSources.some(Boolean)) {
+    const when = audioContext.currentTime + PLAY_PADDING;
+    playSingleLoop(activeLoopIndex, when, 0);
   } else {
     playLoop();
   }
