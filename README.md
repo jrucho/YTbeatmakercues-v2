@@ -28,6 +28,7 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 - Added a **VJ monitor output** popup with fullscreen shortcut support so visuals can be sent to a separate screen/projector.
 - Added **reactive FX modulation** driven by analyser bands (low/mid/high/full) for audio-responsive visuals.
 - Added **MIDI-mappable VJ effects** and text-sequence toggles for performance workflows.
+- Added **Cue → Stream Trigger Mapping** in the VJ module: assign multiple cues to each stream, route one cue to multiple streams, and choose per-stream trigger mode (**Gate** with adjustable ms or **Legato** hold) for playable video performance.
 - Improved Advanced panel organization by grouping packs-related controls (packs, MIDI device selector, drum selectors) under **Packs (Advanced)**.
 - Hardened device dropdown initialization so output/input/monitor selects always show valid default options when previously saved IDs are stale.
 
