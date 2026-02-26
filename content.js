@@ -607,6 +607,12 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       audioLoopRates = new Array(MAX_AUDIO_LOOPS).fill(1),
       loopDurations = new Array(MAX_AUDIO_LOOPS).fill(0),
       loopStartOffsets = new Array(MAX_AUDIO_LOOPS).fill(0),
+      audioClipMeta = Array.from({ length: MAX_AUDIO_LOOPS }, () => null),
+      midiClipMeta = Array.from({ length: MAX_MIDI_LOOPS }, () => null),
+      audioClipBarsOverride = new Array(MAX_AUDIO_LOOPS).fill(null),
+      midiClipBarsOverride = new Array(MAX_MIDI_LOOPS).fill(null),
+      clipCaptureBarsDefault = Math.max(1, Number(localStorage.getItem('ytbm_clipCaptureBarsDefault') || 1) || 1),
+      clipExclusivePlayback = localStorage.getItem('ytbm_clipExclusivePlayback') !== '0',
       masterLoopIndex = null,
       // Video Looper
       videoLooperState = "idle",
@@ -1219,6 +1225,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       this.loopLengthBeats = 0;
       this.loopStartTime = 0;
       this.armedAction = null;
+      this.pendingActionIds = [];
       this.mode = 'loopstation';
     }
 
@@ -1260,11 +1267,27 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
 
     scheduleTrackAction(type, index, actionName, fn, opts = {}) {
       const track = this.getTrack(type, index);
-      if (track) track.armedAction = actionName;
-      return this.scheduler.schedule(`${type}:${index}:${actionName}`, (t) => {
-        if (track) track.armedAction = null;
+      if (track) {
+        track.armedAction = actionName;
+        if (!Array.isArray(track.pendingActionIds)) track.pendingActionIds = [];
+      }
+      const id = this.scheduler.schedule(`${type}:${index}:${actionName}`, (t) => {
+        if (track) {
+          track.armedAction = null;
+          track.pendingActionIds = (track.pendingActionIds || []).filter(x => x !== id);
+        }
         fn(t, track);
       }, opts);
+      if (track) track.pendingActionIds.push(id);
+      return id;
+    }
+
+    cancelTrackActions(type, index) {
+      const track = this.getTrack(type, index);
+      if (!track || !Array.isArray(track.pendingActionIds)) return;
+      track.pendingActionIds.forEach((id) => this.scheduler.cancel(id));
+      track.pendingActionIds = [];
+      track.armedAction = null;
     }
 
     commitTrackLength(type, index, loopLengthBeats) {
@@ -3214,6 +3237,11 @@ function finalizeLoopBuffer(buf) {
     loopsBPM = Math.round((60 * 4) / baseLoopDuration);
   }
   loopDurations[activeLoopIndex] = exactDur;
+  const audioClipBars = getCaptureBars('audio', activeLoopIndex);
+  audioClipMeta[activeLoopIndex] = makeClipMeta('audio', activeLoopIndex, exactDur, audioClipBars);
+  if (looperDebugEnabled) {
+    console.log('[YTBM Clip Capture][Audio]', { index: activeLoopIndex, ...audioClipMeta[activeLoopIndex] });
+  }
   looperManager.commitTrackLength('audio', activeLoopIndex, transport.toBeats(exactDur));
   const managedAudioTrack = looperManager.getTrack('audio', activeLoopIndex);
   if (managedAudioTrack) {
@@ -3327,6 +3355,7 @@ function captureAppState() {
     looperState,
     audioLoopBuffers: audioLoopBuffers.slice(),
     audioLoopRates: audioLoopRates.slice(),
+    audioClipMeta: audioClipMeta.map(m => m ? { ...m, timeSig: m.timeSig ? { ...m.timeSig } : null } : null),
     loopPlaying: loopPlaying.slice(),
     baseLoopDuration,
     loopsBPM,
@@ -3365,12 +3394,15 @@ function captureAppState() {
     midiLoopStartTimes: midiLoopStartTimes.slice(),
     midiStopTargets: midiStopTargets.slice(),
     midiLoopBpms: midiLoopBpms.slice(),
+    midiClipMeta: midiClipMeta.map(m => m ? { ...m, timeSig: m.timeSig ? { ...m.timeSig } : null } : null),
     activeMidiLoopIndex
   };
 }
 
 function restoreAppState(st) {
   stopAllLoopSources();
+  for (let i = 0; i < MAX_AUDIO_LOOPS; i++) cancelScheduledTrackActions('audio', i);
+  for (let i = 0; i < MAX_MIDI_LOOPS; i++) cancelScheduledTrackActions('midi', i);
   pendingStopTimeouts.forEach((t, i) => { if (t) clearTimeout(t); pendingStopTimeouts[i] = null; });
   if (newLoopStartTimeout) { clearTimeout(newLoopStartTimeout); newLoopStartTimeout = null; }
 
@@ -3378,6 +3410,7 @@ function restoreAppState(st) {
   looperState = st.looperState;
   audioLoopBuffers = st.audioLoopBuffers.slice();
   audioLoopRates = st.audioLoopRates.slice();
+  audioClipMeta = st.audioClipMeta ? st.audioClipMeta.map(m => m ? { ...m, timeSig: m.timeSig ? { ...m.timeSig } : null } : null) : Array.from({ length: MAX_AUDIO_LOOPS }, () => null);
   loopPlaying = st.loopPlaying.slice();
   baseLoopDuration = st.baseLoopDuration;
   loopsBPM = st.loopsBPM;
@@ -3418,6 +3451,7 @@ function restoreAppState(st) {
   midiLoopStartTimes = st.midiLoopStartTimes ? st.midiLoopStartTimes.slice() : new Array(MAX_MIDI_LOOPS).fill(0);
   midiStopTargets = st.midiStopTargets ? st.midiStopTargets.slice() : new Array(MAX_MIDI_LOOPS).fill(0);
   midiLoopBpms = st.midiLoopBpms ? st.midiLoopBpms.slice() : new Array(MAX_MIDI_LOOPS).fill(null);
+  midiClipMeta = st.midiClipMeta ? st.midiClipMeta.map(m => m ? { ...m, timeSig: m.timeSig ? { ...m.timeSig } : null } : null) : Array.from({ length: MAX_MIDI_LOOPS }, () => null);
   midiLoopIntervals.forEach((t,i)=>{ if(t) clearTimeout(t); midiLoopIntervals[i]=null; });
   midiOverdubStartTimeouts.forEach((t,i)=>{ if(t) clearTimeout(t); midiOverdubStartTimeouts[i]=null; });
   midiStopTimeouts.forEach((t,i)=>{ if(t) clearTimeout(t); midiStopTimeouts[i]=null; });
@@ -6390,13 +6424,14 @@ function playLoop(startTime = null) {
   ensureAudioContext().then(() => {
     if (!audioContext) return;
     stopAllLoopSources();
+  for (let i = 0; i < MAX_AUDIO_LOOPS; i++) cancelScheduledTrackActions('audio', i);
     loopSources = new Array(MAX_AUDIO_LOOPS).fill(null);
     audioLoopBuffers.forEach((buf, i) => {
       if (!buf || !loopPlaying[i]) return;
       const src = audioContext.createBufferSource();
       src.buffer = buf;
       src.loop = true;
-      let rate = audioLoopRates[i] || 1;
+      let rate = shouldUseClipLauncherMode() ? getAudioClipPlaybackRate(i) : (audioLoopRates[i] || 1);
       if (pitchTarget === "loop") rate *= getCurrentPitchRate();
       src.playbackRate.value = rate;
       src.connect(loopAudioGain);
@@ -6435,7 +6470,7 @@ function playNewLoop(index) {
     const g = audioContext.createGain();
     g.gain.value = 1;
     loopGainNodes[index] = g;
-    let rate = audioLoopRates[index] || 1;
+    let rate = shouldUseClipLauncherMode() ? getAudioClipPlaybackRate(index) : (audioLoopRates[index] || 1);
     if (pitchTarget === "loop") rate *= getCurrentPitchRate();
     src.playbackRate.value = rate;
     src.connect(g).connect(loopAudioGain);
@@ -6467,7 +6502,7 @@ function playSingleLoop(index, startTime = null, offset = 0) {
     const g = audioContext.createGain();
     g.gain.value = 1;
     loopGainNodes[index] = g;
-    let rate = audioLoopRates[index] || 1;
+    let rate = shouldUseClipLauncherMode() ? getAudioClipPlaybackRate(index) : (audioLoopRates[index] || 1);
     if (pitchTarget === "loop") rate *= getCurrentPitchRate();
     src.playbackRate.value = rate;
     src.connect(g).connect(loopAudioGain);
@@ -6762,6 +6797,7 @@ function stopLoopImmediately(index) {
     if (pendingStopTimeouts[index]) { clearTimeout(pendingStopTimeouts[index]); pendingStopTimeouts[index] = null; }
   } else {
     stopAllLoopSources();
+  for (let i = 0; i < MAX_AUDIO_LOOPS; i++) cancelScheduledTrackActions('audio', i);
     loopPlaying.fill(false);
     pendingStopTimeouts.forEach((t, i) => { if (t) clearTimeout(t); pendingStopTimeouts[i] = null; });
     loopers.audio.forEach(looper => {
@@ -6819,6 +6855,7 @@ function updateMasterLoopIndex() {
 
 function eraseAudioLoop() {
   const idx = activeLoopIndex;
+  cancelScheduledTrackActions('audio', idx);
   if (audioLoopBuffers[idx]) pushUndoState();
   clearOverdubTimers();
   stopLoopSource(idx);
@@ -6827,6 +6864,7 @@ function eraseAudioLoop() {
   loopDurations[idx] = 0;
   loopStartOffsets[idx] = 0;
   audioLoopRates[idx] = 1;
+  audioClipMeta[idx] = null;
   ensureLoopers();
   const looper = loopers.audio[idx];
   if (looper) {
@@ -6837,6 +6875,7 @@ function eraseAudioLoop() {
     baseLoopDuration = null;
     loopsBPM = null;
     audioLoopRates = new Array(MAX_AUDIO_LOOPS).fill(1);
+    audioClipMeta = Array.from({ length: MAX_AUDIO_LOOPS }, () => null);
     looperState = "idle";
   } else {
     if (loopBuffer === null || !audioLoopBuffers.includes(loopBuffer)) {
@@ -6865,9 +6904,11 @@ function eraseAllAudioLoops() {
   if (audioLoopBuffers.some(b => b)) pushUndoState();
   clearOverdubTimers();
   stopAllLoopSources();
+  for (let i = 0; i < MAX_AUDIO_LOOPS; i++) cancelScheduledTrackActions('audio', i);
   audioLoopBuffers.fill(null);
   loopPlaying.fill(false);
   audioLoopRates = new Array(MAX_AUDIO_LOOPS).fill(1);
+  audioClipMeta = Array.from({ length: MAX_AUDIO_LOOPS }, () => null);
   loopDurations.fill(0);
   loopStartOffsets.fill(0);
   baseLoopDuration = null;
@@ -9489,12 +9530,67 @@ function shouldUseClipLauncherMode() {
   return getCurrentPerformanceMode() === 'clip';
 }
 
+function getBeatsPerBar() {
+  return Math.max(1, Number(clock?.timeSig?.num) || 4);
+}
+
+function getCurrentSessionBpm() {
+  return Math.max(1, Number(loopsBPM || clock?.bpm || 120));
+}
+
+function getCaptureBars(type, index) {
+  const arr = type === 'audio' ? audioClipBarsOverride : midiClipBarsOverride;
+  const fromClip = Number(arr?.[index]);
+  if (Number.isFinite(fromClip) && fromClip > 0) return fromClip;
+  return Math.max(1, Number(clipCaptureBarsDefault) || 1);
+}
+
+function makeClipMeta(type, index, durationSeconds, explicitBars = null) {
+  const d = Math.max(0.001, Number(durationSeconds) || 0.001);
+  const bars = Math.max(1, Number(explicitBars) || getCaptureBars(type, index));
+  const beatsPerBar = getBeatsPerBar();
+  const origBpm = (60 * beatsPerBar * bars) / d;
+  return {
+    origBpm,
+    origLengthSeconds: d,
+    bars,
+    timeSig: { ...(clock?.timeSig || { num: 4, den: 4 }) }
+  };
+}
+
+function getAudioClipPlaybackRate(index) {
+  const meta = audioClipMeta[index];
+  if (!meta || !meta.origBpm) return audioLoopRates[index] || 1;
+  const rate = (getCurrentSessionBpm() / Math.max(1, Number(meta.origBpm))) * (audioLoopRates[index] || 1);
+  if (looperDebugEnabled && shouldUseClipLauncherMode()) {
+    console.log('[YTBM Clip Audio]', { index, origBpm: meta.origBpm, sessionBpm: getCurrentSessionBpm(), playbackRate: rate });
+  }
+  return rate;
+}
+
+function getMidiClipScaleFactor(index) {
+  const meta = midiClipMeta[index];
+  if (!meta || !meta.origBpm) return 1;
+  const factor = Math.max(0.0001, Number(meta.origBpm) / getCurrentSessionBpm());
+  if (looperDebugEnabled && shouldUseClipLauncherMode()) {
+    console.log('[YTBM Clip MIDI]', { index, origBpm: meta.origBpm, sessionBpm: getCurrentSessionBpm(), scaleFactor: factor });
+  }
+  return factor;
+}
+
+function cancelScheduledTrackActions(type, index) {
+  looperManager.cancelTrackActions?.(type, index);
+}
+
+function shouldQuantizeActionsNow() {
+  return !!syncedFourLooperMode;
+}
+
 function scheduleQuantizedTrackAction(type, index, actionName, fn, opts = {}) {
-  const clipMode = shouldUseClipLauncherMode();
-  const quantizedActions = new Set(['play', 'resume', 'clipStop']);
+  const syncMode = shouldQuantizeActionsNow();
   const shouldQuantize = opts.forceQuantized === true
-    || opts.quantize === true
-    || (clipMode && quantizedActions.has(actionName));
+    || (syncMode && opts.immediate !== true)
+    || opts.quantize === true;
 
   if (!shouldQuantize) {
     const now = audioContext ? audioContext.currentTime : performance.now() / 1000;
@@ -9506,6 +9602,17 @@ function scheduleQuantizedTrackAction(type, index, actionName, fn, opts = {}) {
       if (track) track.armedAction = null;
     }
     return null;
+  }
+
+  if (syncMode && audioContext && !transport.isPlaying) {
+    transport.clock.start(audioContext.currentTime);
+    if (looperDebugEnabled) {
+      console.log('[YTBM Transport] sync anchor started', {
+        anchorTime: transport.clock.startTime,
+        bpm: transport.bpm,
+        quantize: transport.quantizeUnit
+      });
+    }
   }
 
   return looperManager.scheduleTrackAction(type, index, actionName, fn, opts);
@@ -9590,7 +9697,8 @@ function onLooperButtonMouseDown(e) {
   if (delta < clickDelay) {
     isDoublePress = true;
     doublePressHoldStartTime = now;
-    stopLoop(activeLoopIndex);
+    if (shouldQuantizeActionsNow()) scheduleQuantizedTrackAction('audio', activeLoopIndex, 'clipStop', () => stopLoop(activeLoopIndex), { unit: 'bar' });
+    else stopLoop(activeLoopIndex);
 
     if (looperHoldTimer) clearTimeout(looperHoldTimer);
     looperHoldTimer = setTimeout(() => {
@@ -9611,6 +9719,9 @@ function onLooperButtonMouseDown(e) {
 
 function shouldAllowMultiLooperPlayback(looperType = 'midi') {
   const multiLaunch = looperType === 'audio' ? audioMultiLaunch : midiMultiLaunch;
+  if (shouldUseClipLauncherMode()) {
+    return !clipExclusivePlayback || multiLaunch;
+  }
   return multiLaunch || syncedFourLooperMode;
 }
 
@@ -9668,7 +9779,11 @@ function singlePressAudioLooperAction() {
         else schedulePlayLoop(activeLoopIndex);
       }, { unit: 'bar' });
     } else {
-      scheduleQuantizedTrackAction('audio', activeLoopIndex, 'overdubToggle', () => toggleOverdub(), { unit: 'bar' });
+      if (clipMode) {
+        scheduleQuantizedTrackAction('audio', activeLoopIndex, 'clipStop', () => stopLoop(activeLoopIndex), { unit: 'bar' });
+      } else {
+        scheduleQuantizedTrackAction('audio', activeLoopIndex, 'overdubToggle', () => toggleOverdub(), { unit: 'bar' });
+      }
     }
   }
 }
@@ -9720,7 +9835,8 @@ function onMidiLooperButtonMouseDown() {
       midiOverdubStartTimeouts[idx] = null;
     }
     if (midiLoopStates[idx] === 'overdubbing') midiLoopStates[idx] = 'playing';
-    stopMidiLoop(idx);
+    if (shouldQuantizeActionsNow()) scheduleQuantizedTrackAction('midi', idx, 'clipStop', () => stopMidiLoop(idx), { unit: 'bar' });
+    else stopMidiLoop(idx);
     updateLooperButtonColor();
 
     if (midiLooperHoldTimer) clearTimeout(midiLooperHoldTimer);
@@ -9773,7 +9889,9 @@ function singlePressMidiLooperAction() {
   } else if (state === 'recording' || state === 'overdubbing') {
     stopMidiLoopRecording(idx);
   } else if (state === 'playing') {
-    if (midiLoopPlaying[idx]) {
+    if (clipMode) {
+      scheduleQuantizedTrackAction('midi', idx, 'clipStop', () => stopMidiLoop(idx), { unit: 'bar' });
+    } else if (midiLoopPlaying[idx]) {
       startMidiLoopOverdub(idx);
     } else {
       if (!shouldAllowMultiLooperPlayback('midi')) {
@@ -9956,6 +10074,7 @@ function beginMidiLoopRecording(idx, startTime = nowMs()) {
   midiLoopEvents[idx] = [];
   midiRecordingStart = startTime;
   midiLoopBpms[idx] = null;
+  midiClipMeta[idx] = null;
   ensureLoopers();
   const looper = loopers.midi[idx];
   if (looper) {
@@ -10050,6 +10169,11 @@ function finalizeMidiLoopRecording(idx, autoPlay = true) {
       looper.lengthBars = 0;
     }
     midiLoopDurations[idx] = loopDurationMs;
+    const midiBars = Math.max(1, Number((resolved && resolved.bars) || getCaptureBars('midi', idx)));
+    midiClipMeta[idx] = makeClipMeta('midi', idx, loopDurationMs / 1000, midiBars);
+    if (looperDebugEnabled) {
+      console.log('[YTBM Clip Capture][MIDI]', { index: idx, ...midiClipMeta[idx] });
+    }
     looperManager.commitTrackLength('midi', idx, (loopDurationMs / 1000) / transport.beatDuration());
     const managedMidiTrack = looperManager.getTrack('midi', idx);
     if (managedMidiTrack) managedMidiTrack.setState('PLAYING', `lenBeats=${managedMidiTrack.loopLengthBeats.toFixed(2)}`);
@@ -10079,20 +10203,24 @@ function finalizeMidiLoopRecording(idx, autoPlay = true) {
 
 function playMidiLoop(idx, offset = 0, startTime = null) {
   if (!midiLoopEvents[idx].length || midiLoopIntervals[idx] || midiLoopStartDelays[idx]) return;
-  const dur = midiLoopDurations[idx];
+  const scaleFactor = shouldUseClipLauncherMode() ? getMidiClipScaleFactor(idx) : 1;
+  const dur = midiLoopDurations[idx] * scaleFactor;
   if (!dur) return;
   const now = nowMs();
   let start = (startTime !== null) ? startTime : now;
-  if (startTime === null) {
+  if (startTime === null && shouldQuantizeActionsNow()) {
     start = transport.nextQuantizedTime((now / 1000) + PLAY_PADDING, 'bar') * 1000;
   }
-  if (startTime === null && hasActiveMidiSyncLoop(idx)) {
+  if (startTime === null && shouldQuantizeActionsNow() && hasActiveMidiSyncLoop(idx)) {
     const aligned = getNextMidiLoopAlignedStart(now, idx);
     if (aligned !== null) {
       start = aligned;
     }
   }
   const normOffset = ((offset % dur) + dur) % dur;
+  if (looperDebugEnabled && shouldUseClipLauncherMode()) {
+    console.log('[YTBM Clip MIDI Launch]', { idx, startTime, dur, scaleFactor, normOffset });
+  }
   const firstCycleStart = start - normOffset;
   const delay = Math.max(0, firstCycleStart - now);
   const looper = loopers.midi[idx];
@@ -10110,8 +10238,9 @@ function playMidiLoop(idx, offset = 0, startTime = null) {
       looper.startTime = cycleStart / 1000;
     }
     midiLoopEvents[idx].forEach(ev => {
-      if (first && ev.time < normOffset) return;
-      const target = cycleStart + ev.time - (first ? normOffset : 0);
+      const evTime = ev.time * scaleFactor;
+      if (first && evTime < normOffset) return;
+      const target = cycleStart + evTime - (first ? normOffset : 0);
       const wait = target - nowMs();
       if (wait >= -2) {
         const handle = setTimeout(() => {
@@ -10172,8 +10301,10 @@ function stopMidiLoop(idx) {
 }
 
 function resumeMidiLoop(idx) {
-  const dur = midiLoopDurations[idx];
-  if (!dur) return;
+  const durBase = midiLoopDurations[idx];
+  if (!durBase) return;
+  const scaleFactor = shouldUseClipLauncherMode() ? getMidiClipScaleFactor(idx) : 1;
+  const dur = durBase * scaleFactor;
   const now = nowMs();
   let offset = 0;
   if (midiLoopStartTimes[idx]) offset = (now - midiLoopStartTimes[idx]) % dur;
@@ -10206,6 +10337,7 @@ function sendMidiEvent(ev) {
 }
 
 function eraseMidiLoop(idx) {
+  cancelScheduledTrackActions('midi', idx);
   if (midiLoopEvents[idx].length) pushUndoState();
   stopMidiLoop(idx);
   if (midiOverdubStartTimeouts[idx]) { clearTimeout(midiOverdubStartTimeouts[idx]); midiOverdubStartTimeouts[idx] = null; }
@@ -10214,6 +10346,7 @@ function eraseMidiLoop(idx) {
   midiLoopStates[idx] = 'idle';
   midiStopTargets[idx] = 0;
   midiLoopBpms[idx] = null;
+  midiClipMeta[idx] = null;
   if (loopers.midi[idx]) {
     loopers.midi[idx].clear();
   }
@@ -10228,7 +10361,7 @@ function eraseMidiLoop(idx) {
 
 function eraseAllMidiLoops() {
   if (midiLoopEvents.some(arr => arr.length)) pushUndoState();
-  for (let i = 0; i < MAX_MIDI_LOOPS; i++) eraseMidiLoop(i);
+  for (let i = 0; i < MAX_MIDI_LOOPS; i++) { cancelScheduledTrackActions('midi', i); eraseMidiLoop(i); }
   midiStopTargets.fill(0);
   midiLoopBpms.fill(null);
   if (audioLoopBuffers.every(b => !b)) loopsBPM = null;
@@ -14302,11 +14435,20 @@ function runLooperDeterministicSimulation() {
   schedule('clip.launch.A', 4.01);
   schedule('clip.launch.B.stopA', 4.62);
 
+  const sessionBpm = 120;
+  const clipA = { origBpm: 120, bars: 1, duration: 2 };
+  const clipB = { origBpm: 90, bars: 1, duration: (60 * 4 * 1) / 90 };
+  const warpA = sessionBpm / clipA.origBpm;
+  const warpB = sessionBpm / clipB.origBpm;
+  const warpedDurA = clipA.duration / warpA;
+  const warpedDurB = clipB.duration / warpB;
+
   const checks = {
     sameBoundaryForArmedStarts: events.find(e => e.name === 'audio1.recordStart')?.t === events.find(e => e.name === 'audio2.recordStart')?.t,
     hasMasterLength: masterLoopLengthBeatsSim === 4,
     overdubBoundaryAligned: events.filter(e => e.name.includes('overdub')).every(e => Number.isFinite(e.t) && Math.abs(e.t / sim.bar - Math.round(e.t / sim.bar)) < 1e-6),
-    clipSwitchBoundaryAligned: events.filter(e => e.name.includes('clip.launch')).every(e => Number.isFinite(e.t) && Math.abs(e.t / sim.bar - Math.round(e.t / sim.bar)) < 1e-6)
+    clipSwitchBoundaryAligned: events.filter(e => e.name.includes('clip.launch')).every(e => Number.isFinite(e.t) && Math.abs(e.t / sim.bar - Math.round(e.t / sim.bar)) < 1e-6),
+    clipWarpAlignsToGrid: Math.abs(warpedDurA - sim.bar) < 1e-6 && Math.abs(warpedDurB - sim.bar) < 1e-6
   };
   const pass = Object.values(checks).every(Boolean);
   return { pass, checks, events };
