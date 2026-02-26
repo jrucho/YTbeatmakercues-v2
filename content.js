@@ -732,6 +732,9 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         streamActiveIndex: 0,
         streamBlendMap: Array.from({ length: 8 }, () => 'source-over'),
         streamFx: [],
+        streamCueMap: Array.from({ length: 8 }, () => []),
+        streamTriggerMode: Array.from({ length: 8 }, () => 'gate'),
+        streamGateMs: Array.from({ length: 8 }, () => 600),
         sharedFxRack: true,
         preserveAspectRatio: true,
         corners: [
@@ -958,6 +961,9 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjLastTextStep = 0,
       vjFeedbackCanvas = null,
       vjFeedbackCtx = null,
+      vjStreamPlayers = Array.from({ length: 8 }, () => null),
+      vjMappedCueInputs = [],
+      vjGateTimerByStream = Array.from({ length: 8 }, () => null),
       // We'll keep them to identify which button is which
       reverbButton = null,
       cassetteButton = null,
@@ -3138,6 +3144,18 @@ function cleanupResources() {
     audioContext = null;
   }
   stopMonitoring();
+  vjStreamPlayers.forEach((player, idx) => {
+    if (player) {
+      try { player.pause(); } catch {}
+      player.removeAttribute('src');
+      try { player.load(); } catch {}
+      vjStreamPlayers[idx] = null;
+    }
+  });
+  vjGateTimerByStream.forEach((t, idx) => {
+    if (t) clearTimeout(t);
+    vjGateTimerByStream[idx] = null;
+  });
   if (videoPreviewURL) {
     URL.revokeObjectURL(videoPreviewURL);
     videoPreviewURL = null;
@@ -7029,6 +7047,26 @@ function ensureVJDefaults() {
   vjControls.streamCount = Math.max(1, Math.min(8, Math.round(vjControls.streamCount || 1)));
   vjControls.streamActiveIndex = Math.max(0, Math.min(7, Math.round(vjControls.streamActiveIndex || 0)));
   while (vjControls.streamBlendMap.length < 8) vjControls.streamBlendMap.push('source-over');
+  if (!Array.isArray(vjControls.streamCueMap)) vjControls.streamCueMap = Array.from({ length: 8 }, () => []);
+  while (vjControls.streamCueMap.length < 8) vjControls.streamCueMap.push([]);
+  vjControls.streamCueMap = vjControls.streamCueMap.slice(0, 8).map((arr) => {
+    if (!Array.isArray(arr)) return [];
+    const uniq = [];
+    arr.forEach((k) => {
+      const key = String(k);
+      if (!uniq.includes(key)) uniq.push(key);
+    });
+    return uniq;
+  });
+  if (!Array.isArray(vjControls.streamTriggerMode)) vjControls.streamTriggerMode = Array.from({ length: 8 }, () => 'gate');
+  while (vjControls.streamTriggerMode.length < 8) vjControls.streamTriggerMode.push('gate');
+  vjControls.streamTriggerMode = vjControls.streamTriggerMode.slice(0, 8).map((m) => (m === 'legato' ? 'legato' : 'gate'));
+  if (!Array.isArray(vjControls.streamGateMs)) vjControls.streamGateMs = Array.from({ length: 8 }, () => 600);
+  while (vjControls.streamGateMs.length < 8) vjControls.streamGateMs.push(600);
+  vjControls.streamGateMs = vjControls.streamGateMs.slice(0, 8).map((ms) => {
+    const v = Number(ms);
+    return Number.isFinite(v) ? Math.max(80, Math.min(4000, Math.round(v))) : 600;
+  });
   while (vjControls.streamFx.length < 8) vjControls.streamFx.push(createVJDefaultFxProfile());
   vjControls.streamFx = vjControls.streamFx.slice(0, 8).map((fx) => {
     const base = createVJDefaultFxProfile();
@@ -7296,13 +7334,92 @@ function resetStreamPinCorner(streamIndex, cornerIndex) {
   vjControls.streamPins[streamIndex][cornerIndex] = { x: src.x, y: src.y };
 }
 
+
+function stopVJStreamPlayback(streamIndex) {
+  const idx = Math.max(0, Math.min(7, Number(streamIndex) || 0));
+  const player = vjStreamPlayers[idx];
+  if (!player) return;
+  try { player.pause(); } catch {}
+  if (vjGateTimerByStream[idx]) {
+    clearTimeout(vjGateTimerByStream[idx]);
+    vjGateTimerByStream[idx] = null;
+  }
+}
+
+function triggerVJStreamsForCue(cueKey) {
+  if (!vjModuleEnabled) return;
+  ensureVJDefaults();
+  const key = String(cueKey);
+  for (let i = 0; i < 8; i++) {
+    const mapped = vjControls.streamCueMap?.[i] || [];
+    if (!mapped.includes(key)) continue;
+    const player = vjStreamPlayers[i];
+    if (!player) continue;
+    const cueTime = getCueTime(key);
+    if (cueTime === undefined) continue;
+    try { player.currentTime = cueTime; } catch {}
+    player.play().catch(() => {});
+    const mode = vjControls.streamTriggerMode?.[i] === 'legato' ? 'legato' : 'gate';
+    if (vjGateTimerByStream[i]) {
+      clearTimeout(vjGateTimerByStream[i]);
+      vjGateTimerByStream[i] = null;
+    }
+    if (mode === 'gate') {
+      const gateMs = Number(vjControls.streamGateMs?.[i]) || 600;
+      vjGateTimerByStream[i] = setTimeout(() => {
+        stopVJStreamPlayback(i);
+      }, Math.max(80, gateMs));
+    }
+  }
+}
+
+function ensureVJStreamPlayers(video) {
+  if (!video) return;
+  ensureVJDefaults();
+  const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+  const src = video.currentSrc || video.src;
+  for (let i = 0; i < count; i++) {
+    let player = vjStreamPlayers[i];
+    if (!player) {
+      player = document.createElement('video');
+      player.playsInline = true;
+      player.muted = true;
+      player.preload = 'auto';
+      vjStreamPlayers[i] = player;
+    }
+    const needsSrc = src && player.src !== src;
+    if (needsSrc) {
+      player.src = src;
+      try { player.load(); } catch {}
+    }
+    if ((player.readyState < 2 || !Number.isFinite(player.duration)) && Number.isFinite(video.currentTime)) {
+      try { player.currentTime = video.currentTime; } catch {}
+    }
+  }
+  for (let i = count; i < 8; i++) {
+    stopVJStreamPlayback(i);
+  }
+}
+
 function drawStreamMosaic(ctx, video, width, height, tMs) {
+  ensureVJStreamPlayers(video);
   const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
   for (let i = 0; i < count; i++) {
     const blend = vjControls.streamBlendMap?.[i] || 'source-over';
     const quad = (vjControls.streamPins && vjControls.streamPins[i]) ? vjControls.streamPins[i] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
     const fxIndex = vjControls.sharedFxRack ? 0 : i;
-    applyVJEffectsToSource(video, width, height, tMs, fxIndex);
+    const mappedCues = vjControls.streamCueMap?.[i] || [];
+    const hasCueMapping = mappedCues.length > 0;
+    const player = vjStreamPlayers[i];
+    const playerReady = !!(player && player.readyState >= 2 && (player.currentSrc || player.src));
+    const playerActive = !!(playerReady && !player.paused && !player.ended);
+
+    // If a stream has cue mappings, only render it while its mapped player is actively playing.
+    // This keeps non-triggered mapped streams hidden instead of showing fallback video.
+    if (hasCueMapping && !playerActive) continue;
+
+    const streamVideo = hasCueMapping ? player : video;
+    applyVJEffectsToSource(streamVideo, width, height, tMs, fxIndex);
     ctx.save();
     ctx.globalCompositeOperation = blend;
     drawMappedQuad(ctx, vjSourceCanvas, quad, width, height, 8);
@@ -7648,6 +7765,9 @@ function showVJWindowToggle() {
     vjControls.streamPins = Array.from({ length: 8 }, () => ([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]));
     vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
     vjControls.streamFx = Array.from({ length: 8 }, () => createVJDefaultFxProfile());
+    vjControls.streamCueMap = Array.from({ length: 8 }, () => []);
+    vjControls.streamTriggerMode = Array.from({ length: 8 }, () => 'gate');
+    vjControls.streamGateMs = Array.from({ length: 8 }, () => 600);
     persistVJControls();
     syncVJControlsToUI();
   });
@@ -7829,6 +7949,105 @@ function showVJWindowToggle() {
     persistVJControls();
   });
 
+  const streamTriggerRow = document.createElement('div');
+  streamTriggerRow.style.display = 'grid';
+  streamTriggerRow.style.gridTemplateColumns = '1fr 1fr 1fr';
+  streamTriggerRow.style.gap = '6px';
+
+  const streamModeSel = document.createElement('select');
+  streamModeSel.className = 'looper-btn';
+  streamModeSel.add(new Option('Trigger: Gate', 'gate'));
+  streamModeSel.add(new Option('Trigger: Legato', 'legato'));
+
+  const streamGateInp = document.createElement('input');
+  streamGateInp.type = 'number';
+  streamGateInp.min = '80';
+  streamGateInp.max = '4000';
+  streamGateInp.step = '10';
+  streamGateInp.className = 'looper-btn';
+  streamGateInp.title = 'Gate length in milliseconds';
+
+  const streamClearMapBtn = document.createElement('button');
+  streamClearMapBtn.className = 'looper-btn';
+  streamClearMapBtn.textContent = 'Clear Cue Map';
+
+  const cueMapWrap = document.createElement('div');
+  cueMapWrap.style.display = 'grid';
+  cueMapWrap.style.gridTemplateColumns = 'repeat(8, minmax(0, 1fr))';
+  cueMapWrap.style.gap = '6px';
+
+  const cueMapHint = document.createElement('div');
+  cueMapHint.style.fontSize = '11px';
+  cueMapHint.style.opacity = '0.9';
+  cueMapHint.textContent = 'Cue→Stream map: multiple cues per stream and one cue can trigger several streams.';
+
+  const cueChoices = ['1','2','3','4','5','6','7','8','9','0','11','12','13','14','15','16'];
+  vjMappedCueInputs = cueChoices.map((key) => {
+    const lbl = document.createElement('label');
+    lbl.style.display = 'inline-flex';
+    lbl.style.alignItems = 'center';
+    lbl.style.gap = '4px';
+    lbl.style.padding = '2px 4px';
+    lbl.style.border = '1px solid rgba(255,255,255,0.18)';
+    lbl.style.borderRadius = '4px';
+    const inp = document.createElement('input');
+    inp.type = 'checkbox';
+    inp.dataset.cue = key;
+    const txt = document.createElement('span');
+    txt.textContent = key;
+    lbl.appendChild(inp);
+    lbl.appendChild(txt);
+    cueMapWrap.appendChild(lbl);
+    inp.addEventListener('change', () => {
+      const idx = getActiveStreamIndex();
+      const set = new Set(vjControls.streamCueMap[idx] || []);
+      if (inp.checked) set.add(key); else set.delete(key);
+      vjControls.streamCueMap[idx] = Array.from(set);
+      persistVJControls();
+    });
+    return inp;
+  });
+
+  const syncStreamTriggerUI = () => {
+    const idx = getActiveStreamIndex();
+    streamModeSel.value = vjControls.streamTriggerMode[idx] || 'gate';
+    streamGateInp.value = String(Number(vjControls.streamGateMs[idx]) || 600);
+    streamGateInp.disabled = streamModeSel.value !== 'gate';
+    const mapped = new Set(vjControls.streamCueMap[idx] || []);
+    vjMappedCueInputs.forEach((inp) => {
+      inp.checked = mapped.has(inp.dataset.cue || '');
+    });
+  };
+
+  streamModeSel.addEventListener('change', () => {
+    const idx = getActiveStreamIndex();
+    vjControls.streamTriggerMode[idx] = streamModeSel.value === 'legato' ? 'legato' : 'gate';
+    streamGateInp.disabled = vjControls.streamTriggerMode[idx] !== 'gate';
+    persistVJControls();
+  });
+
+  streamGateInp.addEventListener('change', () => {
+    const idx = getActiveStreamIndex();
+    const ms = Math.max(80, Math.min(4000, Number(streamGateInp.value) || 600));
+    vjControls.streamGateMs[idx] = ms;
+    streamGateInp.value = String(ms);
+    persistVJControls();
+  });
+
+  streamClearMapBtn.addEventListener('click', () => {
+    const idx = getActiveStreamIndex();
+    vjControls.streamCueMap[idx] = [];
+    syncStreamTriggerUI();
+    persistVJControls();
+  });
+
+  streamTriggerRow.appendChild(streamModeSel);
+  streamTriggerRow.appendChild(streamGateInp);
+  streamTriggerRow.appendChild(streamClearMapBtn);
+  vjContentWrap.appendChild(streamTriggerRow);
+  vjContentWrap.appendChild(cueMapHint);
+  vjContentWrap.appendChild(cueMapWrap);
+
   const reactiveModes = [
     { v: 'off', t: 'Off' },
     { v: 'low', t: 'Low' },
@@ -7931,6 +8150,7 @@ function showVJWindowToggle() {
     refreshActiveStreamSel();
     activeStreamSel.value = String(Math.max(0, Math.min((vjControls.streamCount || 1) - 1, vjControls.streamActiveIndex || 0)));
     syncActiveBlend();
+    syncStreamTriggerUI();
     syncTextBtn();
     textInp.value = vjControls.textPhrase || '';
     mirrorChk.checked = !!getActiveStreamFx().mirror;
@@ -8001,6 +8221,7 @@ function showVJWindowToggle() {
   window.addEventListener('mousemove', moveCorner);
   window.addEventListener('mouseup', () => { dragCorner = -1; dragStream = -1; });
 
+  syncVJControlsToUI();
   if (vjModuleEnabled) startVJRenderer();
 }
 
@@ -8982,7 +9203,8 @@ function sequencerTriggerCue(cueKey) {
   }, fadeTime * 1000);
 
   recordMidiEvent('cue', cueKey);
-  
+  triggerVJStreamsForCue(cueKey);
+
   console.log(`Sequencer triggered cue ${cueKey} at time ${getCueTime(cueKey)}`);
 }
 
@@ -9212,6 +9434,7 @@ function onKeyDown(e) {
         videoGain.gain.setValueAtTime(0, t);
         videoGain.gain.linearRampToValueAtTime(1, t + fadeTime);
       }, fadeTime * 1000);
+      triggerVJStreamsForCue(e.key);
     }
   }
   
