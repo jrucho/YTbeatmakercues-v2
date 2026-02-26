@@ -723,6 +723,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         streamActiveIndex: 0,
         streamBlendMap: Array.from({ length: 8 }, () => 'source-over'),
         streamFx: [],
+        sharedFxRack: true,
         preserveAspectRatio: true,
         corners: [
           { x: 0.0, y: 0.0 },
@@ -7197,6 +7198,7 @@ function ensureVJDefaults() {
   if (!Array.isArray(vjControls.streamPins)) vjControls.streamPins = [];
   if (!Array.isArray(vjControls.streamBlendMap)) vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
   if (!Array.isArray(vjControls.streamFx)) vjControls.streamFx = [];
+  if (typeof vjControls.sharedFxRack !== 'boolean') vjControls.sharedFxRack = true;
   if (typeof vjControls.preserveAspectRatio !== 'boolean') vjControls.preserveAspectRatio = true;
   if (!Number.isFinite(vjControls.streamCount)) vjControls.streamCount = 1;
   if (!Number.isFinite(vjControls.streamActiveIndex)) vjControls.streamActiveIndex = 0;
@@ -7480,7 +7482,8 @@ function drawStreamMosaic(ctx, video, width, height, tMs) {
   for (let i = 0; i < count; i++) {
     const blend = vjControls.streamBlendMap?.[i] || 'source-over';
     const quad = (vjControls.streamPins && vjControls.streamPins[i]) ? vjControls.streamPins[i] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
-    applyVJEffectsToSource(video, width, height, tMs, i);
+    const fxIndex = vjControls.sharedFxRack ? 0 : i;
+    applyVJEffectsToSource(video, width, height, tMs, fxIndex);
     ctx.save();
     ctx.globalCompositeOperation = blend;
     drawMappedQuad(ctx, vjSourceCanvas, quad, width, height, 8);
@@ -7825,6 +7828,21 @@ function showVJWindowToggle() {
   });
   topRow.appendChild(resetFxBtn);
 
+  const fxRackBtn = document.createElement('button');
+  fxRackBtn.className = 'looper-btn';
+  fxRackBtn.style.flex = '1 1 auto';
+  const syncFxRackBtn = () => {
+    fxRackBtn.textContent = vjControls.sharedFxRack ? 'FX Rack: Global' : 'FX Rack: Per Stream';
+  };
+  syncFxRackBtn();
+  fxRackBtn.addEventListener('click', () => {
+    vjControls.sharedFxRack = !vjControls.sharedFxRack;
+    syncFxRackBtn();
+    syncVJControlsToUI();
+    persistVJControls();
+  });
+  topRow.appendChild(fxRackBtn);
+
   const ratioBtn = document.createElement('button');
   ratioBtn.className = 'looper-btn';
   ratioBtn.style.flex = '1 1 auto';
@@ -7903,7 +7921,7 @@ function showVJWindowToggle() {
   const pinHud = document.createElement('div');
   pinHud.style.fontSize = '11px';
   pinHud.style.opacity = '0.9';
-  pinHud.textContent = 'Pins are always visible on preview. Drag pins directly on screen for each stream.';
+  pinHud.textContent = 'Pins are always visible on preview. Drag pins directly on screen for each stream. FX Rack can be Global (all streams) or Per Stream.';
   vjContentWrap.appendChild(pinHud);
 
   const streamRow = document.createElement('div');
@@ -7938,7 +7956,8 @@ function showVJWindowToggle() {
   refreshActiveStreamSel();
 
   const getActiveStreamIndex = () => Math.max(0, Math.min(7, Number(vjControls.streamActiveIndex) || 0));
-  const getActiveStreamFx = () => getVJStreamFxProfile(getActiveStreamIndex());
+  const getFxEditStreamIndex = () => (vjControls.sharedFxRack ? 0 : getActiveStreamIndex());
+  const getActiveStreamFx = () => getVJStreamFxProfile(getFxEditStreamIndex());
 
   const activeBlendSel = document.createElement('select');
   activeBlendSel.className = 'looper-btn';
@@ -8090,6 +8109,7 @@ function showVJWindowToggle() {
     syncTextBtn();
     textInp.value = vjControls.textPhrase || '';
     mirrorChk.checked = !!getActiveStreamFx().mirror;
+    syncFxRackBtn();
     syncRatioBtn();
     effectBindings.forEach(({ def, inp, val, reactSel, midiInp, blendSel }) => {
       const activeFx = getActiveStreamFx();
