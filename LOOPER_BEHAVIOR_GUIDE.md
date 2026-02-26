@@ -96,3 +96,54 @@ Bars source:
 - Audio/MIDI bank switch changes **which bank your controls target**.
 - It does not replace the underlying transport/scheduler implementation.
 
+
+---
+
+## 8) New usability indicators
+
+- **FREE/SYNC badge** is shown near the loop mode controls so you can instantly see current timing behavior.
+- **Next boundary line** shows estimated time until next quantized bar in SYNC mode.
+- In FREE mode it displays `-- (FREE mode)`.
+- When double-press STOP is quantized in SYNC, a small toast appears:
+  - **"Stop armed for next bar"**
+
+---
+
+## 9) Double-press target mode
+
+A control named **Double Press: Active / All** defines what double-press STOP affects in the current bank:
+
+- **Active**: only the selected slot (A/B/C/D).
+- **All**: all currently playing loops/clips in current bank.
+
+Behavior by timing mode:
+- **FREE**: stop executes immediately.
+- **SYNC**: stop is armed to next bar boundary.
+
+---
+
+## 10) Recommended workflows (shortcuts included)
+
+## Fast Loopstation jam (Audio)
+1. Set **Mode: Loopstation**.
+2. Choose **FREE** for instant behavior or **SYNC** for bar-tight behavior.
+3. Use `R/S/D/F` to select slot A/B/C/D and perform single-press state machine.
+4. Use **double press** to STOP (active or all depending on your setting).
+5. Use **long press** to ERASE selected slot.
+
+## Tight Clip Launcher performance
+1. Set **Mode: Clip Launcher**.
+2. Use **SYNC** for musical scene changes.
+3. Launch clips with single press.
+4. Use **double press** to stop active/all clips at next boundary.
+5. Use `Cmd/Ctrl + R/S/D/F` for immediate panic erase per slot.
+
+## MIDI bank performance
+1. Toggle to **MIDI Loopers** bank.
+2. Keep same FREE/SYNC and Loopstation/Clip semantics.
+3. Prefer SYNC for quantized clip switching and stable timing visuals.
+
+## Safety / panic usage
+- `Cmd/Ctrl + R/S/D/F`: erase slot A/B/C/D immediately in current bank.
+- Use **Double Press: All** when performing live and needing global stop quickly.
+

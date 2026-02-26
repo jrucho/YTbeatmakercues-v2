@@ -747,6 +747,9 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       loopProgressFillsMin = new Array(MAX_AUDIO_LOOPS).fill(null),
       looperPulseEl = null,
       looperPulseElMin = null,
+      looperSyncBadgeEl = null,
+      looperDebugBoundaryEl = null,
+      looperDoublePressModeBtn = null,
       loopProgressRAF = null,
       // Overdub timers
       overdubStartTimeout = null,
@@ -836,6 +839,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       audioMultiLaunch = false,
       syncedFourLooperMode = localStorage.getItem('ytbm_syncedFourLooperMode') === '1',
       looperPerformanceMode = localStorage.getItem('ytbm_looperPerformanceMode') || 'loopstation',
+      looperDoublePressTargetMode = localStorage.getItem('ytbm_looperDoublePressTargetMode') === 'active' ? 'active' : 'all',
       looperDebugEnabled = localStorage.getItem('ytbm_looperDebug') === '1',
       masterLoopLengthBeats = null,
       // 4-Bus Audio nodes
@@ -3276,6 +3280,7 @@ function finalizeLoopBuffer(buf) {
   scheduledStopTime = null;
   updateLooperButtonColor();
   updateExportButtonColor();
+  updateLooperModeIndicators();
   if (window.refreshMinimalState) window.refreshMinimalState();
 }
 
@@ -3554,6 +3559,71 @@ function redoAction() {
 /**************************************
  * Update Button Colors
  **************************************/
+function showLooperToast(message = 'Stop armed for next bar') {
+  try {
+    const existing = document.getElementById('ytbmLooperToast');
+    if (existing) existing.remove();
+    const t = document.createElement('div');
+    t.id = 'ytbmLooperToast';
+    t.textContent = message;
+    t.style.position = 'fixed';
+    t.style.left = '50%';
+    t.style.bottom = '92px';
+    t.style.transform = 'translateX(-50%)';
+    t.style.padding = '6px 10px';
+    t.style.borderRadius = '8px';
+    t.style.background = 'rgba(0,0,0,0.78)';
+    t.style.border = '1px solid rgba(255,255,255,0.25)';
+    t.style.color = '#fff';
+    t.style.fontSize = '12px';
+    t.style.zIndex = '2147483647';
+    t.style.pointerEvents = 'none';
+    t.style.opacity = '1';
+    t.style.transition = 'opacity 0.25s ease';
+    document.body.appendChild(t);
+    setTimeout(() => {
+      t.style.opacity = '0';
+      setTimeout(() => t.remove(), 280);
+    }, 900);
+  } catch {}
+}
+
+function getDoublePressTargetIndexes(type = 'audio') {
+  const max = type === 'audio' ? MAX_AUDIO_LOOPS : MAX_MIDI_LOOPS;
+  const active = type === 'audio' ? activeLoopIndex : activeMidiLoopIndex;
+  if (looperDoublePressTargetMode === 'active') return [Math.max(0, Math.min(max - 1, active))];
+  const out = [];
+  for (let i = 0; i < max; i++) {
+    if (type === 'audio') {
+      if (loopPlaying[i] || loopSources[i]) out.push(i);
+    } else if (midiLoopStates[i] === 'playing' || midiLoopStates[i] === 'overdubbing' || midiLoopPlaying[i]) {
+      out.push(i);
+    }
+  }
+  return out;
+}
+
+function updateLooperModeIndicators() {
+  if (looperSyncBadgeEl) {
+    looperSyncBadgeEl.textContent = shouldQuantizeActionsNow() ? 'SYNC' : 'FREE';
+    looperSyncBadgeEl.style.background = shouldQuantizeActionsNow() ? 'rgba(76,175,80,0.28)' : 'rgba(255,255,255,0.12)';
+    looperSyncBadgeEl.style.borderColor = shouldQuantizeActionsNow() ? 'rgba(76,175,80,0.45)' : 'rgba(255,255,255,0.25)';
+  }
+  if (looperDoublePressModeBtn) {
+    looperDoublePressModeBtn.textContent = looperDoublePressTargetMode === 'active' ? 'Double Press: Active' : 'Double Press: All';
+  }
+  if (looperDebugBoundaryEl) {
+    if (!shouldQuantizeActionsNow() || !audioContext) {
+      looperDebugBoundaryEl.textContent = 'Next boundary: -- (FREE mode)';
+    } else {
+      const now = audioContext.currentTime + PLAY_PADDING;
+      const next = transport.nextQuantizedTime(now, 'bar');
+      const delta = Math.max(0, next - audioContext.currentTime).toFixed(2);
+      looperDebugBoundaryEl.textContent = `Next boundary: t+${delta}s`;
+    }
+  }
+}
+
 function updateLooperButtonColor() {
   if (!unifiedLooperButton) return;
   if (useMidiLoopers) {
@@ -3686,6 +3756,7 @@ function loopProgressStep() {
     const showPulse = shouldQuantizeActionsNow() && !shouldUseClipLauncherMode() && (midiLoopStates.some(s => s === 'recording' || s === 'overdubbing') || midiLoopPlaying.some(Boolean));
     if (looperPulseEl) looperPulseEl.style.opacity = showPulse ? pulse : 0;
     if (looperPulseElMin) looperPulseElMin.style.opacity = showPulse ? pulse : 0;
+    updateLooperModeIndicators();
     return;
   }
   if (!audioContext || !baseLoopDuration) return;
@@ -3725,6 +3796,7 @@ function loopProgressStep() {
   const showPulse = shouldQuantizeActionsNow() && !shouldUseClipLauncherMode() && (looperState === "recording" || looperState === "overdubbing" || loopPlaying.some(Boolean));
   if (looperPulseEl) looperPulseEl.style.opacity = showPulse ? pulse : 0;
   if (looperPulseElMin) looperPulseElMin.style.opacity = showPulse ? pulse : 0;
+  updateLooperModeIndicators();
 }
 
 function blinkButton(element, updateFn, color = "magenta", duration = 150) {
@@ -9709,10 +9781,10 @@ function quantizedStopOtherMidiLoops(targetIndex) {
 
 function stopAllAudioLoopsTriggeredByDoublePress() {
   // Double-press is a hard stop action: immediate in FREE, boundary-aligned in SYNC.
-  const active = [];
-  for (let i = 0; i < MAX_AUDIO_LOOPS; i++) if (loopPlaying[i] || loopSources[i]) active.push(i);
+  const active = getDoublePressTargetIndexes('audio');
   if (!active.length) return;
   if (shouldQuantizeActionsNow()) {
+    showLooperToast('Stop armed for next bar');
     active.forEach((i) => scheduleQuantizedTrackAction('audio', i, 'clipStop', () => stopLoopImmediately(i), { unit: 'bar' }));
   } else {
     active.forEach((i) => stopLoopImmediately(i));
@@ -9720,12 +9792,10 @@ function stopAllAudioLoopsTriggeredByDoublePress() {
 }
 
 function stopAllMidiLoopsTriggeredByDoublePress() {
-  const active = [];
-  for (let i = 0; i < MAX_MIDI_LOOPS; i++) {
-    if (midiLoopStates[i] === 'playing' || midiLoopStates[i] === 'overdubbing' || midiLoopPlaying[i]) active.push(i);
-  }
+  const active = getDoublePressTargetIndexes('midi');
   if (!active.length) return;
   if (shouldQuantizeActionsNow()) {
+    showLooperToast('Stop armed for next bar');
     active.forEach((i) => scheduleQuantizedTrackAction('midi', i, 'clipStop', () => stopMidiLoop(i), { unit: 'bar' }));
   } else {
     active.forEach((i) => stopMidiLoop(i));
@@ -10793,6 +10863,14 @@ function addControls() {
   looperModeRow.style.gap = '6px';
   looperModeRow.style.marginBottom = '8px';
 
+  looperSyncBadgeEl = document.createElement('div');
+  looperSyncBadgeEl.className = 'looper-btn';
+  looperSyncBadgeEl.style.flex = '0 0 auto';
+  looperSyncBadgeEl.style.padding = '4px 8px';
+  looperSyncBadgeEl.style.fontSize = '11px';
+  looperSyncBadgeEl.style.pointerEvents = 'none';
+  looperModeRow.appendChild(looperSyncBadgeEl);
+
   const syncedLoopersBtn = document.createElement('button');
   syncedLoopersBtn.className = 'looper-btn';
   syncedLoopersBtn.style.flex = '1 1 50%';
@@ -10806,8 +10884,20 @@ function addControls() {
     syncedFourLooperMode = !syncedFourLooperMode;
     localStorage.setItem('ytbm_syncedFourLooperMode', syncedFourLooperMode ? '1' : '0');
     syncSyncedLoopersBtn();
+    updateLooperModeIndicators();
   });
   looperModeRow.appendChild(syncedLoopersBtn);
+
+  looperDoublePressModeBtn = document.createElement('button');
+  looperDoublePressModeBtn.className = 'looper-btn';
+  looperDoublePressModeBtn.style.flex = '1 1 50%';
+  looperDoublePressModeBtn.title = 'Choose whether double press stops only active slot or all active loops in current bank.';
+  looperDoublePressModeBtn.addEventListener('click', () => {
+    looperDoublePressTargetMode = looperDoublePressTargetMode === 'active' ? 'all' : 'active';
+    localStorage.setItem('ytbm_looperDoublePressTargetMode', looperDoublePressTargetMode);
+    updateLooperModeIndicators();
+  });
+  looperModeRow.appendChild(looperDoublePressModeBtn);
 
   const perfModeBtn = document.createElement('button');
   perfModeBtn.className = 'looper-btn';
@@ -10824,10 +10914,19 @@ function addControls() {
     localStorage.setItem('ytbm_looperPerformanceMode', looperPerformanceMode);
     looperManager.setMode(looperPerformanceMode);
     syncPerfModeBtn();
+    updateLooperModeIndicators();
   });
   looperModeRow.appendChild(perfModeBtn);
 
   cw.appendChild(looperModeRow);
+
+  looperDebugBoundaryEl = document.createElement('div');
+  looperDebugBoundaryEl.className = 'ytbm-panel-label';
+  looperDebugBoundaryEl.style.fontSize = '11px';
+  looperDebugBoundaryEl.style.opacity = '0.85';
+  looperDebugBoundaryEl.style.marginBottom = '8px';
+  cw.appendChild(looperDebugBoundaryEl);
+  updateLooperModeIndicators();
 
   const midiInputRow = document.createElement('div');
   midiInputRow.style.display = 'flex';
