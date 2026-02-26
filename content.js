@@ -7185,8 +7185,8 @@ function ensureVJCanvases() {
   if (!vjPreviewCanvas) return false;
   const vid = getVideoElement();
   if (!vid) return false;
-  // Keep a stable widescreen VJ stage while preserving input aspect inside it.
-  const stageRatio = 19 / 9;
+  // Keep a stable 16:9 VJ stage while preserving input aspect inside it.
+  const stageRatio = 16 / 9;
   const srcW = Math.max(320, vid.videoWidth || 1280);
   const srcH = Math.max(180, vid.videoHeight || 720);
   const w = Math.max(1140, srcW);
@@ -7207,7 +7207,7 @@ function ensureVJCanvases() {
     vjPreviewCanvas.width = w;
     vjPreviewCanvas.height = h;
   }
-  if (vjPreviewCanvas.style.aspectRatio !== '19 / 9') vjPreviewCanvas.style.aspectRatio = '19 / 9';
+  if (vjPreviewCanvas.style.aspectRatio !== '16 / 9') vjPreviewCanvas.style.aspectRatio = '16 / 9';
   if (vjOutputCanvas.width !== w || vjOutputCanvas.height !== h) {
     vjOutputCanvas.width = w;
     vjOutputCanvas.height = h;
@@ -7795,7 +7795,7 @@ function showVJWindowToggle() {
 
   vjPreviewCanvas = document.createElement('canvas');
   vjPreviewCanvas.style.width = '100%';
-  vjPreviewCanvas.style.aspectRatio = '19 / 9';
+  vjPreviewCanvas.style.aspectRatio = '16 / 9';
   vjPreviewCanvas.style.background = '#000';
   vjPreviewCanvas.style.border = '1px solid rgba(255,255,255,0.2)';
   vjPreviewCanvas.style.borderRadius = '6px';
