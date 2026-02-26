@@ -9371,6 +9371,17 @@ function onLooperButtonMouseDown(e) {
 
   looperButtonIsDown = true;
   const now = Date.now();
+
+  // While recording/overdubbing, prioritize transport action (stop record or stop overdub)
+  // over double-press stop/erase detection so second press behaves like a loopstation.
+  if (looperState === 'recording' || looperState === 'overdubbing') {
+    isDoublePress = false;
+    doublePressHoldStartTime = null;
+    singlePressAudioLooperAction();
+    lastClickTime = now;
+    return;
+  }
+
   pressTimes.push(now);
   const cutoff = now - clickDelay;
   while (pressTimes.length && pressTimes[0] < cutoff) {
@@ -9484,6 +9495,17 @@ function singlePressAudioLooperAction() {
 function onMidiLooperButtonMouseDown() {
   midiLooperButtonIsDown = true;
   const now = Date.now();
+
+  // While recording/overdubbing, prioritize stop-take action over double-press logic.
+  const current = midiLoopStates[activeMidiLoopIndex];
+  if (current === 'recording' || current === 'overdubbing') {
+    midiIsDoublePress = false;
+    midiDoublePressHoldStartTime = null;
+    singlePressMidiLooperAction();
+    midiLastClickTime = now;
+    return;
+  }
+
   midiPressTimes.push(now);
   const cutoff = now - clickDelay;
   while (midiPressTimes.length && midiPressTimes[0] < cutoff) midiPressTimes.shift();
