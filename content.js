@@ -6334,7 +6334,7 @@ function startRecording() {
           }
         }, Math.max(0, secs * 1000));
       }
-    }, { unit: 'bar' });
+    });
   });
 }
 
@@ -6352,7 +6352,7 @@ function scheduleStopRecording() {
     scheduleQuantizedTrackAction('audio', activeLoopIndex, 'recordStop', () => {
       scheduledStopTime = audioContext.currentTime;
       if (looperState === 'recording') stopRecordingAndPlay();
-    }, { unit: 'bar' });
+    });
   });
 }
 
@@ -8998,10 +8998,6 @@ function randomizeAllSamples() {
   randomSample("snare");
 }
 
-document.addEventListener("keydown", e => {
-  console.log("Key:", e.key, "Code:", e.code, "KeyCode:", e.keyCode);
-});
-
 function sequencerTriggerCue(cueKey) {
   const video = getVideoElement();
   if (!video || getCueTime(cueKey) === undefined) return;
@@ -9082,6 +9078,8 @@ function onKeyDown(e) {
   // Cmd/Ctrl+Y toggles the VJ module window.
   if ((e.metaKey || e.ctrlKey) && !e.altKey && k === 'y') {
     e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
     showVJWindowToggle();
     return;
   }
@@ -9488,6 +9486,24 @@ function shouldUseClipLauncherMode() {
 }
 
 function scheduleQuantizedTrackAction(type, index, actionName, fn, opts = {}) {
+  const clipMode = shouldUseClipLauncherMode();
+  const quantizedActions = new Set(['play', 'resume', 'clipStop']);
+  const shouldQuantize = opts.forceQuantized === true
+    || opts.quantize === true
+    || (clipMode && quantizedActions.has(actionName));
+
+  if (!shouldQuantize) {
+    const now = audioContext ? audioContext.currentTime : performance.now() / 1000;
+    const track = looperManager.getTrack(type, index);
+    if (track) track.armedAction = actionName;
+    try {
+      fn(now, track);
+    } finally {
+      if (track) track.armedAction = null;
+    }
+    return null;
+  }
+
   return looperManager.scheduleTrackAction(type, index, actionName, fn, opts);
 }
 
@@ -9959,7 +9975,7 @@ function startMidiLoopRecording(idx) {
         if (midiLoopStates[idx] === 'recording') stopMidiLoopRecording(idx);
       }, Math.max(0, secs * 1000));
     }
-  }, { unit: 'bar' });
+  });
 }
 
 function beginMidiLoopOverdub(idx, startTime = nowMs()) {
@@ -9979,7 +9995,7 @@ function startMidiLoopOverdub(idx) {
     beginMidiLoopOverdub(idx, atTime * 1000);
     const tr = looperManager.getTrack('midi', idx);
     if (tr) tr.setState('OVERDUBBING');
-  }, { unit: 'bar' });
+  });
 }
 
 function stopMidiLoopRecording(idx) {
@@ -9990,7 +10006,7 @@ function stopMidiLoopRecording(idx) {
     midiStopTargets[idx] = atTime * 1000;
     finalizeMidiLoopRecording(idx);
     updateLooperButtonColor();
-  }, { unit: 'bar' });
+  });
 }
 
 function finalizeMidiLoopRecording(idx, autoPlay = true) {
