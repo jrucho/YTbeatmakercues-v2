@@ -713,7 +713,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         midiNotes: {},
         effectBlend: {},
         streamCount: 1,
-        streamCueMap: Array.from({ length: 8 }, () => 'off'),
+        streamPins: [],
+        streamActiveIndex: 0,
         streamBlendMap: Array.from({ length: 8 }, () => 'source-over'),
         corners: [
           { x: 0.0, y: 0.0 },
@@ -7126,9 +7127,10 @@ function ensureVJDefaults() {
   if (!vjControls.reactive || typeof vjControls.reactive !== 'object') vjControls.reactive = {};
   if (!vjControls.midiNotes || typeof vjControls.midiNotes !== 'object') vjControls.midiNotes = {};
   if (!vjControls.effectBlend || typeof vjControls.effectBlend !== 'object') vjControls.effectBlend = {};
-  if (!Array.isArray(vjControls.streamCueMap)) vjControls.streamCueMap = Array.from({ length: 8 }, () => 'off');
+  if (!Array.isArray(vjControls.streamPins)) vjControls.streamPins = [];
   if (!Array.isArray(vjControls.streamBlendMap)) vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
   if (!Number.isFinite(vjControls.streamCount)) vjControls.streamCount = 1;
+  if (!Number.isFinite(vjControls.streamActiveIndex)) vjControls.streamActiveIndex = 0;
   defs.forEach((d, i) => {
     if (typeof vjControls[d.key] !== 'number') vjControls[d.key] = d.def;
     if (!vjControls.reactive[d.key]) vjControls.reactive[d.key] = 'off';
@@ -7137,8 +7139,11 @@ function ensureVJDefaults() {
   });
   if (typeof vjControls.midiNotes.textSeqOn !== 'number') vjControls.midiNotes.textSeqOn = 118;
   vjControls.streamCount = Math.max(1, Math.min(8, Math.round(vjControls.streamCount || 1)));
-  while (vjControls.streamCueMap.length < 8) vjControls.streamCueMap.push('off');
+  vjControls.streamActiveIndex = Math.max(0, Math.min(7, Math.round(vjControls.streamActiveIndex || 0)));
   while (vjControls.streamBlendMap.length < 8) vjControls.streamBlendMap.push('source-over');
+  const makeDefaultQuad = () => ([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]);
+  while (vjControls.streamPins.length < 8) vjControls.streamPins.push(makeDefaultQuad());
+  vjControls.streamPins = vjControls.streamPins.slice(0, 8).map((q) => Array.isArray(q) && q.length === 4 ? q.map(pt => ({ x: Math.min(1, Math.max(0, Number(pt.x) || 0)), y: Math.min(1, Math.max(0, Number(pt.y) || 0)) })) : makeDefaultQuad());
   if (!Array.isArray(vjControls.corners) || vjControls.corners.length !== 4) {
     vjControls.corners = [{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];
   }
@@ -7303,33 +7308,42 @@ function withEffectBlend(ctx, effectKey, amount, drawFn) {
   ctx.restore();
 }
 
-function drawStreamMosaic(ctx, sourceCanvas, width, height) {
-  const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
-  if (count === 1) {
-    ctx.drawImage(sourceCanvas, 0, 0, width, height);
-    return;
-  }
+
+function computeDefaultStreamPins(count) {
+  const pins = [];
   const cols = Math.ceil(Math.sqrt(count));
   const rows = Math.ceil(count / cols);
-  const cellW = width / cols;
-  const cellH = height / rows;
-  for (let i = 0; i < count; i++) {
+  const cellW = 1 / cols;
+  const cellH = 1 / rows;
+  for (let i = 0; i < 8; i++) {
     const col = i % cols;
     const row = Math.floor(i / cols);
-    const x = col * cellW;
-    const y = row * cellH;
+    const x0 = col * cellW;
+    const y0 = row * cellH;
+    const x1 = x0 + cellW;
+    const y1 = y0 + cellH;
+    pins.push([{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }]);
+  }
+  return pins;
+}
+
+function resetAllStreamPinsLayout() {
+  vjControls.streamPins = computeDefaultStreamPins(Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1)));
+}
+
+function resetStreamPinsAt(index) {
+  const layout = computeDefaultStreamPins(Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1)));
+  vjControls.streamPins[index] = layout[index] || layout[0];
+}
+
+function drawStreamMosaic(ctx, sourceCanvas, width, height) {
+  const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+  for (let i = 0; i < count; i++) {
     const blend = vjControls.streamBlendMap?.[i] || 'source-over';
+    const quad = (vjControls.streamPins && vjControls.streamPins[i]) ? vjControls.streamPins[i] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
     ctx.save();
     ctx.globalCompositeOperation = blend;
-    ctx.drawImage(sourceCanvas, x, y, cellW, cellH);
-    const cue = vjControls.streamCueMap?.[i] || 'off';
-    if (cue !== 'off') {
-      ctx.fillStyle = 'rgba(0,0,0,0.35)';
-      ctx.fillRect(x + 6, y + 6, 54, 18);
-      ctx.fillStyle = '#fff';
-      ctx.font = '11px sans-serif';
-      ctx.fillText(`Cue ${cue}`, x + 10, y + 19);
-    }
+    drawMappedQuad(ctx, sourceCanvas, quad, width, height, 8);
     ctx.restore();
   }
 }
@@ -7351,7 +7365,7 @@ function applyVJEffectsToSource(video, width, height, tMs) {
   g.translate(width / 2, height / 2);
   g.rotate((rotate * Math.PI) / 180);
   g.scale((vjControls.mirror ? -1 : 1) * zoom, zoom);
-  drawStreamMosaic(g, video, width, height);
+  g.drawImage(video, -width / 2, -height / 2, width, height);
   g.restore();
 
   const glitch = getReactiveValue('glitch');
@@ -7465,29 +7479,31 @@ function applyVJEffectsToSource(video, width, height, tMs) {
 }
 
 function drawVJPinsOverlay(ctx, w, h) {
-  const pts = vjControls.corners.map(c => ({ x: c.x * w, y: c.y * h }));
+  const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
   ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(pts[0].x, pts[0].y);
-  ctx.lineTo(pts[1].x, pts[1].y);
-  ctx.lineTo(pts[2].x, pts[2].y);
-  ctx.lineTo(pts[3].x, pts[3].y);
-  ctx.closePath();
-  ctx.stroke();
-  pts.forEach((p, i) => {
-    ctx.fillStyle = '#2ea7ff';
+  for (let si = 0; si < count; si++) {
+    const quad = (vjControls.streamPins && vjControls.streamPins[si]) ? vjControls.streamPins[si] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+    const pts = quad.map(c => ({ x: c.x * w, y: c.y * h }));
+    const active = si === (vjControls.streamActiveIndex || 0);
+    ctx.strokeStyle = active ? 'rgba(255,208,72,0.95)' : 'rgba(255,255,255,0.75)';
+    ctx.lineWidth = active ? 2.5 : 1.5;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1.5;
+    ctx.moveTo(pts[0].x, pts[0].y);
+    ctx.lineTo(pts[1].x, pts[1].y);
+    ctx.lineTo(pts[2].x, pts[2].y);
+    ctx.lineTo(pts[3].x, pts[3].y);
+    ctx.closePath();
     ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = '10px sans-serif';
-    ctx.fillText(String(i + 1), p.x + 10, p.y - 10);
-  });
+    pts.forEach((p, i) => {
+      ctx.fillStyle = active ? '#ffba53' : '#2ea7ff';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, active ? 7 : 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = '10px sans-serif';
+      ctx.fillText(`${si + 1}.${i + 1}`, p.x + 8, p.y - 8);
+    });
+  }
   ctx.restore();
 }
 
@@ -7501,7 +7517,7 @@ function drawVJFrame(tMs = performance.now()) {
   vjPreviewCtx.fillStyle = '#000';
   vjPreviewCtx.fillRect(0, 0, w, h);
   applyVJEffectsToSource(vid, w, h, tMs);
-  drawMappedQuad(vjPreviewCtx, vjSourceCanvas, vjControls.corners, w, h, 10);
+  drawStreamMosaic(vjPreviewCtx, vjSourceCanvas, w, h);
   drawVJPinsOverlay(vjPreviewCtx, w, h);
   if (vjMonitorVideo && !vjMonitorVideo.srcObject && vjMonitorStream) {
     vjMonitorVideo.srcObject = vjMonitorStream;
@@ -7572,7 +7588,7 @@ function showVJWindowToggle() {
   vjWindowContainer.style.position = 'fixed';
   vjWindowContainer.style.top = '70px';
   vjWindowContainer.style.right = '30px';
-  vjWindowContainer.style.width = '500px';
+  vjWindowContainer.style.width = 'min(520px, 44vw)';
   vjWindowContainer.style.maxHeight = '82vh';
   vjWindowContainer.style.zIndex = '999999';
   vjWindowContainer.style.display = 'flex';
@@ -7596,8 +7612,10 @@ function showVJWindowToggle() {
   const topRow = document.createElement('div');
   topRow.style.display = 'flex';
   topRow.style.gap = '6px';
+  topRow.style.flexWrap = 'wrap';
   const powerBtn = document.createElement('button');
   powerBtn.className = 'looper-btn';
+  powerBtn.style.flex = '1 1 auto';
   const syncPower = () => {
     powerBtn.textContent = vjModuleEnabled ? 'VJ FX: ON' : 'VJ FX: OFF';
     powerBtn.style.background = vjModuleEnabled ? '#2a6' : '#333';
@@ -7608,21 +7626,24 @@ function showVJWindowToggle() {
 
   const monitorBtn = document.createElement('button');
   monitorBtn.className = 'looper-btn';
+  monitorBtn.style.flex = '1 1 auto';
   monitorBtn.textContent = 'Open Monitor';
   monitorBtn.addEventListener('click', setupVJMonitorWindow);
   topRow.appendChild(monitorBtn);
 
   const resetMapBtn = document.createElement('button');
   resetMapBtn.className = 'looper-btn';
+  resetMapBtn.style.flex = '1 1 auto';
   resetMapBtn.textContent = 'Reset Pins';
   resetMapBtn.addEventListener('click', () => {
-    vjControls.corners = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+    resetAllStreamPinsLayout();
     persistVJControls();
   });
   topRow.appendChild(resetMapBtn);
 
   const resetFxBtn = document.createElement('button');
   resetFxBtn.className = 'looper-btn';
+  resetFxBtn.style.flex = '1 1 auto';
   resetFxBtn.textContent = 'Reset FX';
   resetFxBtn.addEventListener('click', () => {
     const defs = getVJEffectDefs();
@@ -7630,7 +7651,8 @@ function showVJWindowToggle() {
     vjControls.mirror = false;
     vjControls.textSeqOn = false;
     vjControls.streamCount = 1;
-    vjControls.streamCueMap = Array.from({ length: 8 }, () => 'off');
+    vjControls.streamActiveIndex = 0;
+    vjControls.streamPins = Array.from({ length: 8 }, () => ([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]));
     vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
     persistVJControls();
   });
@@ -7675,7 +7697,7 @@ function showVJWindowToggle() {
   const pinHud = document.createElement('div');
   pinHud.style.fontSize = '11px';
   pinHud.style.opacity = '0.9';
-  pinHud.textContent = 'Pins are always visible on preview. Drag pin 1-4 for mapping.';
+  pinHud.textContent = 'Pins are always visible on preview. Drag pins directly on screen for each stream.';
   vjContentWrap.appendChild(pinHud);
 
   const streamRow = document.createElement('div');
@@ -7688,58 +7710,69 @@ function showVJWindowToggle() {
   streamCountSel.className = 'looper-btn';
   for (let n = 1; n <= 8; n++) streamCountSel.add(new Option(String(n), String(n)));
   streamCountSel.value = String(vjControls.streamCount || 1);
-  streamCountSel.addEventListener('change', () => {
-    vjControls.streamCount = Math.max(1, Math.min(8, Number(streamCountSel.value) || 1));
-    persistVJControls();
-    renderStreamAssignRows();
-  });
+  // stream count behavior is defined below with pin-layout refresh.
   streamRow.appendChild(streamLbl);
   streamRow.appendChild(streamCountSel);
   vjContentWrap.appendChild(streamRow);
 
-  const streamAssignWrap = document.createElement('div');
-  streamAssignWrap.style.display = 'flex';
-  streamAssignWrap.style.flexDirection = 'column';
-  streamAssignWrap.style.gap = '5px';
-  vjContentWrap.appendChild(streamAssignWrap);
-
-  const cueOpts = ['off','1','2','3','4','5','6','7','8','9','0'];
   const streamBlendModes = ['source-over','screen','multiply','overlay','lighten','difference'];
-  const renderStreamAssignRows = () => {
-    streamAssignWrap.innerHTML = '';
+  const streamConfigRow = document.createElement('div');
+  streamConfigRow.style.display = 'grid';
+  streamConfigRow.style.gridTemplateColumns = '1fr 1fr 1fr';
+  streamConfigRow.style.gap = '6px';
+
+  const activeStreamSel = document.createElement('select');
+  activeStreamSel.className = 'looper-btn';
+  const refreshActiveStreamSel = () => {
+    activeStreamSel.innerHTML = '';
     const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
-    for (let i = 0; i < count; i++) {
-      const r = document.createElement('div');
-      r.style.display = 'grid';
-      r.style.gridTemplateColumns = '70px 1fr 90px 52px';
-      r.style.gap = '6px';
-      r.style.alignItems = 'center';
-      const lbl = document.createElement('span');
-      lbl.textContent = `Stream ${i + 1}`;
-      const cueSel = document.createElement('select');
-      cueSel.className = 'looper-btn';
-      cueOpts.forEach(c => cueSel.add(new Option(c === 'off' ? 'Cue: off' : `Cue: ${c}`, c)));
-      cueSel.value = vjControls.streamCueMap[i] || 'off';
-      cueSel.addEventListener('change', () => { vjControls.streamCueMap[i] = cueSel.value; persistVJControls(); });
-      const blendSel = document.createElement('select');
-      blendSel.className = 'looper-btn';
-      streamBlendModes.forEach(m => blendSel.add(new Option(m, m)));
-      blendSel.value = vjControls.streamBlendMap[i] || 'source-over';
-      blendSel.addEventListener('change', () => { vjControls.streamBlendMap[i] = blendSel.value; persistVJControls(); });
-      const goBtn = document.createElement('button');
-      goBtn.className = 'looper-btn';
-      goBtn.textContent = 'Go';
-      goBtn.title = 'Jump main video to selected cue for this stream';
-      goBtn.addEventListener('click', () => {
-        const cue = vjControls.streamCueMap[i];
-        const t = cue && cue !== 'off' ? getCueTime(cue) : undefined;
-        if (typeof t === 'number') jumpToCue(t);
-      });
-      r.appendChild(lbl); r.appendChild(cueSel); r.appendChild(blendSel); r.appendChild(goBtn);
-      streamAssignWrap.appendChild(r);
-    }
+    for (let i = 0; i < count; i++) activeStreamSel.add(new Option(`Active Stream ${i + 1}`, String(i)));
+    activeStreamSel.value = String(Math.min(count - 1, vjControls.streamActiveIndex || 0));
   };
-  renderStreamAssignRows();
+  refreshActiveStreamSel();
+
+  const activeBlendSel = document.createElement('select');
+  activeBlendSel.className = 'looper-btn';
+  streamBlendModes.forEach(m => activeBlendSel.add(new Option(`Blend: ${m}`, m)));
+  const syncActiveBlend = () => {
+    const idx = Math.max(0, Math.min(7, Number(vjControls.streamActiveIndex) || 0));
+    activeBlendSel.value = vjControls.streamBlendMap[idx] || 'source-over';
+  };
+  syncActiveBlend();
+  activeBlendSel.addEventListener('change', () => {
+    const idx = Math.max(0, Math.min(7, Number(vjControls.streamActiveIndex) || 0));
+    vjControls.streamBlendMap[idx] = activeBlendSel.value;
+    persistVJControls();
+  });
+
+  const resetActivePinsBtn = document.createElement('button');
+  resetActivePinsBtn.className = 'looper-btn';
+  resetActivePinsBtn.textContent = 'Reset Active Pins';
+  resetActivePinsBtn.addEventListener('click', () => {
+    const idx = Math.max(0, Math.min(7, Number(vjControls.streamActiveIndex) || 0));
+    resetStreamPinsAt(idx);
+    persistVJControls();
+  });
+
+  streamConfigRow.appendChild(activeStreamSel);
+  streamConfigRow.appendChild(activeBlendSel);
+  streamConfigRow.appendChild(resetActivePinsBtn);
+  vjContentWrap.appendChild(streamConfigRow);
+
+  streamCountSel.addEventListener('change', () => {
+    vjControls.streamCount = Math.max(1, Math.min(8, Number(streamCountSel.value) || 1));
+    if ((vjControls.streamActiveIndex || 0) >= vjControls.streamCount) vjControls.streamActiveIndex = vjControls.streamCount - 1;
+    resetAllStreamPinsLayout();
+    refreshActiveStreamSel();
+    syncActiveBlend();
+    persistVJControls();
+  });
+
+  activeStreamSel.addEventListener('change', () => {
+    vjControls.streamActiveIndex = Math.max(0, Number(activeStreamSel.value) || 0);
+    syncActiveBlend();
+    persistVJControls();
+  });
 
   const reactiveModes = [
     { v: 'off', t: 'Off' },
@@ -7810,28 +7843,45 @@ function showVJWindowToggle() {
   makePanelDraggable(vjWindowContainer, vjDragHandle, 'ytbm_vjWindowPos');
 
   let dragCorner = -1;
+  let dragStream = -1;
   const pickCorner = (x, y) => {
     const w = vjPreviewCanvas.clientWidth || 1, h = vjPreviewCanvas.clientHeight || 1;
-    let best = -1, bestD = 1e9;
-    vjControls.corners.forEach((c, i) => {
-      const d = Math.hypot(x - c.x * w, y - c.y * h);
-      if (d < bestD) { best = i; bestD = d; }
-    });
-    return bestD < 30 ? best : -1;
+    let best = { stream: -1, corner: -1, dist: 1e9 };
+    const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+    for (let si = 0; si < count; si++) {
+      const quad = vjControls.streamPins[si] || [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+      quad.forEach((c, ci) => {
+        const d = Math.hypot(x - c.x * w, y - c.y * h);
+        if (d < best.dist) best = { stream: si, corner: ci, dist: d };
+      });
+    }
+    return best.dist < 28 ? best : { stream: -1, corner: -1, dist: best.dist };
   };
   const moveCorner = (evt) => {
-    if (dragCorner < 0) return;
+    if (dragCorner < 0 || dragStream < 0) return;
     const r = vjPreviewCanvas.getBoundingClientRect();
-    vjControls.corners[dragCorner].x = Math.min(1, Math.max(0, (evt.clientX - r.left) / Math.max(1, r.width)));
-    vjControls.corners[dragCorner].y = Math.min(1, Math.max(0, (evt.clientY - r.top) / Math.max(1, r.height)));
+    const nx = Math.min(1, Math.max(0, (evt.clientX - r.left) / Math.max(1, r.width)));
+    const ny = Math.min(1, Math.max(0, (evt.clientY - r.top) / Math.max(1, r.height)));
+    if (!vjControls.streamPins[dragStream]) vjControls.streamPins[dragStream] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+    vjControls.streamPins[dragStream][dragCorner] = { x: nx, y: ny };
+    vjControls.streamActiveIndex = dragStream;
+    activeStreamSel.value = String(dragStream);
+    syncActiveBlend();
     persistVJControls();
   };
   vjPreviewCanvas.addEventListener('mousedown', (evt) => {
     const r = vjPreviewCanvas.getBoundingClientRect();
-    dragCorner = pickCorner(evt.clientX - r.left, evt.clientY - r.top);
+    const picked = pickCorner(evt.clientX - r.left, evt.clientY - r.top);
+    dragStream = picked.stream;
+    dragCorner = picked.corner;
+    if (dragStream >= 0) {
+      vjControls.streamActiveIndex = dragStream;
+      activeStreamSel.value = String(dragStream);
+      syncActiveBlend();
+    }
   });
   window.addEventListener('mousemove', moveCorner);
-  window.addEventListener('mouseup', () => { dragCorner = -1; });
+  window.addEventListener('mouseup', () => { dragCorner = -1; dragStream = -1; });
 
   startVJRenderer();
 }
