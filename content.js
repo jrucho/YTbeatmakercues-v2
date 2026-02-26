@@ -711,6 +711,10 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         textPhrase: 'YT BEAT MAKER VJ',
         reactive: {},
         midiNotes: {},
+        effectBlend: {},
+        streamCount: 1,
+        streamCueMap: Array.from({ length: 8 }, () => 'off'),
+        streamBlendMap: Array.from({ length: 8 }, () => 'source-over'),
         corners: [
           { x: 0.0, y: 0.0 },
           { x: 1.0, y: 0.0 },
@@ -7119,12 +7123,20 @@ function ensureVJDefaults() {
   const defs = getVJEffectDefs();
   if (!vjControls.reactive || typeof vjControls.reactive !== 'object') vjControls.reactive = {};
   if (!vjControls.midiNotes || typeof vjControls.midiNotes !== 'object') vjControls.midiNotes = {};
+  if (!vjControls.effectBlend || typeof vjControls.effectBlend !== 'object') vjControls.effectBlend = {};
+  if (!Array.isArray(vjControls.streamCueMap)) vjControls.streamCueMap = Array.from({ length: 8 }, () => 'off');
+  if (!Array.isArray(vjControls.streamBlendMap)) vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
+  if (!Number.isFinite(vjControls.streamCount)) vjControls.streamCount = 1;
   defs.forEach((d, i) => {
     if (typeof vjControls[d.key] !== 'number') vjControls[d.key] = d.def;
     if (!vjControls.reactive[d.key]) vjControls.reactive[d.key] = 'off';
     if (typeof vjControls.midiNotes[d.key] !== 'number') vjControls.midiNotes[d.key] = 90 + i;
+    if (!vjControls.effectBlend[d.key]) vjControls.effectBlend[d.key] = 'source-over';
   });
   if (typeof vjControls.midiNotes.textSeqOn !== 'number') vjControls.midiNotes.textSeqOn = 118;
+  vjControls.streamCount = Math.max(1, Math.min(8, Math.round(vjControls.streamCount || 1)));
+  while (vjControls.streamCueMap.length < 8) vjControls.streamCueMap.push('off');
+  while (vjControls.streamBlendMap.length < 8) vjControls.streamBlendMap.push('source-over');
   if (!Array.isArray(vjControls.corners) || vjControls.corners.length !== 4) {
     vjControls.corners = [{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];
   }
@@ -7279,6 +7291,47 @@ function drawMappedQuad(ctx, img, corners, width, height, subdivisions = 10) {
   }
 }
 
+
+function withEffectBlend(ctx, effectKey, amount, drawFn) {
+  const blend = vjControls.effectBlend?.[effectKey] || 'source-over';
+  ctx.save();
+  ctx.globalCompositeOperation = blend;
+  ctx.globalAlpha = Math.min(1, Math.max(0, Number(amount) || 0));
+  drawFn();
+  ctx.restore();
+}
+
+function drawStreamMosaic(ctx, sourceCanvas, width, height) {
+  const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+  if (count === 1) {
+    ctx.drawImage(sourceCanvas, 0, 0, width, height);
+    return;
+  }
+  const cols = Math.ceil(Math.sqrt(count));
+  const rows = Math.ceil(count / cols);
+  const cellW = width / cols;
+  const cellH = height / rows;
+  for (let i = 0; i < count; i++) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = col * cellW;
+    const y = row * cellH;
+    const blend = vjControls.streamBlendMap?.[i] || 'source-over';
+    ctx.save();
+    ctx.globalCompositeOperation = blend;
+    ctx.drawImage(sourceCanvas, x, y, cellW, cellH);
+    const cue = vjControls.streamCueMap?.[i] || 'off';
+    if (cue !== 'off') {
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(x + 6, y + 6, 54, 18);
+      ctx.fillStyle = '#fff';
+      ctx.font = '11px sans-serif';
+      ctx.fillText(`Cue ${cue}`, x + 10, y + 19);
+    }
+    ctx.restore();
+  }
+}
+
 function applyVJEffectsToSource(video, width, height, tMs) {
   if (!vjSourceCtx) return;
   const g = vjSourceCtx;
@@ -7296,11 +7349,11 @@ function applyVJEffectsToSource(video, width, height, tMs) {
   g.translate(width / 2, height / 2);
   g.rotate((rotate * Math.PI) / 180);
   g.scale((vjControls.mirror ? -1 : 1) * zoom, zoom);
-  g.drawImage(video, -width / 2, -height / 2, width, height);
+  drawStreamMosaic(g, video, width, height);
   g.restore();
 
   const glitch = getReactiveValue('glitch');
-  if (glitch > 0.01) {
+  if (glitch > 0.01) withEffectBlend(g, 'glitch', glitch, () => {
     const slices = Math.floor(2 + glitch * 14);
     for (let i = 0; i < slices; i++) {
       const sh = Math.max(2, Math.floor((Math.random() * 0.08 + 0.01) * height));
@@ -7308,47 +7361,47 @@ function applyVJEffectsToSource(video, width, height, tMs) {
       const dx = (Math.random() - 0.5) * glitch * 90;
       g.drawImage(vjSourceCanvas, 0, sy, width, sh, dx, sy, width, sh);
     }
-  }
+  });
 
   const strobe = getReactiveValue('strobe');
-  if (strobe > 0.01) {
+  if (strobe > 0.01) withEffectBlend(g, 'strobe', strobe, () => {
     const phase = (tMs / 1000) * (4 + strobe * 20);
     if (Math.sin(phase * Math.PI * 2) > 0.4) {
       g.fillStyle = 'rgba(255,255,255,0.22)';
       g.fillRect(0, 0, width, height);
     }
-  }
+  });
 
   const rgbSplit = getReactiveValue('rgbSplit');
-  if (rgbSplit > 0.01) {
+  if (rgbSplit > 0.01) withEffectBlend(g, 'rgbSplit', rgbSplit, () => {
     const d = Math.max(1, Math.floor(rgbSplit * 12));
     g.globalCompositeOperation = 'screen';
     g.drawImage(vjSourceCanvas, d, 0);
     g.globalCompositeOperation = 'multiply';
     g.drawImage(vjSourceCanvas, -d, 0);
     g.globalCompositeOperation = 'source-over';
-  }
+  });
 
   const scan = getReactiveValue('scanlines');
-  if (scan > 0.01) {
+  if (scan > 0.01) withEffectBlend(g, 'scanlines', scan, () => {
     g.save();
     g.globalAlpha = Math.min(0.7, scan * 0.7);
     g.fillStyle = '#000';
     for (let y = 0; y < height; y += 3) g.fillRect(0, y, width, 1);
     g.restore();
-  }
+  });
 
   const vig = getReactiveValue('vignette');
-  if (vig > 0.01) {
+  if (vig > 0.01) withEffectBlend(g, 'vignette', vig, () => {
     const grad = g.createRadialGradient(width/2, height/2, Math.min(width,height)*0.2, width/2, height/2, Math.max(width,height)*0.65);
     grad.addColorStop(0, 'rgba(0,0,0,0)');
     grad.addColorStop(1, `rgba(0,0,0,${Math.min(0.9, vig*0.9)})`);
     g.fillStyle = grad;
     g.fillRect(0, 0, width, height);
-  }
+  });
 
   const pix = getReactiveValue('pixelate');
-  if (pix > 0.01) {
+  if (pix > 0.01) withEffectBlend(g, 'pixelate', pix, () => {
     const scale = Math.max(0.03, 1 - pix * 0.94);
     const sw = Math.max(16, Math.floor(width * scale));
     const sh = Math.max(9, Math.floor(height * scale));
@@ -7360,10 +7413,10 @@ function applyVJEffectsToSource(video, width, height, tMs) {
     g.imageSmoothingEnabled = false;
     g.drawImage(tmp, 0, 0, sw, sh, 0, 0, width, height);
     g.imageSmoothingEnabled = true;
-  }
+  });
 
   const kal = getReactiveValue('kaleido');
-  if (kal > 0.01) {
+  if (kal > 0.01) withEffectBlend(g, 'kaleido', kal, () => {
     g.save();
     g.globalAlpha = Math.min(0.7, kal * 0.75);
     g.translate(width/2, height/2);
@@ -7374,17 +7427,17 @@ function applyVJEffectsToSource(video, width, height, tMs) {
       g.drawImage(vjSourceCanvas, -width/2, -height/2, width, height);
     }
     g.restore();
-  }
+  });
 
   const trail = getReactiveValue('trail');
-  if (trail > 0.01 && vjFeedbackCtx && vjFeedbackCanvas) {
+  if (trail > 0.01 && vjFeedbackCtx && vjFeedbackCanvas) withEffectBlend(g, 'trail', trail, () => {
     vjFeedbackCtx.globalAlpha = Math.min(0.96, trail);
     vjFeedbackCtx.drawImage(vjFeedbackCanvas, 0, 0);
     vjFeedbackCtx.globalAlpha = 1;
     vjFeedbackCtx.drawImage(vjSourceCanvas, 0, 0);
     g.globalAlpha = 1;
     g.drawImage(vjFeedbackCanvas, 0, 0);
-  }
+  });
 
   if (vjControls.textSeqOn && vjControls.textPhrase) {
     const bpm = Math.max(40, Math.min(300, clock?.bpm || loopsBPM || 120));
@@ -7517,8 +7570,11 @@ function showVJWindowToggle() {
   vjWindowContainer.style.position = 'fixed';
   vjWindowContainer.style.top = '70px';
   vjWindowContainer.style.right = '30px';
-  vjWindowContainer.style.width = '460px';
+  vjWindowContainer.style.width = '500px';
+  vjWindowContainer.style.maxHeight = '82vh';
   vjWindowContainer.style.zIndex = '999999';
+  vjWindowContainer.style.display = 'flex';
+  vjWindowContainer.style.flexDirection = 'column';
   document.body.appendChild(vjWindowContainer);
 
   vjDragHandle = document.createElement('div');
@@ -7531,6 +7587,8 @@ function showVJWindowToggle() {
   vjContentWrap.style.display = 'flex';
   vjContentWrap.style.flexDirection = 'column';
   vjContentWrap.style.gap = '8px';
+  vjContentWrap.style.overflowY = 'auto';
+  vjContentWrap.style.maxHeight = 'calc(82vh - 46px)';
   vjWindowContainer.appendChild(vjContentWrap);
 
   const topRow = document.createElement('div');
@@ -7560,7 +7618,31 @@ function showVJWindowToggle() {
     persistVJControls();
   });
   topRow.appendChild(resetMapBtn);
+
+  const resetFxBtn = document.createElement('button');
+  resetFxBtn.className = 'looper-btn';
+  resetFxBtn.textContent = 'Reset FX';
+  resetFxBtn.addEventListener('click', () => {
+    const defs = getVJEffectDefs();
+    defs.forEach(d => { vjControls[d.key] = d.def; vjControls.reactive[d.key] = 'off'; vjControls.effectBlend[d.key] = 'source-over'; });
+    vjControls.mirror = false;
+    vjControls.textSeqOn = false;
+    vjControls.streamCount = 1;
+    vjControls.streamCueMap = Array.from({ length: 8 }, () => 'off');
+    vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
+    persistVJControls();
+  });
+  topRow.appendChild(resetFxBtn);
+
   vjContentWrap.appendChild(topRow);
+
+  const previewSticky = document.createElement('div');
+  previewSticky.style.position = 'sticky';
+  previewSticky.style.top = '0';
+  previewSticky.style.zIndex = '3';
+  previewSticky.style.background = '#1b1b1b';
+  previewSticky.style.paddingBottom = '6px';
+  vjContentWrap.appendChild(previewSticky);
 
   vjPreviewCanvas = document.createElement('canvas');
   vjPreviewCanvas.style.width = '100%';
@@ -7568,7 +7650,7 @@ function showVJWindowToggle() {
   vjPreviewCanvas.style.background = '#000';
   vjPreviewCanvas.style.border = '1px solid rgba(255,255,255,0.2)';
   vjPreviewCanvas.style.borderRadius = '6px';
-  vjContentWrap.appendChild(vjPreviewCanvas);
+  previewSticky.appendChild(vjPreviewCanvas);
   vjPreviewCtx = vjPreviewCanvas.getContext('2d', { alpha: false });
 
   const textRow = document.createElement('div');
@@ -7594,6 +7676,69 @@ function showVJWindowToggle() {
   pinHud.textContent = 'Pins are always visible on preview. Drag pin 1-4 for mapping.';
   vjContentWrap.appendChild(pinHud);
 
+  const streamRow = document.createElement('div');
+  streamRow.style.display = 'grid';
+  streamRow.style.gridTemplateColumns = '120px 1fr';
+  streamRow.style.gap = '8px';
+  const streamLbl = document.createElement('span');
+  streamLbl.textContent = 'Video Streams';
+  const streamCountSel = document.createElement('select');
+  streamCountSel.className = 'looper-btn';
+  for (let n = 1; n <= 8; n++) streamCountSel.add(new Option(String(n), String(n)));
+  streamCountSel.value = String(vjControls.streamCount || 1);
+  streamCountSel.addEventListener('change', () => {
+    vjControls.streamCount = Math.max(1, Math.min(8, Number(streamCountSel.value) || 1));
+    persistVJControls();
+    renderStreamAssignRows();
+  });
+  streamRow.appendChild(streamLbl);
+  streamRow.appendChild(streamCountSel);
+  vjContentWrap.appendChild(streamRow);
+
+  const streamAssignWrap = document.createElement('div');
+  streamAssignWrap.style.display = 'flex';
+  streamAssignWrap.style.flexDirection = 'column';
+  streamAssignWrap.style.gap = '5px';
+  vjContentWrap.appendChild(streamAssignWrap);
+
+  const cueOpts = ['off','1','2','3','4','5','6','7','8','9','0'];
+  const streamBlendModes = ['source-over','screen','multiply','overlay','lighten','difference'];
+  const renderStreamAssignRows = () => {
+    streamAssignWrap.innerHTML = '';
+    const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+    for (let i = 0; i < count; i++) {
+      const r = document.createElement('div');
+      r.style.display = 'grid';
+      r.style.gridTemplateColumns = '70px 1fr 90px 52px';
+      r.style.gap = '6px';
+      r.style.alignItems = 'center';
+      const lbl = document.createElement('span');
+      lbl.textContent = `Stream ${i + 1}`;
+      const cueSel = document.createElement('select');
+      cueSel.className = 'looper-btn';
+      cueOpts.forEach(c => cueSel.add(new Option(c === 'off' ? 'Cue: off' : `Cue: ${c}`, c)));
+      cueSel.value = vjControls.streamCueMap[i] || 'off';
+      cueSel.addEventListener('change', () => { vjControls.streamCueMap[i] = cueSel.value; persistVJControls(); });
+      const blendSel = document.createElement('select');
+      blendSel.className = 'looper-btn';
+      streamBlendModes.forEach(m => blendSel.add(new Option(m, m)));
+      blendSel.value = vjControls.streamBlendMap[i] || 'source-over';
+      blendSel.addEventListener('change', () => { vjControls.streamBlendMap[i] = blendSel.value; persistVJControls(); });
+      const goBtn = document.createElement('button');
+      goBtn.className = 'looper-btn';
+      goBtn.textContent = 'Go';
+      goBtn.title = 'Jump main video to selected cue for this stream';
+      goBtn.addEventListener('click', () => {
+        const cue = vjControls.streamCueMap[i];
+        const t = cue && cue !== 'off' ? getCueTime(cue) : undefined;
+        if (typeof t === 'number') jumpToCue(t);
+      });
+      r.appendChild(lbl); r.appendChild(cueSel); r.appendChild(blendSel); r.appendChild(goBtn);
+      streamAssignWrap.appendChild(r);
+    }
+  };
+  renderStreamAssignRows();
+
   const reactiveModes = [
     { v: 'off', t: 'Off' },
     { v: 'low', t: 'Low' },
@@ -7609,7 +7754,7 @@ function showVJWindowToggle() {
   defs.forEach((d) => {
     const row = document.createElement('div');
     row.style.display = 'grid';
-    row.style.gridTemplateColumns = '95px 1fr 52px 70px 56px';
+    row.style.gridTemplateColumns = '90px 1fr 48px 68px 54px 90px';
     row.style.gap = '6px';
     row.style.alignItems = 'center';
 
@@ -7642,7 +7787,13 @@ function showVJWindowToggle() {
       persistVJControls();
     });
 
-    row.appendChild(l); row.appendChild(inp); row.appendChild(val); row.appendChild(reactSel); row.appendChild(midiInp);
+    const blendSel = document.createElement('select');
+    blendSel.className = 'looper-btn';
+    ['source-over','screen','multiply','overlay','lighten','difference'].forEach(m => blendSel.add(new Option(m, m)));
+    blendSel.value = vjControls.effectBlend[d.key] || 'source-over';
+    blendSel.addEventListener('change', () => { vjControls.effectBlend[d.key] = blendSel.value; persistVJControls(); });
+
+    row.appendChild(l); row.appendChild(inp); row.appendChild(val); row.appendChild(reactSel); row.appendChild(midiInp); row.appendChild(blendSel);
     vjContentWrap.appendChild(row);
   });
 
