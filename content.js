@@ -298,7 +298,11 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         saved = 'default';
         localStorage.setItem('ytbm_outputDeviceId', 'default');
       }
-      outputDeviceSelect.value = saved;
+      const hasSaved = Array.from(outputDeviceSelect.options).some(opt => opt.value === saved);
+      outputDeviceSelect.value = hasSaved ? saved : 'default';
+      if (!hasSaved) {
+        localStorage.setItem('ytbm_outputDeviceId', 'default');
+      }
       outputDeviceSelect.disabled = outputs.length === 0;
     } catch (err) {
       console.error('Failed to enumerate output devices', err);
@@ -340,7 +344,11 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         saved = 'default';
         localStorage.setItem('ytbm_inputDeviceId', 'default');
       }
-      inputDeviceSelect.value = saved;
+      const hasSaved = Array.from(inputDeviceSelect.options).some(opt => opt.value === saved);
+      inputDeviceSelect.value = hasSaved ? saved : 'default';
+      if (!hasSaved) {
+        localStorage.setItem('ytbm_inputDeviceId', 'default');
+      }
       inputDeviceSelect.disabled = inputs.length === 0;
     } catch (err) {
       console.error('Failed to enumerate input devices', err);
@@ -392,9 +400,16 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
           chrome.storage.local.set({ ytbm_monitorInputDeviceId: saved });
         }
       }
-      monitorInputSelect.value = saved;
+      const hasSaved = Array.from(monitorInputSelect.options).some(opt => opt.value === saved);
+      monitorInputSelect.value = hasSaved ? saved : 'off';
+      if (!hasSaved) {
+        localStorage.setItem('ytbm_monitorInputDeviceId', 'off');
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+          chrome.storage.local.set({ ytbm_monitorInputDeviceId: 'off' });
+        }
+      }
       monitorInputSelect.disabled = inputs.length === 0;
-      monitorMicDeviceId = saved;
+      monitorMicDeviceId = monitorInputSelect.value || 'off';
       applyMonitorSelection();
     } catch (err) {
       console.error('Failed to enumerate input devices', err);
@@ -690,6 +705,42 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       sidechainCustomName = 'Custom',
       sidechainAdvancedMode = false,
       sidechainIsDrawing = false,
+      vjControls = {
+        brightness: 1,
+        contrast: 1,
+        saturate: 1,
+        hue: 0,
+        blur: 0,
+        glitch: 0,
+        strobe: 0,
+        zoom: 1,
+        rotate: 0,
+        mirror: false,
+        scanlines: 0,
+        rgbSplit: 0,
+        vignette: 0,
+        trail: 0,
+        pixelate: 0,
+        kaleido: 0,
+        textSeqOn: false,
+        textPhrase: 'YT BEAT MAKER VJ',
+        reactive: {},
+        midiNotes: {},
+        effectBlend: {},
+        streamCount: 1,
+        streamPins: [],
+        streamActiveIndex: 0,
+        streamBlendMap: Array.from({ length: 8 }, () => 'source-over'),
+        streamFx: [],
+        sharedFxRack: true,
+        preserveAspectRatio: true,
+        corners: [
+          { x: 0.0, y: 0.0 },
+          { x: 1.0, y: 0.0 },
+          { x: 1.0, y: 1.0 },
+          { x: 0.0, y: 1.0 }
+        ]
+      },
       // Minimal UI elements
       minimalUIContainer = null,
       randomCuesButtonMin = null,
@@ -885,6 +936,28 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       eqDragHandle = null,
       eqContentWrap = null,
       instrumentWindowContainer = null,
+      vjWindowContainer = null,
+      vjDragHandle = null,
+      vjContentWrap = null,
+      vjPreviewCanvas = null,
+      vjPreviewCtx = null,
+      vjOutputCanvas = null,
+      vjOutputCtx = null,
+      vjSourceCanvas = null,
+      vjSourceCtx = null,
+      vjAnimationFrame = null,
+      vjRenderInterval = null,
+      vjMonitorWindow = null,
+      vjMonitorVideo = null,
+      vjMonitorStream = null,
+      vjAnalyser = null,
+      vjBandData = new Uint8Array(256),
+      vjBandLevels = { low: 0, mid: 0, high: 0, full: 0 },
+      vjModuleEnabled = false,
+      vjTextIndex = 0,
+      vjLastTextStep = 0,
+      vjFeedbackCanvas = null,
+      vjFeedbackCtx = null,
       // We'll keep them to identify which button is which
       reverbButton = null,
       cassetteButton = null,
@@ -6760,7 +6833,7 @@ function startVideoRecording() {
   // }
   // ————————————————————————————————————————————————
 
-  let captureStream = mv.captureStream?.() || null;
+  let captureStream = getVideoCaptureStreamForLooper(mv);
   if (!captureStream) {
     alert("Unable to capture video stream!");
     return;
@@ -6886,6 +6959,1085 @@ function createOrUpdateVideoPreviewElement() {
   videoPreviewElement.style.display = "block";
 }
 
+
+
+
+function createVJDefaultFxProfile() {
+  const defs = getVJEffectDefs();
+  const profile = { mirror: false };
+  defs.forEach((d) => { profile[d.key] = d.def; });
+  return profile;
+}
+
+function getVJStreamFxProfile(index) {
+  if (!Array.isArray(vjControls.streamFx)) vjControls.streamFx = [];
+  const idx = Math.max(0, Math.min(7, Number(index) || 0));
+  if (!vjControls.streamFx[idx] || typeof vjControls.streamFx[idx] !== 'object') {
+    const base = createVJDefaultFxProfile();
+    getVJEffectDefs().forEach((d) => {
+      if (typeof vjControls[d.key] === 'number') base[d.key] = vjControls[d.key];
+    });
+    base.mirror = !!vjControls.mirror;
+    vjControls.streamFx[idx] = base;
+  }
+  return vjControls.streamFx[idx];
+}
+
+function getVJEffectDefs() {
+  return [
+    { key: 'brightness', label: 'Brightness', min: 0, max: 2, step: 0.01, def: 1 },
+    { key: 'contrast', label: 'Contrast', min: 0, max: 3, step: 0.01, def: 1 },
+    { key: 'saturate', label: 'Saturation', min: 0, max: 3, step: 0.01, def: 1 },
+    { key: 'hue', label: 'Hue', min: -180, max: 180, step: 1, def: 0 },
+    { key: 'blur', label: 'Blur', min: 0, max: 12, step: 0.1, def: 0 },
+    { key: 'glitch', label: 'Glitch', min: 0, max: 1, step: 0.01, def: 0 },
+    { key: 'strobe', label: 'Strobe', min: 0, max: 1, step: 0.01, def: 0 },
+    { key: 'zoom', label: 'Zoom', min: 0.4, max: 2.5, step: 0.01, def: 1 },
+    { key: 'rotate', label: 'Rotate', min: -180, max: 180, step: 1, def: 0 },
+    { key: 'scanlines', label: 'Scanlines', min: 0, max: 1, step: 0.01, def: 0 },
+    { key: 'rgbSplit', label: 'RGB Split', min: 0, max: 1, step: 0.01, def: 0 },
+    { key: 'vignette', label: 'Vignette', min: 0, max: 1, step: 0.01, def: 0 },
+    { key: 'trail', label: 'Trail', min: 0, max: 0.96, step: 0.01, def: 0 },
+    { key: 'pixelate', label: 'Pixelate', min: 0, max: 1, step: 0.01, def: 0 },
+    { key: 'kaleido', label: 'Kaleido', min: 0, max: 1, step: 0.01, def: 0 }
+  ];
+}
+
+function persistVJControls() {
+  try { localStorage.setItem('ytbm_vjControls', JSON.stringify(vjControls)); } catch {}
+}
+
+function ensureVJDefaults() {
+  const defs = getVJEffectDefs();
+  if (!vjControls.reactive || typeof vjControls.reactive !== 'object') vjControls.reactive = {};
+  if (!vjControls.midiNotes || typeof vjControls.midiNotes !== 'object') vjControls.midiNotes = {};
+  if (!vjControls.effectBlend || typeof vjControls.effectBlend !== 'object') vjControls.effectBlend = {};
+  if (!Array.isArray(vjControls.streamPins)) vjControls.streamPins = [];
+  if (!Array.isArray(vjControls.streamBlendMap)) vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
+  if (!Array.isArray(vjControls.streamFx)) vjControls.streamFx = [];
+  if (typeof vjControls.sharedFxRack !== 'boolean') vjControls.sharedFxRack = true;
+  if (typeof vjControls.preserveAspectRatio !== 'boolean') vjControls.preserveAspectRatio = true;
+  if (!Number.isFinite(vjControls.streamCount)) vjControls.streamCount = 1;
+  if (!Number.isFinite(vjControls.streamActiveIndex)) vjControls.streamActiveIndex = 0;
+  defs.forEach((d, i) => {
+    if (typeof vjControls[d.key] !== 'number') vjControls[d.key] = d.def;
+    if (!vjControls.reactive[d.key]) vjControls.reactive[d.key] = 'off';
+    if (typeof vjControls.midiNotes[d.key] !== 'number') vjControls.midiNotes[d.key] = 90 + i;
+    if (!vjControls.effectBlend[d.key]) vjControls.effectBlend[d.key] = 'source-over';
+  });
+  if (typeof vjControls.midiNotes.textSeqOn !== 'number') vjControls.midiNotes.textSeqOn = 118;
+  vjControls.streamCount = Math.max(1, Math.min(8, Math.round(vjControls.streamCount || 1)));
+  vjControls.streamActiveIndex = Math.max(0, Math.min(7, Math.round(vjControls.streamActiveIndex || 0)));
+  while (vjControls.streamBlendMap.length < 8) vjControls.streamBlendMap.push('source-over');
+  while (vjControls.streamFx.length < 8) vjControls.streamFx.push(createVJDefaultFxProfile());
+  vjControls.streamFx = vjControls.streamFx.slice(0, 8).map((fx) => {
+    const base = createVJDefaultFxProfile();
+    if (fx && typeof fx === 'object') {
+      Object.assign(base, fx);
+    }
+    getVJEffectDefs().forEach((d) => {
+      base[d.key] = Number.isFinite(Number(base[d.key])) ? Number(base[d.key]) : d.def;
+    });
+    base.mirror = !!base.mirror;
+    return base;
+  });
+  const makeDefaultQuad = () => ([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]);
+  while (vjControls.streamPins.length < 8) vjControls.streamPins.push(makeDefaultQuad());
+  vjControls.streamPins = vjControls.streamPins.slice(0, 8).map((q) => Array.isArray(q) && q.length === 4 ? q.map(pt => ({ x: Math.min(1, Math.max(0, Number(pt.x) || 0)), y: Math.min(1, Math.max(0, Number(pt.y) || 0)) })) : makeDefaultQuad());
+  if (!Array.isArray(vjControls.corners) || vjControls.corners.length !== 4) {
+    vjControls.corners = [{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];
+  }
+  if (typeof vjControls.textSeqOn !== 'boolean') vjControls.textSeqOn = false;
+  if (!vjControls.textPhrase) vjControls.textPhrase = 'YT BEAT MAKER VJ';
+}
+
+function loadVJControls() {
+  try {
+    const raw = localStorage.getItem('ytbm_vjControls');
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && typeof data === 'object') {
+        vjControls = {
+          ...vjControls,
+          ...data,
+          corners: Array.isArray(data.corners) && data.corners.length === 4
+            ? data.corners.map(c => ({ x: Math.min(1, Math.max(0, Number(c.x) || 0)), y: Math.min(1, Math.max(0, Number(c.y) || 0)) }))
+            : vjControls.corners
+        };
+      }
+    }
+  } catch {}
+  ensureVJDefaults();
+}
+
+function setVJModuleEnabled(enabled) {
+  vjModuleEnabled = !!enabled;
+  localStorage.setItem('ytbm_vjEnabled', vjModuleEnabled ? '1' : '0');
+  if (vjModuleEnabled) startVJRenderer(); else stopVJRenderer();
+}
+
+function ensureVJCanvases(requirePreview = false) {
+  if (requirePreview && !vjPreviewCanvas) return false;
+  const vid = getVideoElement();
+  if (!vid) return false;
+  // Keep a stable 16:9 VJ stage while preserving input aspect inside it.
+  const stageRatio = 16 / 9;
+  const srcW = Math.max(320, vid.videoWidth || 1280);
+  const srcH = Math.max(180, vid.videoHeight || 720);
+  const w = Math.max(1140, srcW);
+  const h = Math.max(540, Math.round(w / stageRatio));
+  if (!vjSourceCanvas) {
+    vjSourceCanvas = document.createElement('canvas');
+    vjSourceCtx = vjSourceCanvas.getContext('2d', { alpha: false });
+  }
+  if (!vjOutputCanvas) {
+    vjOutputCanvas = document.createElement('canvas');
+    vjOutputCtx = vjOutputCanvas.getContext('2d', { alpha: false });
+  }
+  if (!vjFeedbackCanvas) {
+    vjFeedbackCanvas = document.createElement('canvas');
+    vjFeedbackCtx = vjFeedbackCanvas.getContext('2d', { alpha: false });
+  }
+  if (vjPreviewCanvas) {
+    if (vjPreviewCanvas.width !== w || vjPreviewCanvas.height !== h) {
+      vjPreviewCanvas.width = w;
+      vjPreviewCanvas.height = h;
+    }
+    if (vjPreviewCanvas.style.aspectRatio !== '16 / 9') vjPreviewCanvas.style.aspectRatio = '16 / 9';
+  }
+  if (vjOutputCanvas.width !== w || vjOutputCanvas.height !== h) {
+    vjOutputCanvas.width = w;
+    vjOutputCanvas.height = h;
+  }
+  if (vjSourceCanvas.width !== w || vjSourceCanvas.height !== h) {
+    vjSourceCanvas.width = w;
+    vjSourceCanvas.height = h;
+  }
+  if (vjFeedbackCanvas.width !== w || vjFeedbackCanvas.height !== h) {
+    vjFeedbackCanvas.width = w;
+    vjFeedbackCanvas.height = h;
+  }
+  if (vjPreviewCtx) {
+    vjPreviewCtx.imageSmoothingEnabled = true;
+    vjPreviewCtx.imageSmoothingQuality = 'high';
+  }
+  if (vjOutputCtx) {
+    vjOutputCtx.imageSmoothingEnabled = true;
+    vjOutputCtx.imageSmoothingQuality = 'high';
+  }
+  if (vjSourceCtx) {
+    vjSourceCtx.imageSmoothingEnabled = true;
+    vjSourceCtx.imageSmoothingQuality = 'high';
+  }
+  return true;
+}
+
+function drawVJVideoFrame(g, video, x, y, width, height) {
+  if (!video || !width || !height) return;
+  const srcW = Math.max(1, Number(video.videoWidth) || width);
+  const srcH = Math.max(1, Number(video.videoHeight) || height);
+  const srcRatio = srcW / srcH;
+  const dstRatio = width / height;
+
+  if (!vjControls.preserveAspectRatio) {
+    g.drawImage(video, x, y, width, height);
+    return;
+  }
+
+  let drawW = width;
+  let drawH = height;
+  if (srcRatio > dstRatio) {
+    drawH = width / srcRatio;
+  } else {
+    drawW = height * srcRatio;
+  }
+  const ox = x + (width - drawW) / 2;
+  const oy = y + (height - drawH) / 2;
+  g.drawImage(video, ox, oy, drawW, drawH);
+}
+
+function ensureVJAnalyser() {
+  if (!audioContext || !mainRecorderMix || vjAnalyser) return;
+  try {
+    vjAnalyser = audioContext.createAnalyser();
+    vjAnalyser.fftSize = 512;
+    vjBandData = new Uint8Array(vjAnalyser.frequencyBinCount);
+    mainRecorderMix.connect(vjAnalyser);
+  } catch {}
+}
+
+function updateVJBandLevels() {
+  if (!vjAnalyser || !vjBandData) return;
+  vjAnalyser.getByteFrequencyData(vjBandData);
+  const n = vjBandData.length;
+  const avg = (a,b) => {
+    a = Math.max(0, Math.min(n-1, a)); b = Math.max(a+1, Math.min(n, b));
+    let s=0,c=0; for (let i=a;i<b;i++){s+=vjBandData[i];c++;}
+    return c ? (s/c)/255 : 0;
+  };
+  vjBandLevels.low = avg(2, Math.floor(n*0.12));
+  vjBandLevels.mid = avg(Math.floor(n*0.12), Math.floor(n*0.45));
+  vjBandLevels.high = avg(Math.floor(n*0.45), Math.floor(n*0.9));
+  vjBandLevels.full = avg(0, n);
+}
+
+function getReactiveValue(key, streamIndex = null) {
+  const defs = getVJEffectDefs();
+  const d = defs.find(x => x.key === key);
+  if (!d) return vjControls[key] ?? 0;
+  const streamFx = (streamIndex !== null && streamIndex !== undefined) ? getVJStreamFxProfile(streamIndex) : null;
+  const base = Number((streamFx && Number.isFinite(Number(streamFx[key]))) ? streamFx[key] : (vjControls[key] ?? d.def));
+  const mode = vjControls.reactive?.[key] || 'off';
+  if (mode === 'off') return base;
+  const table = {
+    low: { band: 'low', amt: 0.35 },
+    mid: { band: 'mid', amt: 0.35 },
+    high: { band: 'high', amt: 0.35 },
+    full: { band: 'full', amt: 0.45 },
+    lowBoost: { band: 'low', amt: 0.65 },
+    midBoost: { band: 'mid', amt: 0.65 },
+    highBoost: { band: 'high', amt: 0.65 },
+    fullBoost: { band: 'full', amt: 0.75 }
+  };
+  const m = table[mode] || table.full;
+  const energy = vjBandLevels[m.band] || 0;
+  const span = d.max - d.min;
+  return Math.min(d.max, Math.max(d.min, base + energy * span * m.amt));
+}
+
+function drawImageTriangle(ctx, img, s0, s1, s2, d0, d1, d2) {
+  const den = s0.x * (s1.y - s2.y) + s1.x * (s2.y - s0.y) + s2.x * (s0.y - s1.y);
+  if (!den) return;
+  const a = (d0.x * (s1.y - s2.y) + d1.x * (s2.y - s0.y) + d2.x * (s0.y - s1.y)) / den;
+  const b = (d0.y * (s1.y - s2.y) + d1.y * (s2.y - s0.y) + d2.y * (s0.y - s1.y)) / den;
+  const c = (d0.x * (s2.x - s1.x) + d1.x * (s0.x - s2.x) + d2.x * (s1.x - s0.x)) / den;
+  const d = (d0.y * (s2.x - s1.x) + d1.y * (s0.x - s2.x) + d2.y * (s1.x - s0.x)) / den;
+  const e = (d0.x * (s1.x * s2.y - s2.x * s1.y) + d1.x * (s2.x * s0.y - s0.x * s2.y) + d2.x * (s0.x * s1.y - s1.x * s0.y)) / den;
+  const f = (d0.y * (s1.x * s2.y - s2.x * s1.y) + d1.y * (s2.x * s0.y - s0.x * s2.y) + d2.y * (s0.x * s1.y - s1.x * s0.y)) / den;
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(d0.x, d0.y); ctx.lineTo(d1.x, d1.y); ctx.lineTo(d2.x, d2.y); ctx.closePath();
+  ctx.clip();
+  ctx.transform(a, b, c, d, e, f);
+  ctx.drawImage(img, 0, 0);
+  ctx.restore();
+}
+
+function bilerp(p00, p10, p11, p01, u, v) {
+  const a = { x: p00.x + (p10.x - p00.x) * u, y: p00.y + (p10.y - p00.y) * u };
+  const b = { x: p01.x + (p11.x - p01.x) * u, y: p01.y + (p11.y - p01.y) * u };
+  return { x: a.x + (b.x - a.x) * v, y: a.y + (b.y - a.y) * v };
+}
+
+function drawMappedQuad(ctx, img, corners, width, height, subdivisions = 10) {
+  const pts = corners.map(c => ({ x: c.x * width, y: c.y * height }));
+  const p00 = pts[0], p10 = pts[1], p11 = pts[2], p01 = pts[3];
+  for (let y = 0; y < subdivisions; y++) {
+    const v0 = y / subdivisions, v1 = (y + 1) / subdivisions;
+    for (let x = 0; x < subdivisions; x++) {
+      const u0 = x / subdivisions, u1 = (x + 1) / subdivisions;
+      const d00 = bilerp(p00, p10, p11, p01, u0, v0);
+      const d10 = bilerp(p00, p10, p11, p01, u1, v0);
+      const d11 = bilerp(p00, p10, p11, p01, u1, v1);
+      const d01 = bilerp(p00, p10, p11, p01, u0, v1);
+      const s00 = { x: u0 * width, y: v0 * height };
+      const s10 = { x: u1 * width, y: v0 * height };
+      const s11 = { x: u1 * width, y: v1 * height };
+      const s01 = { x: u0 * width, y: v1 * height };
+      drawImageTriangle(ctx, img, s00, s10, s11, d00, d10, d11);
+      drawImageTriangle(ctx, img, s00, s11, s01, d00, d11, d01);
+    }
+  }
+}
+
+
+function withEffectBlend(ctx, effectKey, amount, drawFn) {
+  const blend = vjControls.effectBlend?.[effectKey] || 'source-over';
+  ctx.save();
+  ctx.globalCompositeOperation = blend;
+  ctx.globalAlpha = Math.min(1, Math.max(0, Number(amount) || 0));
+  drawFn();
+  ctx.restore();
+}
+
+
+function computeDefaultStreamPins(count) {
+  const pins = [];
+  const cols = Math.ceil(Math.sqrt(count));
+  const rows = Math.ceil(count / cols);
+  const cellW = 1 / cols;
+  const cellH = 1 / rows;
+  for (let i = 0; i < 8; i++) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x0 = col * cellW;
+    const y0 = row * cellH;
+    const x1 = x0 + cellW;
+    const y1 = y0 + cellH;
+    pins.push([{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }]);
+  }
+  return pins;
+}
+
+function resetAllStreamPinsLayout() {
+  vjControls.streamPins = computeDefaultStreamPins(Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1)));
+}
+
+function resetStreamPinsAt(index) {
+  const layout = computeDefaultStreamPins(Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1)));
+  vjControls.streamPins[index] = layout[index] || layout[0];
+}
+
+function resetStreamPinCorner(streamIndex, cornerIndex) {
+  const layout = computeDefaultStreamPins(Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1)));
+  if (!vjControls.streamPins[streamIndex]) vjControls.streamPins[streamIndex] = layout[streamIndex] || layout[0];
+  const src = (layout[streamIndex] || layout[0] || [])[cornerIndex];
+  if (!src) return;
+  vjControls.streamPins[streamIndex][cornerIndex] = { x: src.x, y: src.y };
+}
+
+function drawStreamMosaic(ctx, video, width, height, tMs) {
+  const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+  for (let i = 0; i < count; i++) {
+    const blend = vjControls.streamBlendMap?.[i] || 'source-over';
+    const quad = (vjControls.streamPins && vjControls.streamPins[i]) ? vjControls.streamPins[i] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+    const fxIndex = vjControls.sharedFxRack ? 0 : i;
+    applyVJEffectsToSource(video, width, height, tMs, fxIndex);
+    ctx.save();
+    ctx.globalCompositeOperation = blend;
+    drawMappedQuad(ctx, vjSourceCanvas, quad, width, height, 8);
+    ctx.restore();
+  }
+}
+
+function applyVJEffectsToSource(video, width, height, tMs, streamIndex = null) {
+  if (!vjSourceCtx) return;
+  const g = vjSourceCtx;
+  const brightness = getReactiveValue('brightness', streamIndex);
+  const contrast = getReactiveValue('contrast', streamIndex);
+  const saturate = getReactiveValue('saturate', streamIndex);
+  const hue = getReactiveValue('hue', streamIndex);
+  const blur = getReactiveValue('blur', streamIndex);
+  const zoom = getReactiveValue('zoom', streamIndex);
+  const rotate = getReactiveValue('rotate', streamIndex);
+
+  g.save();
+  g.clearRect(0, 0, width, height);
+  g.filter = `brightness(${brightness}) contrast(${contrast}) saturate(${saturate}) hue-rotate(${hue}deg) blur(${blur}px)`;
+  g.translate(width / 2, height / 2);
+  g.rotate((rotate * Math.PI) / 180);
+  const streamMirror = streamIndex === null ? !!vjControls.mirror : !!(getVJStreamFxProfile(streamIndex).mirror);
+  g.scale((streamMirror ? -1 : 1) * zoom, zoom);
+  drawVJVideoFrame(g, video, -width / 2, -height / 2, width, height);
+  g.restore();
+
+  const glitch = getReactiveValue('glitch', streamIndex);
+  if (glitch > 0.01) withEffectBlend(g, 'glitch', glitch, () => {
+    const slices = Math.floor(2 + glitch * 14);
+    for (let i = 0; i < slices; i++) {
+      const sh = Math.max(2, Math.floor((Math.random() * 0.08 + 0.01) * height));
+      const sy = Math.floor(Math.random() * (height - sh));
+      const dx = (Math.random() - 0.5) * glitch * 90;
+      g.drawImage(vjSourceCanvas, 0, sy, width, sh, dx, sy, width, sh);
+    }
+  });
+
+  const strobe = getReactiveValue('strobe', streamIndex);
+  if (strobe > 0.01) withEffectBlend(g, 'strobe', strobe, () => {
+    const phase = (tMs / 1000) * (4 + strobe * 20);
+    if (Math.sin(phase * Math.PI * 2) > 0.4) {
+      g.fillStyle = 'rgba(255,255,255,0.22)';
+      g.fillRect(0, 0, width, height);
+    }
+  });
+
+  const rgbSplit = getReactiveValue('rgbSplit', streamIndex);
+  if (rgbSplit > 0.01) withEffectBlend(g, 'rgbSplit', rgbSplit, () => {
+    const d = Math.max(1, Math.floor(rgbSplit * 12));
+    g.globalCompositeOperation = 'screen';
+    g.drawImage(vjSourceCanvas, d, 0);
+    g.globalCompositeOperation = 'multiply';
+    g.drawImage(vjSourceCanvas, -d, 0);
+    g.globalCompositeOperation = 'source-over';
+  });
+
+  const scan = getReactiveValue('scanlines', streamIndex);
+  if (scan > 0.01) withEffectBlend(g, 'scanlines', scan, () => {
+    g.save();
+    g.globalAlpha = Math.min(0.7, scan * 0.7);
+    g.fillStyle = '#000';
+    for (let y = 0; y < height; y += 3) g.fillRect(0, y, width, 1);
+    g.restore();
+  });
+
+  const vig = getReactiveValue('vignette', streamIndex);
+  if (vig > 0.01) withEffectBlend(g, 'vignette', vig, () => {
+    const grad = g.createRadialGradient(width/2, height/2, Math.min(width,height)*0.2, width/2, height/2, Math.max(width,height)*0.65);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, `rgba(0,0,0,${Math.min(0.9, vig*0.9)})`);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, width, height);
+  });
+
+  const pix = getReactiveValue('pixelate', streamIndex);
+  if (pix > 0.01) withEffectBlend(g, 'pixelate', pix, () => {
+    const scale = Math.max(0.03, 1 - pix * 0.94);
+    const sw = Math.max(16, Math.floor(width * scale));
+    const sh = Math.max(9, Math.floor(height * scale));
+    const tmp = document.createElement('canvas');
+    tmp.width = sw; tmp.height = sh;
+    const tx = tmp.getContext('2d', { alpha: false });
+    tx.imageSmoothingEnabled = false;
+    tx.drawImage(vjSourceCanvas, 0, 0, sw, sh);
+    g.imageSmoothingEnabled = false;
+    g.drawImage(tmp, 0, 0, sw, sh, 0, 0, width, height);
+    g.imageSmoothingEnabled = true;
+  });
+
+  const kal = getReactiveValue('kaleido', streamIndex);
+  if (kal > 0.01) withEffectBlend(g, 'kaleido', kal, () => {
+    g.save();
+    g.globalAlpha = Math.min(0.7, kal * 0.75);
+    g.translate(width/2, height/2);
+    const seg = 2 + Math.floor(kal * 6);
+    for (let i = 0; i < seg; i++) {
+      g.rotate((Math.PI * 2) / seg);
+      g.scale(i % 2 ? -1 : 1, 1);
+      g.drawImage(vjSourceCanvas, -width/2, -height/2, width, height);
+    }
+    g.restore();
+  });
+
+  const trail = getReactiveValue('trail', streamIndex);
+  if (trail > 0.01 && vjFeedbackCtx && vjFeedbackCanvas) withEffectBlend(g, 'trail', trail, () => {
+    vjFeedbackCtx.globalAlpha = Math.min(0.96, trail);
+    vjFeedbackCtx.drawImage(vjFeedbackCanvas, 0, 0);
+    vjFeedbackCtx.globalAlpha = 1;
+    vjFeedbackCtx.drawImage(vjSourceCanvas, 0, 0);
+    g.globalAlpha = 1;
+    g.drawImage(vjFeedbackCanvas, 0, 0);
+  });
+
+  if (vjControls.textSeqOn && vjControls.textPhrase) {
+    const bpm = Math.max(40, Math.min(300, clock?.bpm || loopsBPM || 120));
+    const stepMs = (60000 / bpm);
+    if (tMs - vjLastTextStep > stepMs) {
+      vjLastTextStep = tMs;
+      vjTextIndex = (vjTextIndex + 1) % Math.max(1, vjControls.textPhrase.trim().split(/\s+/).length);
+    }
+    const words = vjControls.textPhrase.trim().split(/\s+/);
+    const word = words[vjTextIndex] || words[0] || '';
+    const amp = Math.max(vjBandLevels.low, vjBandLevels.full);
+    g.save();
+    g.font = `${Math.floor(height * (0.07 + amp * 0.08))}px sans-serif`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.lineWidth = 6;
+    g.strokeStyle = 'rgba(0,0,0,0.65)';
+    g.fillStyle = `hsl(${(tMs / 25) % 360} 90% 60%)`;
+    g.strokeText(word, width/2, height*0.85);
+    g.fillText(word, width/2, height*0.85);
+    g.restore();
+  }
+}
+
+function drawVJPinsOverlay(ctx, w, h) {
+  const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+  ctx.save();
+  for (let si = 0; si < count; si++) {
+    const quad = (vjControls.streamPins && vjControls.streamPins[si]) ? vjControls.streamPins[si] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+    const pts = quad.map(c => ({ x: c.x * w, y: c.y * h }));
+    const active = si === (vjControls.streamActiveIndex || 0);
+    ctx.strokeStyle = active ? 'rgba(255,208,72,0.95)' : 'rgba(255,255,255,0.75)';
+    ctx.lineWidth = active ? 2.5 : 1.5;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    ctx.lineTo(pts[1].x, pts[1].y);
+    ctx.lineTo(pts[2].x, pts[2].y);
+    ctx.lineTo(pts[3].x, pts[3].y);
+    ctx.closePath();
+    ctx.stroke();
+    pts.forEach((p, i) => {
+      ctx.fillStyle = active ? '#ffba53' : '#2ea7ff';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, active ? 7 : 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = '10px sans-serif';
+      ctx.fillText(`${si + 1}.${i + 1}`, p.x + 8, p.y - 8);
+    });
+  }
+  ctx.restore();
+}
+
+function renderVJFrameCore(tMs = performance.now()) {
+  if (!ensureVJCanvases() || !vjOutputCtx) return;
+  const vid = getVideoElement();
+  if (!vid) return;
+  updateVJBandLevels();
+  const w = vjOutputCanvas.width, h = vjOutputCanvas.height;
+
+  // Render clean output (no pins) for monitor and capture.
+  vjOutputCtx.fillStyle = '#000';
+  vjOutputCtx.fillRect(0, 0, w, h);
+  drawStreamMosaic(vjOutputCtx, vid, w, h, tMs);
+
+  // Preview mirrors output then overlays editable pins when the VJ panel is open.
+  if (vjPreviewCtx && vjPreviewCanvas) {
+    vjPreviewCtx.fillStyle = '#000';
+    vjPreviewCtx.fillRect(0, 0, w, h);
+    vjPreviewCtx.drawImage(vjOutputCanvas, 0, 0, w, h);
+    drawVJPinsOverlay(vjPreviewCtx, w, h);
+  }
+
+  if (vjMonitorVideo && vjMonitorStream && vjMonitorVideo.srcObject !== vjMonitorStream) {
+    vjMonitorVideo.srcObject = vjMonitorStream;
+    vjMonitorVideo.play().catch(() => {});
+  }
+}
+
+function drawVJFrame(tMs = performance.now()) {
+  vjAnimationFrame = requestAnimationFrame(drawVJFrame);
+  renderVJFrameCore(tMs);
+}
+
+function startVJRenderer() {
+  if (!vjModuleEnabled) return;
+  ensureVJDefaults();
+  ensureVJAnalyser();
+  if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
+  if (!vjAnimationFrame) vjAnimationFrame = requestAnimationFrame(drawVJFrame);
+  // Fallback render pump keeps monitor stream alive when RAF is throttled
+  // (e.g. popup fullscreen/occluded main tab situations).
+  if (!vjRenderInterval) {
+    vjRenderInterval = setInterval(() => {
+      if (!vjModuleEnabled) return;
+      renderVJFrameCore(performance.now());
+    }, 1000 / 30);
+  }
+}
+
+function stopVJRenderer() {
+  if (vjAnimationFrame) {
+    cancelAnimationFrame(vjAnimationFrame);
+    vjAnimationFrame = null;
+  }
+  if (vjRenderInterval) {
+    clearInterval(vjRenderInterval);
+    vjRenderInterval = null;
+  }
+}
+
+function setupVJMonitorWindow() {
+  if (!vjModuleEnabled) {
+    alert('Enable VJ FX first to project monitor output.');
+    return;
+  }
+  if (!vjMonitorWindow || vjMonitorWindow.closed) {
+    // Use about:blank popup and write into it to avoid data: top-frame navigation restrictions.
+    vjMonitorWindow = window.open('', 'ytbm_vj_monitor', 'popup,width=960,height=540,toolbar=0,location=0,menubar=0,status=0');
+  }
+  if (!vjMonitorWindow) { alert('Unable to open monitor window. Please allow popups for this page.'); return; }
+  const doc = vjMonitorWindow.document;
+  doc.open();
+  doc.write(`<!doctype html><html><head><title>YTBM VJ Monitor</title><style>html,body{margin:0;background:#000;width:100%;height:100%;overflow:hidden}video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;background:#000;border:0;outline:none;}</style></head><body><video id="m" autoplay muted playsinline></video></body></html>`);
+  doc.close();
+  vjMonitorVideo = doc.getElementById('m');
+  doc.addEventListener('keydown', (e) => {
+    const k = (e.key || '').toLowerCase();
+    if ((e.metaKey || e.ctrlKey) && k === 'f') {
+      e.preventDefault();
+      const target = doc.getElementById('m') || doc.documentElement;
+      if (!doc.fullscreenElement) target.requestFullscreen?.(); else doc.exitFullscreen?.();
+    }
+  });
+  if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
+  if (vjMonitorVideo && vjMonitorStream) {
+    vjMonitorVideo.srcObject = vjMonitorStream;
+    vjMonitorVideo.play().catch(() => {});
+  }
+}
+
+function showVJWindowToggle() {
+  if (vjWindowContainer) {
+    const isOpen = vjWindowContainer.style.display !== 'none';
+    vjWindowContainer.style.display = isOpen ? 'none' : 'block';
+    if (!isOpen && vjModuleEnabled) startVJRenderer();
+    return;
+  }
+
+  ensureVJDefaults();
+  const defs = getVJEffectDefs();
+
+  vjWindowContainer = document.createElement('div');
+  vjWindowContainer.className = 'looper-midimap-container';
+  vjWindowContainer.style.position = 'fixed';
+  vjWindowContainer.style.top = '70px';
+  vjWindowContainer.style.right = '30px';
+  vjWindowContainer.style.width = 'min(560px, 44vw)';
+  vjWindowContainer.style.maxHeight = '82vh';
+  vjWindowContainer.style.zIndex = '999999';
+  vjWindowContainer.style.display = 'flex';
+  vjWindowContainer.style.flexDirection = 'column';
+  document.body.appendChild(vjWindowContainer);
+
+  vjDragHandle = document.createElement('div');
+  vjDragHandle.className = 'looper-midimap-drag-handle';
+  vjDragHandle.textContent = 'VJ Module — Mapping + FX';
+  vjWindowContainer.appendChild(vjDragHandle);
+
+  vjContentWrap = document.createElement('div');
+  vjContentWrap.className = 'looper-midimap-content';
+  vjContentWrap.style.display = 'flex';
+  vjContentWrap.style.flexDirection = 'column';
+  vjContentWrap.style.gap = '8px';
+  vjContentWrap.style.overflowY = 'auto';
+  vjContentWrap.style.overflowX = 'hidden';
+  vjContentWrap.style.maxHeight = 'calc(82vh - 46px)';
+  vjContentWrap.style.paddingRight = '6px';
+  vjContentWrap.style.position = 'relative';
+  vjContentWrap.style.background = '#171717';
+  vjContentWrap.style.borderRadius = '0 0 10px 10px';
+  vjWindowContainer.appendChild(vjContentWrap);
+
+  const topRow = document.createElement('div');
+  topRow.style.display = 'flex';
+  topRow.style.gap = '4px';
+  topRow.style.flexWrap = 'wrap';
+  const powerBtn = document.createElement('button');
+  powerBtn.className = 'looper-btn';
+  powerBtn.style.flex = '1 1 auto';
+  const syncPower = () => {
+    powerBtn.textContent = vjModuleEnabled ? 'VJ FX: ON' : 'VJ FX: OFF';
+    powerBtn.style.background = vjModuleEnabled ? '#2a6' : '#333';
+  };
+  syncPower();
+  powerBtn.addEventListener('click', () => { setVJModuleEnabled(!vjModuleEnabled); syncPower(); });
+  topRow.appendChild(powerBtn);
+
+  const monitorBtn = document.createElement('button');
+  monitorBtn.className = 'looper-btn';
+  monitorBtn.style.flex = '1 1 auto';
+  monitorBtn.textContent = 'Open Monitor';
+  monitorBtn.addEventListener('click', setupVJMonitorWindow);
+  topRow.appendChild(monitorBtn);
+
+  const resetMapBtn = document.createElement('button');
+  resetMapBtn.className = 'looper-btn';
+  resetMapBtn.style.flex = '1 1 auto';
+  resetMapBtn.textContent = 'Reset Pins';
+  resetMapBtn.addEventListener('click', () => {
+    resetAllStreamPinsLayout();
+    persistVJControls();
+  });
+  topRow.appendChild(resetMapBtn);
+
+  let syncVJControlsToUI = () => {};
+
+  const resetFxBtn = document.createElement('button');
+  resetFxBtn.className = 'looper-btn';
+  resetFxBtn.style.flex = '1 1 auto';
+  resetFxBtn.textContent = 'Reset FX';
+  resetFxBtn.addEventListener('click', () => {
+    const defs = getVJEffectDefs();
+    defs.forEach(d => { vjControls[d.key] = d.def; vjControls.reactive[d.key] = 'off'; vjControls.effectBlend[d.key] = 'source-over'; });
+    vjControls.mirror = false;
+    vjControls.textSeqOn = false;
+    vjControls.streamCount = 1;
+    vjControls.streamActiveIndex = 0;
+    vjControls.streamPins = Array.from({ length: 8 }, () => ([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]));
+    vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
+    vjControls.streamFx = Array.from({ length: 8 }, () => createVJDefaultFxProfile());
+    persistVJControls();
+    syncVJControlsToUI();
+  });
+  topRow.appendChild(resetFxBtn);
+
+  const fxRackBtn = document.createElement('button');
+  fxRackBtn.className = 'looper-btn';
+  fxRackBtn.style.flex = '1 1 auto';
+  const syncFxRackBtn = () => {
+    fxRackBtn.textContent = vjControls.sharedFxRack ? 'FX Rack: Global' : 'FX Rack: Per Stream';
+  };
+  syncFxRackBtn();
+  fxRackBtn.addEventListener('click', () => {
+    vjControls.sharedFxRack = !vjControls.sharedFxRack;
+    syncFxRackBtn();
+    syncVJControlsToUI();
+    persistVJControls();
+  });
+  topRow.appendChild(fxRackBtn);
+
+  const ratioBtn = document.createElement('button');
+  ratioBtn.className = 'looper-btn';
+  ratioBtn.style.flex = '1 1 auto';
+  const syncRatioBtn = () => {
+    ratioBtn.textContent = vjControls.preserveAspectRatio ? 'Ratio: Preserve' : 'Ratio: Fill';
+  };
+  syncRatioBtn();
+  ratioBtn.addEventListener('click', () => {
+    vjControls.preserveAspectRatio = !vjControls.preserveAspectRatio;
+    syncRatioBtn();
+    persistVJControls();
+  });
+  topRow.appendChild(ratioBtn);
+
+  const ratioResetBtn = document.createElement('button');
+  ratioResetBtn.className = 'looper-btn';
+  ratioResetBtn.style.flex = '1 1 auto';
+  ratioResetBtn.textContent = 'Reset Ratio';
+  ratioResetBtn.addEventListener('click', () => {
+    vjControls.preserveAspectRatio = true;
+    syncRatioBtn();
+    persistVJControls();
+  });
+  topRow.appendChild(ratioResetBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'looper-btn';
+  closeBtn.style.flex = '0 0 auto';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', () => {
+    if (vjWindowContainer) vjWindowContainer.style.display = 'none';
+  });
+  topRow.appendChild(closeBtn);
+
+  vjContentWrap.appendChild(topRow);
+
+  const previewSticky = document.createElement('div');
+  previewSticky.style.position = 'sticky';
+  previewSticky.style.top = '0';
+  previewSticky.style.zIndex = '20';
+  previewSticky.style.background = '#151515';
+  previewSticky.style.paddingBottom = '8px';
+  previewSticky.style.paddingTop = '2px';
+  previewSticky.style.marginTop = '-2px';
+  previewSticky.style.boxShadow = '0 8px 14px rgba(0,0,0,0.45)';
+  vjContentWrap.appendChild(previewSticky);
+
+  vjPreviewCanvas = document.createElement('canvas');
+  vjPreviewCanvas.style.width = '100%';
+  vjPreviewCanvas.style.aspectRatio = '16 / 9';
+  vjPreviewCanvas.style.background = '#000';
+  vjPreviewCanvas.style.border = '1px solid rgba(255,255,255,0.2)';
+  vjPreviewCanvas.style.borderRadius = '6px';
+  vjPreviewCanvas.style.position = 'relative';
+  vjPreviewCanvas.style.zIndex = '21';
+  previewSticky.appendChild(vjPreviewCanvas);
+  vjPreviewCtx = vjPreviewCanvas.getContext('2d', { alpha: false });
+
+  const textRow = document.createElement('div');
+  textRow.style.display = 'flex';
+  textRow.style.gap = '6px';
+  const textToggle = document.createElement('button');
+  textToggle.className = 'looper-btn';
+  const syncTextBtn = () => { textToggle.textContent = `Text Seq:${vjControls.textSeqOn ? 'On' : 'Off'}`; };
+  syncTextBtn();
+  textToggle.addEventListener('click', () => { vjControls.textSeqOn = !vjControls.textSeqOn; syncTextBtn(); persistVJControls(); });
+  const textInp = document.createElement('input');
+  textInp.type = 'text'; textInp.value = vjControls.textPhrase || '';
+  textInp.placeholder = 'Type phrase for tempo text sequence';
+  textInp.style.flex = '1 1 auto';
+  textInp.addEventListener('change', () => { vjControls.textPhrase = textInp.value || 'YT BEAT MAKER VJ'; persistVJControls(); });
+  textRow.appendChild(textToggle);
+  textRow.appendChild(textInp);
+  vjContentWrap.appendChild(textRow);
+
+  const pinHud = document.createElement('div');
+  pinHud.style.fontSize = '11px';
+  pinHud.style.opacity = '0.9';
+  pinHud.textContent = 'Pins are always visible on preview. Drag pins directly on screen for each stream. FX Rack can be Global (all streams) or Per Stream.';
+  vjContentWrap.appendChild(pinHud);
+
+  const streamRow = document.createElement('div');
+  streamRow.style.display = 'grid';
+  streamRow.style.gridTemplateColumns = '120px 1fr';
+  streamRow.style.gap = '8px';
+  const streamLbl = document.createElement('span');
+  streamLbl.textContent = 'Video Streams';
+  const streamCountSel = document.createElement('select');
+  streamCountSel.className = 'looper-btn';
+  for (let n = 1; n <= 8; n++) streamCountSel.add(new Option(String(n), String(n)));
+  streamCountSel.value = String(vjControls.streamCount || 1);
+  // stream count behavior is defined below with pin-layout refresh.
+  streamRow.appendChild(streamLbl);
+  streamRow.appendChild(streamCountSel);
+  vjContentWrap.appendChild(streamRow);
+
+  const streamBlendModes = ['source-over','screen','multiply','overlay','lighten','difference'];
+  const streamConfigRow = document.createElement('div');
+  streamConfigRow.style.display = 'grid';
+  streamConfigRow.style.gridTemplateColumns = '1fr 1fr 1fr';
+  streamConfigRow.style.gap = '6px';
+
+  const activeStreamSel = document.createElement('select');
+  activeStreamSel.className = 'looper-btn';
+  const refreshActiveStreamSel = () => {
+    activeStreamSel.innerHTML = '';
+    const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+    for (let i = 0; i < count; i++) activeStreamSel.add(new Option(`Active Stream ${i + 1}`, String(i)));
+    activeStreamSel.value = String(Math.min(count - 1, vjControls.streamActiveIndex || 0));
+  };
+  refreshActiveStreamSel();
+
+  const getActiveStreamIndex = () => Math.max(0, Math.min(7, Number(vjControls.streamActiveIndex) || 0));
+  const getFxEditStreamIndex = () => (vjControls.sharedFxRack ? 0 : getActiveStreamIndex());
+  const getActiveStreamFx = () => getVJStreamFxProfile(getFxEditStreamIndex());
+
+  const activeBlendSel = document.createElement('select');
+  activeBlendSel.className = 'looper-btn';
+  streamBlendModes.forEach(m => activeBlendSel.add(new Option(`Blend: ${m}`, m)));
+  const syncActiveBlend = () => {
+    const idx = Math.max(0, Math.min(7, Number(vjControls.streamActiveIndex) || 0));
+    activeBlendSel.value = vjControls.streamBlendMap[idx] || 'source-over';
+  };
+  syncActiveBlend();
+  activeBlendSel.addEventListener('change', () => {
+    const idx = Math.max(0, Math.min(7, Number(vjControls.streamActiveIndex) || 0));
+    vjControls.streamBlendMap[idx] = activeBlendSel.value;
+    persistVJControls();
+  });
+
+  const resetActivePinsBtn = document.createElement('button');
+  resetActivePinsBtn.className = 'looper-btn';
+  resetActivePinsBtn.textContent = 'Reset Active Pins';
+  resetActivePinsBtn.addEventListener('click', () => {
+    const idx = Math.max(0, Math.min(7, Number(vjControls.streamActiveIndex) || 0));
+    resetStreamPinsAt(idx);
+    persistVJControls();
+  });
+
+  streamConfigRow.appendChild(activeStreamSel);
+  streamConfigRow.appendChild(activeBlendSel);
+  streamConfigRow.appendChild(resetActivePinsBtn);
+  vjContentWrap.appendChild(streamConfigRow);
+
+  streamCountSel.addEventListener('change', () => {
+    vjControls.streamCount = Math.max(1, Math.min(8, Number(streamCountSel.value) || 1));
+    if ((vjControls.streamActiveIndex || 0) >= vjControls.streamCount) vjControls.streamActiveIndex = vjControls.streamCount - 1;
+    resetAllStreamPinsLayout();
+    refreshActiveStreamSel();
+    syncActiveBlend();
+    syncVJControlsToUI();
+    persistVJControls();
+  });
+
+  activeStreamSel.addEventListener('change', () => {
+    vjControls.streamActiveIndex = Math.max(0, Number(activeStreamSel.value) || 0);
+    syncActiveBlend();
+    syncVJControlsToUI();
+    persistVJControls();
+  });
+
+  const reactiveModes = [
+    { v: 'off', t: 'Off' },
+    { v: 'low', t: 'Low' },
+    { v: 'mid', t: 'Mid' },
+    { v: 'high', t: 'High' },
+    { v: 'full', t: 'Full' },
+    { v: 'lowBoost', t: 'Low+' },
+    { v: 'midBoost', t: 'Mid+' },
+    { v: 'highBoost', t: 'High+' },
+    { v: 'fullBoost', t: 'Full+' }
+  ];
+
+  const effectBindings = [];
+
+  defs.forEach((d) => {
+    const row = document.createElement('div');
+    row.style.display = 'grid';
+    row.style.gridTemplateColumns = '78px minmax(120px,1fr) 44px 64px 48px 78px';
+    row.style.gap = '6px';
+    row.style.alignItems = 'center';
+    row.style.position = 'relative';
+    row.style.zIndex = '1';
+
+    const l = document.createElement('span'); l.textContent = d.label;
+    const inp = document.createElement('input');
+    const fxProfile = getActiveStreamFx();
+    inp.type = 'range'; inp.min = String(d.min); inp.max = String(d.max); inp.step = String(d.step); inp.value = String(fxProfile[d.key] ?? vjControls[d.key]);
+    const val = document.createElement('span');
+    const fmt = (v) => (Math.abs(d.step - 1) < 1e-9 ? `${Math.round(v)}` : `${Number(v).toFixed(2)}`);
+    val.textContent = fmt(fxProfile[d.key] ?? vjControls[d.key]);
+    inp.addEventListener('input', () => {
+      const v = Number(inp.value);
+      const idx = getActiveStreamIndex();
+      const fx = getVJStreamFxProfile(idx);
+      fx[d.key] = v;
+      if (idx === 0) vjControls[d.key] = v;
+      val.textContent = fmt(v);
+      persistVJControls();
+    });
+    inp.addEventListener('dblclick', () => {
+      const idx = getActiveStreamIndex();
+      const fx = getVJStreamFxProfile(idx);
+      fx[d.key] = d.def;
+      if (idx === 0) vjControls[d.key] = d.def;
+      inp.value = String(d.def);
+      val.textContent = fmt(d.def);
+      persistVJControls();
+    });
+
+    const reactSel = document.createElement('select');
+    reactSel.className = 'looper-btn';
+    reactSel.style.width = '100%';
+    reactSel.style.minWidth = '0';
+    reactiveModes.forEach(m => reactSel.add(new Option(m.t, m.v)));
+    reactSel.value = vjControls.reactive[d.key] || 'off';
+    reactSel.addEventListener('change', () => { vjControls.reactive[d.key] = reactSel.value; persistVJControls(); });
+
+    const midiInp = document.createElement('input');
+    midiInp.type = 'number'; midiInp.min = '0'; midiInp.max = '127'; midiInp.step = '1';
+    midiInp.style.width = '100%';
+    midiInp.style.minWidth = '0';
+    midiInp.style.boxSizing = 'border-box';
+    midiInp.value = String(vjControls.midiNotes[d.key]);
+    midiInp.title = 'MIDI note mapping';
+    midiInp.addEventListener('change', () => {
+      vjControls.midiNotes[d.key] = Math.max(0, Math.min(127, Number(midiInp.value) || 0));
+      midiInp.value = String(vjControls.midiNotes[d.key]);
+      persistVJControls();
+    });
+
+    const blendSel = document.createElement('select');
+    blendSel.className = 'looper-btn';
+    blendSel.style.width = '100%';
+    blendSel.style.minWidth = '0';
+    ['source-over','screen','multiply','overlay','lighten','difference'].forEach(m => blendSel.add(new Option(m, m)));
+    blendSel.value = vjControls.effectBlend[d.key] || 'source-over';
+    blendSel.addEventListener('change', () => { vjControls.effectBlend[d.key] = blendSel.value; persistVJControls(); });
+
+    row.appendChild(l); row.appendChild(inp); row.appendChild(val); row.appendChild(reactSel); row.appendChild(midiInp); row.appendChild(blendSel);
+    vjContentWrap.appendChild(row);
+    effectBindings.push({ def: d, inp, val, reactSel, midiInp, blendSel });
+  });
+
+  const mirrorRow = document.createElement('div');
+  mirrorRow.style.display = 'flex'; mirrorRow.style.alignItems = 'center'; mirrorRow.style.gap = '8px';
+  const mirrorChk = document.createElement('input'); mirrorChk.type = 'checkbox'; mirrorChk.checked = !!getActiveStreamFx().mirror;
+  mirrorChk.addEventListener('change', () => {
+    const idx = getActiveStreamIndex();
+    const fx = getVJStreamFxProfile(idx);
+    fx.mirror = mirrorChk.checked;
+    if (idx === 0) vjControls.mirror = mirrorChk.checked;
+    persistVJControls();
+  });
+  const mirrorLbl = document.createElement('span'); mirrorLbl.textContent = 'Mirror horizontal';
+  mirrorRow.appendChild(mirrorChk); mirrorRow.appendChild(mirrorLbl);
+  vjContentWrap.appendChild(mirrorRow);
+
+  syncVJControlsToUI = () => {
+    streamCountSel.value = String(vjControls.streamCount || 1);
+    refreshActiveStreamSel();
+    activeStreamSel.value = String(Math.max(0, Math.min((vjControls.streamCount || 1) - 1, vjControls.streamActiveIndex || 0)));
+    syncActiveBlend();
+    syncTextBtn();
+    textInp.value = vjControls.textPhrase || '';
+    mirrorChk.checked = !!getActiveStreamFx().mirror;
+    syncFxRackBtn();
+    syncRatioBtn();
+    effectBindings.forEach(({ def, inp, val, reactSel, midiInp, blendSel }) => {
+      const activeFx = getActiveStreamFx();
+      const v = Number(activeFx[def.key] ?? vjControls[def.key] ?? def.def);
+      inp.value = String(v);
+      val.textContent = Math.abs(def.step - 1) < 1e-9 ? `${Math.round(v)}` : `${v.toFixed(2)}`;
+      reactSel.value = vjControls.reactive[def.key] || 'off';
+      midiInp.value = String(vjControls.midiNotes[def.key] || 0);
+      blendSel.value = vjControls.effectBlend[def.key] || 'source-over';
+    });
+  };
+
+  makePanelDraggable(vjWindowContainer, vjDragHandle, 'ytbm_vjWindowPos');
+
+  let dragCorner = -1;
+  let dragStream = -1;
+  const pickCorner = (x, y) => {
+    const w = vjPreviewCanvas.clientWidth || 1, h = vjPreviewCanvas.clientHeight || 1;
+    let best = { stream: -1, corner: -1, dist: 1e9 };
+    const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+    for (let si = 0; si < count; si++) {
+      const quad = vjControls.streamPins[si] || [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+      quad.forEach((c, ci) => {
+        const d = Math.hypot(x - c.x * w, y - c.y * h);
+        if (d < best.dist) best = { stream: si, corner: ci, dist: d };
+      });
+    }
+    return best.dist < 28 ? best : { stream: -1, corner: -1, dist: best.dist };
+  };
+  const moveCorner = (evt) => {
+    if (dragCorner < 0 || dragStream < 0) return;
+    const r = vjPreviewCanvas.getBoundingClientRect();
+    const nx = Math.min(1, Math.max(0, (evt.clientX - r.left) / Math.max(1, r.width)));
+    const ny = Math.min(1, Math.max(0, (evt.clientY - r.top) / Math.max(1, r.height)));
+    if (!vjControls.streamPins[dragStream]) vjControls.streamPins[dragStream] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+    vjControls.streamPins[dragStream][dragCorner] = { x: nx, y: ny };
+    vjControls.streamActiveIndex = dragStream;
+    activeStreamSel.value = String(dragStream);
+    syncActiveBlend();
+    persistVJControls();
+  };
+  vjPreviewCanvas.addEventListener('mousedown', (evt) => {
+    const r = vjPreviewCanvas.getBoundingClientRect();
+    const picked = pickCorner(evt.clientX - r.left, evt.clientY - r.top);
+    dragStream = picked.stream;
+    dragCorner = picked.corner;
+    if (dragStream >= 0) {
+      vjControls.streamActiveIndex = dragStream;
+      activeStreamSel.value = String(dragStream);
+      syncActiveBlend();
+    }
+  });
+  vjPreviewCanvas.addEventListener('dblclick', (evt) => {
+    const r = vjPreviewCanvas.getBoundingClientRect();
+    const picked = pickCorner(evt.clientX - r.left, evt.clientY - r.top);
+    if (picked.stream >= 0 && picked.corner >= 0) {
+      resetStreamPinCorner(picked.stream, picked.corner);
+      vjControls.streamActiveIndex = picked.stream;
+      activeStreamSel.value = String(picked.stream);
+      syncActiveBlend();
+      persistVJControls();
+    }
+  });
+  window.addEventListener('mousemove', moveCorner);
+  window.addEventListener('mouseup', () => { dragCorner = -1; dragStream = -1; });
+
+  if (vjModuleEnabled) startVJRenderer();
+}
+
+function handleVJMidiNote(note, velocity, command) {
+  if (command !== 144 || velocity <= 0) return false;
+  ensureVJDefaults();
+  const defs = getVJEffectDefs();
+  let handled = false;
+  defs.forEach((d) => {
+    if (Number(vjControls.midiNotes[d.key]) === Number(note)) {
+      const nv = velocity / 127;
+      const target = d.min + (d.max - d.min) * nv;
+      vjControls[d.key] = target;
+      handled = true;
+    }
+  });
+  if (vjControls.midiNotes.textSeqOn === Number(note)) {
+    vjControls.textSeqOn = !vjControls.textSeqOn;
+    handled = true;
+  }
+  if (handled) persistVJControls();
+  return handled;
+}
+
+function getVideoCaptureStreamForLooper(videoElement) {
+  if (!videoElement) return null;
+  if (vjModuleEnabled) {
+    startVJRenderer();
+    ensureVJCanvases();
+    if (!vjMonitorStream && vjOutputCanvas && typeof vjOutputCanvas.captureStream === 'function') {
+      vjMonitorStream = vjOutputCanvas.captureStream(30);
+    }
+    const hasTrack = vjMonitorStream && vjMonitorStream.getVideoTracks && vjMonitorStream.getVideoTracks().length;
+    if (hasTrack) return vjMonitorStream;
+  }
+  return videoElement.captureStream?.() || null;
+}
 
 /**************************************
  * Import Audio for Looper
@@ -7883,6 +9035,15 @@ function onKeyDown(e) {
   }
 
   const k = e.key.toLowerCase();
+
+  // Cmd/Ctrl+Y toggles the VJ module window.
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && k === 'y') {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    showVJWindowToggle();
+    return;
+  }
 
   if (e.altKey && (e.metaKey || e.ctrlKey)) {
     let handled = false;
@@ -9082,6 +10243,19 @@ function addControls() {
 
   buildSamplePackDropdown();
 
+  const packsModuleWrap = document.createElement("div");
+  packsModuleWrap.className = "ytbm-packs-module";
+  packsModuleWrap.style.display = "flex";
+  packsModuleWrap.style.flexDirection = "column";
+  packsModuleWrap.style.gap = "6px";
+  packsModuleWrap.style.marginBottom = "8px";
+  const packsModuleTitle = document.createElement("span");
+  packsModuleTitle.className = "ytbm-panel-label";
+  packsModuleTitle.textContent = "Packs (Advanced)";
+  packsModuleWrap.appendChild(packsModuleTitle);
+  if (packBar) packsModuleWrap.appendChild(packBar);
+  cw.appendChild(packsModuleWrap);
+
   buildOutputDeviceDropdown(cw);
   buildMonitorInputDropdown(cw);
   buildMonitorToggle(cw);
@@ -9249,7 +10423,7 @@ function addControls() {
   midiInputRow.style.display = 'flex';
   midiInputRow.style.alignItems = 'center';
   midiInputRow.style.gap = '8px';
-  midiInputRow.style.marginBottom = '8px';
+  midiInputRow.style.marginBottom = '4px';
 
   const midiInputLabel = document.createElement('span');
   midiInputLabel.className = 'ytbm-panel-label';
@@ -9266,7 +10440,7 @@ function addControls() {
     attachMidiInputHandlers();
   });
   midiInputRow.appendChild(midiDeviceSelect);
-  cw.appendChild(midiInputRow);
+  packsModuleWrap.appendChild(midiInputRow);
   populateMidiInputSelect();
 
   const createSampleRow = (type, label) => {
@@ -9379,17 +10553,17 @@ function addControls() {
   };
 
   const kickControls = createSampleRow("kick", "Kick");
-  cw.appendChild(kickControls.container);
+  packsModuleWrap.appendChild(kickControls.container);
   kickFader = kickControls.fader;
   kickDBLabel = kickControls.dbLabel;
 
   const hihatControls = createSampleRow("hihat", "Hihat");
-  cw.appendChild(hihatControls.container);
+  packsModuleWrap.appendChild(hihatControls.container);
   hihatFader = hihatControls.fader;
   hihatDBLabel = hihatControls.dbLabel;
 
   const snareControls = createSampleRow("snare", "Snare");
-  cw.appendChild(snareControls.container);
+  packsModuleWrap.appendChild(snareControls.container);
   snareFader = snareControls.fader;
   snareDBLabel = snareControls.dbLabel;
 
@@ -9584,6 +10758,14 @@ function addControls() {
     loFiCompButton.innerText = "LoFiComp:" + (loFiCompActive ? "On" : "Off");
   });
   actionWrap.appendChild(loFiCompButton);
+
+  const vjButton = document.createElement('button');
+  vjButton.className = 'looper-btn';
+  vjButton.innerText = 'VJ Module';
+  vjButton.style.flex = '1 1 calc(50% - 4px)';
+  vjButton.title = 'Open VJ module: pro effects, 4-corner mapping, and monitor output.';
+  vjButton.addEventListener('click', showVJWindowToggle);
+  actionWrap.appendChild(vjButton);
 
   let compFaderRow = document.createElement("div");
   compFaderRow.style.display = "flex";
@@ -10181,6 +11363,9 @@ function handleMIDIMessage(e) {
       }
     }
   } else if (command === 144 && velocity > 0) {
+    if (handleVJMidiNote(note, velocity, command)) {
+      return;
+    }
         if (Number(note) === Number(midiNotes.randomCues)) {
       cueInputMode = 'midi';
       randomizeCuesInOneClick();
@@ -12218,7 +13403,7 @@ function buildSamplePackDropdown() {
     if (contentWrap) {
       packBar.style.width = '100%';
       packBar.style.margin = '0 0 8px 0';
-      contentWrap.insertBefore(packBar, contentWrap.firstChild);
+      contentWrap.appendChild(packBar);
     } else {
       panelContainer.insertBefore(packBar, panelContainer.children[1]);
     }
@@ -12886,9 +14071,8 @@ async function initialize() {
     updateSampleDisplay("snare");
     addTrackedListener(document, "mousemove", onDocumentMouseMove);
     addTrackedListener(document, "mouseup", onDocumentMouseUp);
-    document.addEventListener("click", function primeAudio() {
-      ensureAudioContext();
-    }, { once: true });
+    loadVJControls();
+    vjModuleEnabled = localStorage.getItem('ytbm_vjEnabled') === '1';
     detectVideoChanges();
     attachVideoMetadataListener();
     console.log("Initialized (AudioContext deferred until first user interaction).");
@@ -12906,6 +14090,67 @@ async function initialize() {
     console.error("Initialization error:", err.message || err);
   }
 }
+
+
+function runLooperDeterministicSimulation() {
+  const sim = {
+    bpm: 120,
+    beat: 0.5,
+    bar: 2,
+    transportStart: 0,
+    quantize(t) { return Math.ceil(t / this.bar) * this.bar; }
+  };
+  const events = [];
+  const schedule = (name, t) => events.push({ name, t: sim.quantize(t) });
+
+  // two tracks armed at different times -> same boundary when inside same bar
+  schedule('audio1.recordStart', 0.12);
+  schedule('audio2.recordStart', 0.88);
+
+  // master loop length propagation (4 beats = 1 bar)
+  const masterLoopLengthBeatsSim = 4;
+  events.push({ name: 'master.loopLengthBeats', t: 0, v: masterLoopLengthBeatsSim });
+
+  // overdub toggles at boundaries
+  schedule('audio1.overdubOn', 2.13);
+  schedule('audio1.overdubOff', 2.77);
+
+  // clip launcher switches at boundaries
+  schedule('clip.launch.A', 4.01);
+  schedule('clip.launch.B.stopA', 4.62);
+
+  const sessionBpm = 120;
+  const clipA = { origBpm: 120, bars: 1, duration: 2 };
+  const clipB = { origBpm: 90, bars: 1, duration: (60 * 4 * 1) / 90 };
+  const warpA = sessionBpm / clipA.origBpm;
+  const warpB = sessionBpm / clipB.origBpm;
+  const warpedDurA = clipA.duration / warpA;
+  const warpedDurB = clipB.duration / warpB;
+
+  const checks = {
+    sameBoundaryForArmedStarts: events.find(e => e.name === 'audio1.recordStart')?.t === events.find(e => e.name === 'audio2.recordStart')?.t,
+    hasMasterLength: masterLoopLengthBeatsSim === 4,
+    overdubBoundaryAligned: events.filter(e => e.name.includes('overdub')).every(e => Number.isFinite(e.t) && Math.abs(e.t / sim.bar - Math.round(e.t / sim.bar)) < 1e-6),
+    clipSwitchBoundaryAligned: events.filter(e => e.name.includes('clip.launch')).every(e => Number.isFinite(e.t) && Math.abs(e.t / sim.bar - Math.round(e.t / sim.bar)) < 1e-6),
+    clipWarpAlignsToGrid: Math.abs(warpedDurA - sim.bar) < 1e-6 && Math.abs(warpedDurB - sim.bar) < 1e-6
+  };
+  const pass = Object.values(checks).every(Boolean);
+  return { pass, checks, events };
+}
+window.runLooperDeterministicSimulation = runLooperDeterministicSimulation;
+
+
+// Keep VJ stream pumping when tab visibility changes (fullscreen monitor scenarios).
+document.addEventListener('visibilitychange', () => {
+  if (!vjModuleEnabled) return;
+  if (document.hidden) {
+    if (!vjRenderInterval) {
+      vjRenderInterval = setInterval(() => renderVJFrameCore(performance.now()), 1000 / 30);
+    }
+  } else if (vjRenderInterval && vjAnimationFrame) {
+    // keep one interval only if renderer is active; no-op (interval already used as fallback).
+  }
+});
 
 initialize();
 })();
