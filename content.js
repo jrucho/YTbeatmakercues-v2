@@ -722,6 +722,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         streamPins: [],
         streamActiveIndex: 0,
         streamBlendMap: Array.from({ length: 8 }, () => 'source-over'),
+        streamFx: [],
         preserveAspectRatio: true,
         corners: [
           { x: 0.0, y: 0.0 },
@@ -7143,6 +7144,27 @@ function createOrUpdateVideoPreviewElement() {
 
 
 
+function createVJDefaultFxProfile() {
+  const defs = getVJEffectDefs();
+  const profile = { mirror: false };
+  defs.forEach((d) => { profile[d.key] = d.def; });
+  return profile;
+}
+
+function getVJStreamFxProfile(index) {
+  if (!Array.isArray(vjControls.streamFx)) vjControls.streamFx = [];
+  const idx = Math.max(0, Math.min(7, Number(index) || 0));
+  if (!vjControls.streamFx[idx] || typeof vjControls.streamFx[idx] !== 'object') {
+    const base = createVJDefaultFxProfile();
+    getVJEffectDefs().forEach((d) => {
+      if (typeof vjControls[d.key] === 'number') base[d.key] = vjControls[d.key];
+    });
+    base.mirror = !!vjControls.mirror;
+    vjControls.streamFx[idx] = base;
+  }
+  return vjControls.streamFx[idx];
+}
+
 function getVJEffectDefs() {
   return [
     { key: 'brightness', label: 'Brightness', min: 0, max: 2, step: 0.01, def: 1 },
@@ -7174,6 +7196,7 @@ function ensureVJDefaults() {
   if (!vjControls.effectBlend || typeof vjControls.effectBlend !== 'object') vjControls.effectBlend = {};
   if (!Array.isArray(vjControls.streamPins)) vjControls.streamPins = [];
   if (!Array.isArray(vjControls.streamBlendMap)) vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
+  if (!Array.isArray(vjControls.streamFx)) vjControls.streamFx = [];
   if (typeof vjControls.preserveAspectRatio !== 'boolean') vjControls.preserveAspectRatio = true;
   if (!Number.isFinite(vjControls.streamCount)) vjControls.streamCount = 1;
   if (!Number.isFinite(vjControls.streamActiveIndex)) vjControls.streamActiveIndex = 0;
@@ -7187,6 +7210,18 @@ function ensureVJDefaults() {
   vjControls.streamCount = Math.max(1, Math.min(8, Math.round(vjControls.streamCount || 1)));
   vjControls.streamActiveIndex = Math.max(0, Math.min(7, Math.round(vjControls.streamActiveIndex || 0)));
   while (vjControls.streamBlendMap.length < 8) vjControls.streamBlendMap.push('source-over');
+  while (vjControls.streamFx.length < 8) vjControls.streamFx.push(createVJDefaultFxProfile());
+  vjControls.streamFx = vjControls.streamFx.slice(0, 8).map((fx) => {
+    const base = createVJDefaultFxProfile();
+    if (fx && typeof fx === 'object') {
+      Object.assign(base, fx);
+    }
+    getVJEffectDefs().forEach((d) => {
+      base[d.key] = Number.isFinite(Number(base[d.key])) ? Number(base[d.key]) : d.def;
+    });
+    base.mirror = !!base.mirror;
+    return base;
+  });
   const makeDefaultQuad = () => ([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]);
   while (vjControls.streamPins.length < 8) vjControls.streamPins.push(makeDefaultQuad());
   vjControls.streamPins = vjControls.streamPins.slice(0, 8).map((q) => Array.isArray(q) && q.length === 4 ? q.map(pt => ({ x: Math.min(1, Math.max(0, Number(pt.x) || 0)), y: Math.min(1, Math.max(0, Number(pt.y) || 0)) })) : makeDefaultQuad());
@@ -7325,11 +7360,12 @@ function updateVJBandLevels() {
   vjBandLevels.full = avg(0, n);
 }
 
-function getReactiveValue(key) {
+function getReactiveValue(key, streamIndex = null) {
   const defs = getVJEffectDefs();
   const d = defs.find(x => x.key === key);
   if (!d) return vjControls[key] ?? 0;
-  const base = Number(vjControls[key] ?? d.def);
+  const streamFx = (streamIndex !== null && streamIndex !== undefined) ? getVJStreamFxProfile(streamIndex) : null;
+  const base = Number((streamFx && Number.isFinite(Number(streamFx[key]))) ? streamFx[key] : (vjControls[key] ?? d.def));
   const mode = vjControls.reactive?.[key] || 'off';
   if (mode === 'off') return base;
   const table = {
@@ -7439,39 +7475,41 @@ function resetStreamPinCorner(streamIndex, cornerIndex) {
   vjControls.streamPins[streamIndex][cornerIndex] = { x: src.x, y: src.y };
 }
 
-function drawStreamMosaic(ctx, sourceCanvas, width, height) {
+function drawStreamMosaic(ctx, video, width, height, tMs) {
   const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
   for (let i = 0; i < count; i++) {
     const blend = vjControls.streamBlendMap?.[i] || 'source-over';
     const quad = (vjControls.streamPins && vjControls.streamPins[i]) ? vjControls.streamPins[i] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+    applyVJEffectsToSource(video, width, height, tMs, i);
     ctx.save();
     ctx.globalCompositeOperation = blend;
-    drawMappedQuad(ctx, sourceCanvas, quad, width, height, 8);
+    drawMappedQuad(ctx, vjSourceCanvas, quad, width, height, 8);
     ctx.restore();
   }
 }
 
-function applyVJEffectsToSource(video, width, height, tMs) {
+function applyVJEffectsToSource(video, width, height, tMs, streamIndex = null) {
   if (!vjSourceCtx) return;
   const g = vjSourceCtx;
-  const brightness = getReactiveValue('brightness');
-  const contrast = getReactiveValue('contrast');
-  const saturate = getReactiveValue('saturate');
-  const hue = getReactiveValue('hue');
-  const blur = getReactiveValue('blur');
-  const zoom = getReactiveValue('zoom');
-  const rotate = getReactiveValue('rotate');
+  const brightness = getReactiveValue('brightness', streamIndex);
+  const contrast = getReactiveValue('contrast', streamIndex);
+  const saturate = getReactiveValue('saturate', streamIndex);
+  const hue = getReactiveValue('hue', streamIndex);
+  const blur = getReactiveValue('blur', streamIndex);
+  const zoom = getReactiveValue('zoom', streamIndex);
+  const rotate = getReactiveValue('rotate', streamIndex);
 
   g.save();
   g.clearRect(0, 0, width, height);
   g.filter = `brightness(${brightness}) contrast(${contrast}) saturate(${saturate}) hue-rotate(${hue}deg) blur(${blur}px)`;
   g.translate(width / 2, height / 2);
   g.rotate((rotate * Math.PI) / 180);
-  g.scale((vjControls.mirror ? -1 : 1) * zoom, zoom);
+  const streamMirror = streamIndex === null ? !!vjControls.mirror : !!(getVJStreamFxProfile(streamIndex).mirror);
+  g.scale((streamMirror ? -1 : 1) * zoom, zoom);
   drawVJVideoFrame(g, video, -width / 2, -height / 2, width, height);
   g.restore();
 
-  const glitch = getReactiveValue('glitch');
+  const glitch = getReactiveValue('glitch', streamIndex);
   if (glitch > 0.01) withEffectBlend(g, 'glitch', glitch, () => {
     const slices = Math.floor(2 + glitch * 14);
     for (let i = 0; i < slices; i++) {
@@ -7482,7 +7520,7 @@ function applyVJEffectsToSource(video, width, height, tMs) {
     }
   });
 
-  const strobe = getReactiveValue('strobe');
+  const strobe = getReactiveValue('strobe', streamIndex);
   if (strobe > 0.01) withEffectBlend(g, 'strobe', strobe, () => {
     const phase = (tMs / 1000) * (4 + strobe * 20);
     if (Math.sin(phase * Math.PI * 2) > 0.4) {
@@ -7491,7 +7529,7 @@ function applyVJEffectsToSource(video, width, height, tMs) {
     }
   });
 
-  const rgbSplit = getReactiveValue('rgbSplit');
+  const rgbSplit = getReactiveValue('rgbSplit', streamIndex);
   if (rgbSplit > 0.01) withEffectBlend(g, 'rgbSplit', rgbSplit, () => {
     const d = Math.max(1, Math.floor(rgbSplit * 12));
     g.globalCompositeOperation = 'screen';
@@ -7501,7 +7539,7 @@ function applyVJEffectsToSource(video, width, height, tMs) {
     g.globalCompositeOperation = 'source-over';
   });
 
-  const scan = getReactiveValue('scanlines');
+  const scan = getReactiveValue('scanlines', streamIndex);
   if (scan > 0.01) withEffectBlend(g, 'scanlines', scan, () => {
     g.save();
     g.globalAlpha = Math.min(0.7, scan * 0.7);
@@ -7510,7 +7548,7 @@ function applyVJEffectsToSource(video, width, height, tMs) {
     g.restore();
   });
 
-  const vig = getReactiveValue('vignette');
+  const vig = getReactiveValue('vignette', streamIndex);
   if (vig > 0.01) withEffectBlend(g, 'vignette', vig, () => {
     const grad = g.createRadialGradient(width/2, height/2, Math.min(width,height)*0.2, width/2, height/2, Math.max(width,height)*0.65);
     grad.addColorStop(0, 'rgba(0,0,0,0)');
@@ -7519,7 +7557,7 @@ function applyVJEffectsToSource(video, width, height, tMs) {
     g.fillRect(0, 0, width, height);
   });
 
-  const pix = getReactiveValue('pixelate');
+  const pix = getReactiveValue('pixelate', streamIndex);
   if (pix > 0.01) withEffectBlend(g, 'pixelate', pix, () => {
     const scale = Math.max(0.03, 1 - pix * 0.94);
     const sw = Math.max(16, Math.floor(width * scale));
@@ -7534,7 +7572,7 @@ function applyVJEffectsToSource(video, width, height, tMs) {
     g.imageSmoothingEnabled = true;
   });
 
-  const kal = getReactiveValue('kaleido');
+  const kal = getReactiveValue('kaleido', streamIndex);
   if (kal > 0.01) withEffectBlend(g, 'kaleido', kal, () => {
     g.save();
     g.globalAlpha = Math.min(0.7, kal * 0.75);
@@ -7548,7 +7586,7 @@ function applyVJEffectsToSource(video, width, height, tMs) {
     g.restore();
   });
 
-  const trail = getReactiveValue('trail');
+  const trail = getReactiveValue('trail', streamIndex);
   if (trail > 0.01 && vjFeedbackCtx && vjFeedbackCanvas) withEffectBlend(g, 'trail', trail, () => {
     vjFeedbackCtx.globalAlpha = Math.min(0.96, trail);
     vjFeedbackCtx.drawImage(vjFeedbackCanvas, 0, 0);
@@ -7620,8 +7658,7 @@ function renderVJFrameCore(tMs = performance.now()) {
   // Render clean output (no pins) for monitor and capture.
   vjOutputCtx.fillStyle = '#000';
   vjOutputCtx.fillRect(0, 0, w, h);
-  applyVJEffectsToSource(vid, w, h, tMs);
-  drawStreamMosaic(vjOutputCtx, vjSourceCanvas, w, h);
+  drawStreamMosaic(vjOutputCtx, vid, w, h, tMs);
 
   // Preview mirrors output then overlays editable pins.
   vjPreviewCtx.fillStyle = '#000';
@@ -7782,6 +7819,7 @@ function showVJWindowToggle() {
     vjControls.streamActiveIndex = 0;
     vjControls.streamPins = Array.from({ length: 8 }, () => ([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]));
     vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
+    vjControls.streamFx = Array.from({ length: 8 }, () => createVJDefaultFxProfile());
     persistVJControls();
     syncVJControlsToUI();
   });
@@ -7899,6 +7937,9 @@ function showVJWindowToggle() {
   };
   refreshActiveStreamSel();
 
+  const getActiveStreamIndex = () => Math.max(0, Math.min(7, Number(vjControls.streamActiveIndex) || 0));
+  const getActiveStreamFx = () => getVJStreamFxProfile(getActiveStreamIndex());
+
   const activeBlendSel = document.createElement('select');
   activeBlendSel.className = 'looper-btn';
   streamBlendModes.forEach(m => activeBlendSel.add(new Option(`Blend: ${m}`, m)));
@@ -7933,12 +7974,14 @@ function showVJWindowToggle() {
     resetAllStreamPinsLayout();
     refreshActiveStreamSel();
     syncActiveBlend();
+    syncVJControlsToUI();
     persistVJControls();
   });
 
   activeStreamSel.addEventListener('change', () => {
     vjControls.streamActiveIndex = Math.max(0, Number(activeStreamSel.value) || 0);
     syncActiveBlend();
+    syncVJControlsToUI();
     persistVJControls();
   });
 
@@ -7967,15 +8010,28 @@ function showVJWindowToggle() {
 
     const l = document.createElement('span'); l.textContent = d.label;
     const inp = document.createElement('input');
-    inp.type = 'range'; inp.min = String(d.min); inp.max = String(d.max); inp.step = String(d.step); inp.value = String(vjControls[d.key]);
+    const fxProfile = getActiveStreamFx();
+    inp.type = 'range'; inp.min = String(d.min); inp.max = String(d.max); inp.step = String(d.step); inp.value = String(fxProfile[d.key] ?? vjControls[d.key]);
     const val = document.createElement('span');
     const fmt = (v) => (Math.abs(d.step - 1) < 1e-9 ? `${Math.round(v)}` : `${Number(v).toFixed(2)}`);
-    val.textContent = fmt(vjControls[d.key]);
+    val.textContent = fmt(fxProfile[d.key] ?? vjControls[d.key]);
     inp.addEventListener('input', () => {
-      const v = Number(inp.value); vjControls[d.key] = v; val.textContent = fmt(v); persistVJControls();
+      const v = Number(inp.value);
+      const idx = getActiveStreamIndex();
+      const fx = getVJStreamFxProfile(idx);
+      fx[d.key] = v;
+      if (idx === 0) vjControls[d.key] = v;
+      val.textContent = fmt(v);
+      persistVJControls();
     });
     inp.addEventListener('dblclick', () => {
-      vjControls[d.key] = d.def; inp.value = String(d.def); val.textContent = fmt(d.def); persistVJControls();
+      const idx = getActiveStreamIndex();
+      const fx = getVJStreamFxProfile(idx);
+      fx[d.key] = d.def;
+      if (idx === 0) vjControls[d.key] = d.def;
+      inp.value = String(d.def);
+      val.textContent = fmt(d.def);
+      persistVJControls();
     });
 
     const reactSel = document.createElement('select');
@@ -8014,8 +8070,14 @@ function showVJWindowToggle() {
 
   const mirrorRow = document.createElement('div');
   mirrorRow.style.display = 'flex'; mirrorRow.style.alignItems = 'center'; mirrorRow.style.gap = '8px';
-  const mirrorChk = document.createElement('input'); mirrorChk.type = 'checkbox'; mirrorChk.checked = !!vjControls.mirror;
-  mirrorChk.addEventListener('change', () => { vjControls.mirror = mirrorChk.checked; persistVJControls(); });
+  const mirrorChk = document.createElement('input'); mirrorChk.type = 'checkbox'; mirrorChk.checked = !!getActiveStreamFx().mirror;
+  mirrorChk.addEventListener('change', () => {
+    const idx = getActiveStreamIndex();
+    const fx = getVJStreamFxProfile(idx);
+    fx.mirror = mirrorChk.checked;
+    if (idx === 0) vjControls.mirror = mirrorChk.checked;
+    persistVJControls();
+  });
   const mirrorLbl = document.createElement('span'); mirrorLbl.textContent = 'Mirror horizontal';
   mirrorRow.appendChild(mirrorChk); mirrorRow.appendChild(mirrorLbl);
   vjContentWrap.appendChild(mirrorRow);
@@ -8027,10 +8089,11 @@ function showVJWindowToggle() {
     syncActiveBlend();
     syncTextBtn();
     textInp.value = vjControls.textPhrase || '';
-    mirrorChk.checked = !!vjControls.mirror;
+    mirrorChk.checked = !!getActiveStreamFx().mirror;
     syncRatioBtn();
     effectBindings.forEach(({ def, inp, val, reactSel, midiInp, blendSel }) => {
-      const v = Number(vjControls[def.key] ?? def.def);
+      const activeFx = getActiveStreamFx();
+      const v = Number(activeFx[def.key] ?? vjControls[def.key] ?? def.def);
       inp.value = String(v);
       val.textContent = Math.abs(def.step - 1) < 1e-9 ? `${Math.round(v)}` : `${v.toFixed(2)}`;
       reactSel.value = vjControls.reactive[def.key] || 'off';
