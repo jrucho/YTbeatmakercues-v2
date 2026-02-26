@@ -716,6 +716,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         streamPins: [],
         streamActiveIndex: 0,
         streamBlendMap: Array.from({ length: 8 }, () => 'source-over'),
+        preserveAspectRatio: true,
         corners: [
           { x: 0.0, y: 0.0 },
           { x: 1.0, y: 0.0 },
@@ -7132,6 +7133,7 @@ function ensureVJDefaults() {
   if (!vjControls.effectBlend || typeof vjControls.effectBlend !== 'object') vjControls.effectBlend = {};
   if (!Array.isArray(vjControls.streamPins)) vjControls.streamPins = [];
   if (!Array.isArray(vjControls.streamBlendMap)) vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
+  if (typeof vjControls.preserveAspectRatio !== 'boolean') vjControls.preserveAspectRatio = true;
   if (!Number.isFinite(vjControls.streamCount)) vjControls.streamCount = 1;
   if (!Number.isFinite(vjControls.streamActiveIndex)) vjControls.streamActiveIndex = 0;
   defs.forEach((d, i) => {
@@ -7185,6 +7187,7 @@ function ensureVJCanvases() {
   if (!vid) return false;
   const w = Math.max(320, vid.videoWidth || 1280);
   const h = Math.max(180, vid.videoHeight || 720);
+  const ratio = `${w} / ${h}`;
   if (!vjSourceCanvas) {
     vjSourceCanvas = document.createElement('canvas');
     vjSourceCtx = vjSourceCanvas.getContext('2d', { alpha: false });
@@ -7201,6 +7204,7 @@ function ensureVJCanvases() {
     vjPreviewCanvas.width = w;
     vjPreviewCanvas.height = h;
   }
+  if (vjPreviewCanvas.style.aspectRatio !== ratio) vjPreviewCanvas.style.aspectRatio = ratio;
   if (vjOutputCanvas.width !== w || vjOutputCanvas.height !== h) {
     vjOutputCanvas.width = w;
     vjOutputCanvas.height = h;
@@ -7213,7 +7217,43 @@ function ensureVJCanvases() {
     vjFeedbackCanvas.width = w;
     vjFeedbackCanvas.height = h;
   }
+  if (vjPreviewCtx) {
+    vjPreviewCtx.imageSmoothingEnabled = true;
+    vjPreviewCtx.imageSmoothingQuality = 'high';
+  }
+  if (vjOutputCtx) {
+    vjOutputCtx.imageSmoothingEnabled = true;
+    vjOutputCtx.imageSmoothingQuality = 'high';
+  }
+  if (vjSourceCtx) {
+    vjSourceCtx.imageSmoothingEnabled = true;
+    vjSourceCtx.imageSmoothingQuality = 'high';
+  }
   return true;
+}
+
+function drawVJVideoFrame(g, video, x, y, width, height) {
+  if (!video || !width || !height) return;
+  const srcW = Math.max(1, Number(video.videoWidth) || width);
+  const srcH = Math.max(1, Number(video.videoHeight) || height);
+  const srcRatio = srcW / srcH;
+  const dstRatio = width / height;
+
+  if (!vjControls.preserveAspectRatio) {
+    g.drawImage(video, x, y, width, height);
+    return;
+  }
+
+  let drawW = width;
+  let drawH = height;
+  if (srcRatio > dstRatio) {
+    drawH = width / srcRatio;
+  } else {
+    drawW = height * srcRatio;
+  }
+  const ox = x + (width - drawW) / 2;
+  const oy = y + (height - drawH) / 2;
+  g.drawImage(video, ox, oy, drawW, drawH);
 }
 
 function ensureVJAnalyser() {
@@ -7384,7 +7424,7 @@ function applyVJEffectsToSource(video, width, height, tMs) {
   g.translate(width / 2, height / 2);
   g.rotate((rotate * Math.PI) / 180);
   g.scale((vjControls.mirror ? -1 : 1) * zoom, zoom);
-  g.drawImage(video, -width / 2, -height / 2, width, height);
+  drawVJVideoFrame(g, video, -width / 2, -height / 2, width, height);
   g.restore();
 
   const glitch = getReactiveValue('glitch');
@@ -7702,6 +7742,40 @@ function showVJWindowToggle() {
   });
   topRow.appendChild(resetFxBtn);
 
+  const ratioBtn = document.createElement('button');
+  ratioBtn.className = 'looper-btn';
+  ratioBtn.style.flex = '1 1 auto';
+  const syncRatioBtn = () => {
+    ratioBtn.textContent = vjControls.preserveAspectRatio ? 'Ratio: Preserve' : 'Ratio: Fill';
+  };
+  syncRatioBtn();
+  ratioBtn.addEventListener('click', () => {
+    vjControls.preserveAspectRatio = !vjControls.preserveAspectRatio;
+    syncRatioBtn();
+    persistVJControls();
+  });
+  topRow.appendChild(ratioBtn);
+
+  const ratioResetBtn = document.createElement('button');
+  ratioResetBtn.className = 'looper-btn';
+  ratioResetBtn.style.flex = '1 1 auto';
+  ratioResetBtn.textContent = 'Reset Ratio';
+  ratioResetBtn.addEventListener('click', () => {
+    vjControls.preserveAspectRatio = true;
+    syncRatioBtn();
+    persistVJControls();
+  });
+  topRow.appendChild(ratioResetBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'looper-btn';
+  closeBtn.style.flex = '0 0 auto';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', () => {
+    if (vjWindowContainer) vjWindowContainer.style.display = 'none';
+  });
+  topRow.appendChild(closeBtn);
+
   vjContentWrap.appendChild(topRow);
 
   const previewSticky = document.createElement('div');
@@ -7909,6 +7983,7 @@ function showVJWindowToggle() {
     syncTextBtn();
     textInp.value = vjControls.textPhrase || '';
     mirrorChk.checked = !!vjControls.mirror;
+    syncRatioBtn();
     effectBindings.forEach(({ def, inp, val, reactSel, midiInp, blendSel }) => {
       const v = Number(vjControls[def.key] ?? def.def);
       inp.value = String(v);
@@ -9003,6 +9078,13 @@ function onKeyDown(e) {
   }
 
   const k = e.key.toLowerCase();
+
+  // Cmd/Ctrl+Y toggles the VJ module window.
+  if ((e.metaKey || e.ctrlKey) && !e.altKey && k === 'y') {
+    e.preventDefault();
+    showVJWindowToggle();
+    return;
+  }
 
   if (e.altKey && (e.metaKey || e.ctrlKey)) {
     let handled = false;
