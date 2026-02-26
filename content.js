@@ -7409,11 +7409,16 @@ function drawStreamMosaic(ctx, video, width, height, tMs) {
     const quad = (vjControls.streamPins && vjControls.streamPins[i]) ? vjControls.streamPins[i] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
     const fxIndex = vjControls.sharedFxRack ? 0 : i;
     const mappedCues = vjControls.streamCueMap?.[i] || [];
+    const hasCueMapping = mappedCues.length > 0;
     const player = vjStreamPlayers[i];
     const playerReady = !!(player && player.readyState >= 2 && (player.currentSrc || player.src));
-    const mode = vjControls.streamTriggerMode?.[i] === 'legato' ? 'legato' : 'gate';
-    const playerActive = !!(playerReady && (!player.paused || mode === 'legato'));
-    const streamVideo = (mappedCues.length > 0 && playerActive) ? player : video;
+    const playerActive = !!(playerReady && !player.paused && !player.ended);
+
+    // If a stream has cue mappings, only render it while its mapped player is actively playing.
+    // This keeps non-triggered mapped streams hidden instead of showing fallback video.
+    if (hasCueMapping && !playerActive) continue;
+
+    const streamVideo = hasCueMapping ? player : video;
     applyVJEffectsToSource(streamVideo, width, height, tMs, fxIndex);
     ctx.save();
     ctx.globalCompositeOperation = blend;
