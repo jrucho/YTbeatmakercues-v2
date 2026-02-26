@@ -22,6 +22,15 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.2
+- Added a new **VJ Module** for live visuals: open a dedicated panel, route up to 8 streams, and process them through a canvas-based effect pipeline in realtime.
+- Added **4-corner pin mapping** per stream so each source can be perspective-mapped and composed as a live mosaic.
+- Added a **VJ monitor output** popup with fullscreen shortcut support so visuals can be sent to a separate screen/projector.
+- Added **reactive FX modulation** driven by analyser bands (low/mid/high/full) for audio-responsive visuals.
+- Added **MIDI-mappable VJ effects** and text-sequence toggles for performance workflows.
+- Improved Advanced panel organization by grouping packs-related controls (packs, MIDI device selector, drum selectors) under **Packs (Advanced)**.
+- Hardened device dropdown initialization so output/input/monitor selects always show valid default options when previously saved IDs are stale.
+
 ## New in 2.1.2
 - Overdub loop recording is now locked to exact loop-cycle boundaries with sample-accurate recorder start/stop timing to reduce intermittent drift.
 - Improved second-layer overdub reliability: the recorder now captures and applies audio using tighter boundary handling to avoid random gaps/click-like "gasp" moments.
