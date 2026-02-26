@@ -10216,6 +10216,19 @@ function addControls() {
 
   buildSamplePackDropdown();
 
+  const packsModuleWrap = document.createElement("div");
+  packsModuleWrap.className = "ytbm-packs-module";
+  packsModuleWrap.style.display = "flex";
+  packsModuleWrap.style.flexDirection = "column";
+  packsModuleWrap.style.gap = "6px";
+  packsModuleWrap.style.marginBottom = "8px";
+  const packsModuleTitle = document.createElement("span");
+  packsModuleTitle.className = "ytbm-panel-label";
+  packsModuleTitle.textContent = "Packs (Advanced)";
+  packsModuleWrap.appendChild(packsModuleTitle);
+  if (packBar) packsModuleWrap.appendChild(packBar);
+  cw.appendChild(packsModuleWrap);
+
   buildOutputDeviceDropdown(cw);
   buildMonitorInputDropdown(cw);
   buildMonitorToggle(cw);
@@ -10383,7 +10396,7 @@ function addControls() {
   midiInputRow.style.display = 'flex';
   midiInputRow.style.alignItems = 'center';
   midiInputRow.style.gap = '8px';
-  midiInputRow.style.marginBottom = '8px';
+  midiInputRow.style.marginBottom = '4px';
 
   const midiInputLabel = document.createElement('span');
   midiInputLabel.className = 'ytbm-panel-label';
@@ -10400,7 +10413,7 @@ function addControls() {
     attachMidiInputHandlers();
   });
   midiInputRow.appendChild(midiDeviceSelect);
-  cw.appendChild(midiInputRow);
+  packsModuleWrap.appendChild(midiInputRow);
   populateMidiInputSelect();
 
   const createSampleRow = (type, label) => {
@@ -10513,17 +10526,17 @@ function addControls() {
   };
 
   const kickControls = createSampleRow("kick", "Kick");
-  cw.appendChild(kickControls.container);
+  packsModuleWrap.appendChild(kickControls.container);
   kickFader = kickControls.fader;
   kickDBLabel = kickControls.dbLabel;
 
   const hihatControls = createSampleRow("hihat", "Hihat");
-  cw.appendChild(hihatControls.container);
+  packsModuleWrap.appendChild(hihatControls.container);
   hihatFader = hihatControls.fader;
   hihatDBLabel = hihatControls.dbLabel;
 
   const snareControls = createSampleRow("snare", "Snare");
-  cw.appendChild(snareControls.container);
+  packsModuleWrap.appendChild(snareControls.container);
   snareFader = snareControls.fader;
   snareDBLabel = snareControls.dbLabel;
 
@@ -13363,7 +13376,7 @@ function buildSamplePackDropdown() {
     if (contentWrap) {
       packBar.style.width = '100%';
       packBar.style.margin = '0 0 8px 0';
-      contentWrap.insertBefore(packBar, contentWrap.firstChild);
+      contentWrap.appendChild(packBar);
     } else {
       panelContainer.insertBefore(packBar, panelContainer.children[1]);
     }
