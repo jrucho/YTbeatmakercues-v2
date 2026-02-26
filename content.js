@@ -7384,7 +7384,6 @@ function ensureVJStreamPlayers(video) {
       player = document.createElement('video');
       player.playsInline = true;
       player.muted = true;
-      player.crossOrigin = 'anonymous';
       player.preload = 'auto';
       vjStreamPlayers[i] = player;
     }
@@ -7409,7 +7408,12 @@ function drawStreamMosaic(ctx, video, width, height, tMs) {
     const blend = vjControls.streamBlendMap?.[i] || 'source-over';
     const quad = (vjControls.streamPins && vjControls.streamPins[i]) ? vjControls.streamPins[i] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
     const fxIndex = vjControls.sharedFxRack ? 0 : i;
-    const streamVideo = vjStreamPlayers[i] || video;
+    const mappedCues = vjControls.streamCueMap?.[i] || [];
+    const player = vjStreamPlayers[i];
+    const playerReady = !!(player && player.readyState >= 2 && (player.currentSrc || player.src));
+    const mode = vjControls.streamTriggerMode?.[i] === 'legato' ? 'legato' : 'gate';
+    const playerActive = !!(playerReady && (!player.paused || mode === 'legato'));
+    const streamVideo = (mappedCues.length > 0 && playerActive) ? player : video;
     applyVJEffectsToSource(streamVideo, width, height, tMs, fxIndex);
     ctx.save();
     ctx.globalCompositeOperation = blend;
