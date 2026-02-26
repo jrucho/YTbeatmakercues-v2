@@ -3221,20 +3221,9 @@ function finalizeLoopBuffer(buf) {
 
   pushUndoState();
   let exactDur = buf.length / buf.sampleRate;
-  const shouldSyncToExistingLoop = !!baseLoopDuration && hasActiveSyncLoop();
-  if (shouldSyncToExistingLoop) {
-    const bars = Math.max(1, Math.round(exactDur / baseLoopDuration));
-    const target = bars * baseLoopDuration;
-    if (Math.abs(target - exactDur) > 0.0005) {
-      const frames = Math.round(target * buf.sampleRate);
-      const out = audioContext.createBuffer(buf.numberOfChannels, frames, buf.sampleRate);
-      for (let c = 0; c < buf.numberOfChannels; c++) {
-        out.getChannelData(c).set(buf.getChannelData(c).subarray(0, frames));
-      }
-      buf = out;
-    }
-    exactDur = target;
-  } else {
+  const hasAnyExistingAudioLoop = audioLoopBuffers.some((b, i) => !!b && i !== activeLoopIndex);
+  const shouldUseExistingMaster = !!baseLoopDuration && hasAnyExistingAudioLoop;
+  if (!shouldUseExistingMaster) {
     baseLoopDuration = exactDur;
     loopsBPM = Math.round((60 * 4) / baseLoopDuration);
   }
@@ -3694,7 +3683,7 @@ function loopProgressStep() {
         recMin.style.opacity = midiLoopStates[i] === 'recording' ? 1 : 0;
       }
     }
-    const showPulse = midiLoopStates.some(s => s === 'recording' || s === 'overdubbing');
+    const showPulse = shouldQuantizeActionsNow() && !shouldUseClipLauncherMode() && (midiLoopStates.some(s => s === 'recording' || s === 'overdubbing') || midiLoopPlaying.some(Boolean));
     if (looperPulseEl) looperPulseEl.style.opacity = showPulse ? pulse : 0;
     if (looperPulseElMin) looperPulseElMin.style.opacity = showPulse ? pulse : 0;
     return;
@@ -3733,7 +3722,7 @@ function loopProgressStep() {
         .forEach((el, idx) => el.style.opacity = active && idx === bar ? 1 : 0.3);
     }
   }
-  const showPulse = looperState === "recording" || looperState === "overdubbing";
+  const showPulse = shouldQuantizeActionsNow() && !shouldUseClipLauncherMode() && (looperState === "recording" || looperState === "overdubbing" || loopPlaying.some(Boolean));
   if (looperPulseEl) looperPulseEl.style.opacity = showPulse ? pulse : 0;
   if (looperPulseElMin) looperPulseElMin.style.opacity = showPulse ? pulse : 0;
 }
@@ -6476,10 +6465,10 @@ function playNewLoop(index) {
     if (pitchTarget === "loop") rate *= getCurrentPitchRate();
     src.playbackRate.value = rate;
     src.connect(g).connect(loopAudioGain);
-    const shouldSync = hasActiveSyncLoop();
+    const shouldSync = shouldQuantizeActionsNow() && hasActiveSyncLoop();
     const when = shouldSync ? getNextLoopCycleTime(audioContext.currentTime + PLAY_PADDING) : (audioContext.currentTime + PLAY_PADDING);
     src.start(when);
-    if (!hasActiveSyncLoop()) {
+    if (!shouldSync || !hasActiveSyncLoop()) {
       if (!clock.isRunning) {
         clock.start(when);
       }
@@ -6508,10 +6497,10 @@ function playSingleLoop(index, startTime = null, offset = 0) {
     if (pitchTarget === "loop") rate *= getCurrentPitchRate();
     src.playbackRate.value = rate;
     src.connect(g).connect(loopAudioGain);
-    const when = startTime !== null ? startTime : (hasActiveSyncLoop() ? getNextLoopCycleTime(audioContext.currentTime + PLAY_PADDING) : audioContext.currentTime);
+    const when = startTime !== null ? startTime : ((shouldQuantizeActionsNow() && hasActiveSyncLoop()) ? getNextLoopCycleTime(audioContext.currentTime + PLAY_PADDING) : audioContext.currentTime);
     const off = Math.max(0, offset % (audioLoopBuffers[index].duration || 1e-6));
     src.start(when, off);
-    if (!hasActiveSyncLoop()) {
+    if (!shouldQuantizeActionsNow() || !hasActiveSyncLoop()) {
       if (!clock.isRunning) {
         clock.start(when);
       }
@@ -6535,7 +6524,7 @@ function schedulePlayLoop(index) {
     if (!audioContext) return;
     if (pendingStopTimeouts[index]) { clearTimeout(pendingStopTimeouts[index]); pendingStopTimeouts[index] = null; }
     let when = audioContext.currentTime + PLAY_PADDING;
-    if (hasActiveSyncLoop() && baseLoopDuration && loopStartAbsoluteTime) {
+    if (shouldQuantizeActionsNow() && hasActiveSyncLoop() && baseLoopDuration && loopStartAbsoluteTime) {
       when = getNextLoopCycleTime(when);
     }
     playSingleLoop(index, when, 0);
@@ -9642,11 +9631,10 @@ function makeClipMeta(type, index, durationSeconds, explicitBars = null) {
 }
 
 function getAudioClipPlaybackRate(index) {
-  const meta = audioClipMeta[index];
-  if (!meta || !meta.origBpm) return audioLoopRates[index] || 1;
-  const rate = (getCurrentSessionBpm() / Math.max(1, Number(meta.origBpm))) * (audioLoopRates[index] || 1);
+  const rate = audioLoopRates[index] || 1;
   if (looperDebugEnabled && shouldUseClipLauncherMode()) {
-    console.log('[YTBM Clip Audio]', { index, origBpm: meta.origBpm, sessionBpm: getCurrentSessionBpm(), playbackRate: rate });
+    const meta = audioClipMeta[index] || null;
+    console.log('[YTBM Clip Audio]', { index, origBpm: meta?.origBpm || null, sessionBpm: getCurrentSessionBpm(), playbackRate: rate, autoWarp: false });
   }
   return rate;
 }
@@ -9719,6 +9707,30 @@ function quantizedStopOtherMidiLoops(targetIndex) {
   }
 }
 
+function stopAllAudioLoopsTriggeredByDoublePress() {
+  const active = [];
+  for (let i = 0; i < MAX_AUDIO_LOOPS; i++) if (loopPlaying[i] || loopSources[i]) active.push(i);
+  if (!active.length) return;
+  if (shouldQuantizeActionsNow()) {
+    active.forEach((i) => scheduleQuantizedTrackAction('audio', i, 'clipStop', () => stopLoop(i), { unit: 'bar' }));
+  } else {
+    active.forEach((i) => stopLoop(i));
+  }
+}
+
+function stopAllMidiLoopsTriggeredByDoublePress() {
+  const active = [];
+  for (let i = 0; i < MAX_MIDI_LOOPS; i++) {
+    if (midiLoopStates[i] === 'playing' || midiLoopStates[i] === 'overdubbing' || midiLoopPlaying[i]) active.push(i);
+  }
+  if (!active.length) return;
+  if (shouldQuantizeActionsNow()) {
+    active.forEach((i) => scheduleQuantizedTrackAction('midi', i, 'clipStop', () => stopMidiLoop(i), { unit: 'bar' }));
+  } else {
+    active.forEach((i) => stopMidiLoop(i));
+  }
+}
+
 function onLooperButtonMouseDown(e) {
   if (useMidiLoopers) {
     if (e && e.metaKey && e.altKey) {
@@ -9780,8 +9792,7 @@ function onLooperButtonMouseDown(e) {
   if (delta < clickDelay) {
     isDoublePress = true;
     doublePressHoldStartTime = now;
-    if (shouldQuantizeActionsNow()) scheduleQuantizedTrackAction('audio', activeLoopIndex, 'clipStop', () => stopLoop(activeLoopIndex), { unit: 'bar' });
-    else stopLoop(activeLoopIndex);
+    stopAllAudioLoopsTriggeredByDoublePress();
 
     if (looperHoldTimer) clearTimeout(looperHoldTimer);
     looperHoldTimer = setTimeout(() => {
@@ -9918,8 +9929,7 @@ function onMidiLooperButtonMouseDown() {
       midiOverdubStartTimeouts[idx] = null;
     }
     if (midiLoopStates[idx] === 'overdubbing') midiLoopStates[idx] = 'playing';
-    if (shouldQuantizeActionsNow()) scheduleQuantizedTrackAction('midi', idx, 'clipStop', () => stopMidiLoop(idx), { unit: 'bar' });
-    else stopMidiLoop(idx);
+    stopAllMidiLoopsTriggeredByDoublePress();
     updateLooperButtonColor();
 
     if (midiLooperHoldTimer) clearTimeout(midiLooperHoldTimer);
