@@ -3591,37 +3591,13 @@ function showLooperToast(message = 'Stop armed for next bar') {
 function getDoublePressTargetIndexes(type = 'audio') {
   const max = type === 'audio' ? MAX_AUDIO_LOOPS : MAX_MIDI_LOOPS;
   const active = type === 'audio' ? activeLoopIndex : activeMidiLoopIndex;
-  if (looperDoublePressTargetMode === 'active') return [Math.max(0, Math.min(max - 1, active))];
-  const out = [];
-  for (let i = 0; i < max; i++) {
-    if (type === 'audio') {
-      if (loopPlaying[i] || loopSources[i]) out.push(i);
-    } else if (midiLoopStates[i] === 'playing' || midiLoopStates[i] === 'overdubbing' || midiLoopPlaying[i]) {
-      out.push(i);
-    }
-  }
-  return out;
+  return [Math.max(0, Math.min(max - 1, active))];
 }
 
 function updateLooperModeIndicators() {
-  if (looperSyncBadgeEl) {
-    looperSyncBadgeEl.textContent = shouldQuantizeActionsNow() ? 'SYNC' : 'FREE';
-    looperSyncBadgeEl.style.background = shouldQuantizeActionsNow() ? 'rgba(76,175,80,0.28)' : 'rgba(255,255,255,0.12)';
-    looperSyncBadgeEl.style.borderColor = shouldQuantizeActionsNow() ? 'rgba(76,175,80,0.45)' : 'rgba(255,255,255,0.25)';
-  }
-  if (looperDoublePressModeBtn) {
-    looperDoublePressModeBtn.textContent = looperDoublePressTargetMode === 'active' ? 'Double Press: Active' : 'Double Press: All';
-  }
-  if (looperDebugBoundaryEl) {
-    if (!shouldQuantizeActionsNow() || !audioContext) {
-      looperDebugBoundaryEl.textContent = 'Next boundary: -- (FREE mode)';
-    } else {
-      const now = audioContext.currentTime + PLAY_PADDING;
-      const next = transport.nextQuantizedTime(now, 'bar');
-      const delta = Math.max(0, next - audioContext.currentTime).toFixed(2);
-      looperDebugBoundaryEl.textContent = `Next boundary: t+${delta}s`;
-    }
-  }
+  if (looperSyncBadgeEl) looperSyncBadgeEl.style.display = 'none';
+  if (looperDoublePressModeBtn) looperDoublePressModeBtn.style.display = 'none';
+  if (looperDebugBoundaryEl) looperDebugBoundaryEl.style.display = 'none';
 }
 
 function updateLooperButtonColor() {
@@ -9667,11 +9643,12 @@ function playUserSample(us) {
 
 
 function getCurrentPerformanceMode() {
-  return looperPerformanceMode === 'clip' ? 'clip' : 'loopstation';
+  // Legacy looper behavior: keep loopstation semantics.
+  return 'loopstation';
 }
 
 function shouldUseClipLauncherMode() {
-  return getCurrentPerformanceMode() === 'clip';
+  return false;
 }
 
 function getBeatsPerBar() {
@@ -9726,46 +9703,27 @@ function cancelScheduledTrackActions(type, index) {
 }
 
 function shouldQuantizeActionsNow() {
-  return !!syncedFourLooperMode;
+  // Legacy looper behavior: FREE/immediate actions for audio+midi loopers.
+  return false;
 }
 
 function scheduleQuantizedTrackAction(type, index, actionName, fn, opts = {}) {
-  const syncMode = shouldQuantizeActionsNow();
-  const shouldQuantize = opts.forceQuantized === true
-    || (syncMode && opts.immediate !== true)
-    || opts.quantize === true;
-
-  if (!shouldQuantize) {
-    const now = audioContext ? audioContext.currentTime : performance.now() / 1000;
-    const track = looperManager.getTrack(type, index);
-    if (track) track.armedAction = actionName;
-    try {
-      fn(now, track);
-    } finally {
-      if (track) track.armedAction = null;
-    }
-    return null;
+  const now = audioContext ? audioContext.currentTime : performance.now() / 1000;
+  const track = looperManager.getTrack(type, index);
+  if (track) track.armedAction = actionName;
+  try {
+    fn(now, track);
+  } finally {
+    if (track) track.armedAction = null;
   }
-
-  if (syncMode && audioContext && !transport.isPlaying) {
-    transport.clock.start(audioContext.currentTime);
-    if (looperDebugEnabled) {
-      console.log('[YTBM Transport] sync anchor started', {
-        anchorTime: transport.clock.startTime,
-        bpm: transport.bpm,
-        quantize: transport.quantizeUnit
-      });
-    }
-  }
-
-  return looperManager.scheduleTrackAction(type, index, actionName, fn, opts);
+  return null;
 }
 
 function quantizedStopOtherAudioLoops(targetIndex) {
   for (let i = 0; i < MAX_AUDIO_LOOPS; i++) {
     if (i === targetIndex) continue;
     if (loopPlaying[i] || loopSources[i]) {
-      scheduleQuantizedTrackAction('audio', i, 'clipStop', () => stopLoopImmediately(i), { unit: 'bar' });
+      stopLoopImmediately(i);
     }
   }
 }
@@ -9774,7 +9732,7 @@ function quantizedStopOtherMidiLoops(targetIndex) {
   for (let i = 0; i < MAX_MIDI_LOOPS; i++) {
     if (i === targetIndex) continue;
     if (midiLoopStates[i] === 'playing' || midiLoopStates[i] === 'overdubbing') {
-      scheduleQuantizedTrackAction('midi', i, 'clipStop', () => stopMidiLoop(i), { unit: 'bar' });
+      stopMidiLoop(i);
     }
   }
 }
@@ -10881,8 +10839,8 @@ function addControls() {
   syncSyncedLoopersBtn();
   syncedLoopersBtn.title = 'When enabled, loopers A/B/C/D stay layered and synced instead of switching exclusively.';
   syncedLoopersBtn.addEventListener('click', () => {
-    syncedFourLooperMode = !syncedFourLooperMode;
-    localStorage.setItem('ytbm_syncedFourLooperMode', syncedFourLooperMode ? '1' : '0');
+    syncedFourLooperMode = false;
+    localStorage.setItem('ytbm_syncedFourLooperMode', '0');
     syncSyncedLoopersBtn();
     updateLooperModeIndicators();
   });
@@ -10910,7 +10868,7 @@ function addControls() {
   syncPerfModeBtn();
   perfModeBtn.title = 'Switch between quantized loopstation behavior and clip-launcher behavior.';
   perfModeBtn.addEventListener('click', () => {
-    looperPerformanceMode = getCurrentPerformanceMode() === 'clip' ? 'loopstation' : 'clip';
+    looperPerformanceMode = 'loopstation';
     localStorage.setItem('ytbm_looperPerformanceMode', looperPerformanceMode);
     looperManager.setMode(looperPerformanceMode);
     syncPerfModeBtn();
