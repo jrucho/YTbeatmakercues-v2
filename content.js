@@ -7346,6 +7346,14 @@ function resetStreamPinsAt(index) {
   vjControls.streamPins[index] = layout[index] || layout[0];
 }
 
+function resetStreamPinCorner(streamIndex, cornerIndex) {
+  const layout = computeDefaultStreamPins(Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1)));
+  if (!vjControls.streamPins[streamIndex]) vjControls.streamPins[streamIndex] = layout[streamIndex] || layout[0];
+  const src = (layout[streamIndex] || layout[0] || [])[cornerIndex];
+  if (!src) return;
+  vjControls.streamPins[streamIndex][cornerIndex] = { x: src.x, y: src.y };
+}
+
 function drawStreamMosaic(ctx, sourceCanvas, width, height) {
   const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
   for (let i = 0; i < count; i++) {
@@ -7599,7 +7607,7 @@ function showVJWindowToggle() {
   vjWindowContainer.style.position = 'fixed';
   vjWindowContainer.style.top = '70px';
   vjWindowContainer.style.right = '30px';
-  vjWindowContainer.style.width = 'min(520px, 44vw)';
+  vjWindowContainer.style.width = 'min(620px, 50vw)';
   vjWindowContainer.style.maxHeight = '82vh';
   vjWindowContainer.style.zIndex = '999999';
   vjWindowContainer.style.display = 'flex';
@@ -7618,11 +7626,12 @@ function showVJWindowToggle() {
   vjContentWrap.style.gap = '8px';
   vjContentWrap.style.overflowY = 'auto';
   vjContentWrap.style.maxHeight = 'calc(82vh - 46px)';
+  vjContentWrap.style.paddingRight = '2px';
   vjWindowContainer.appendChild(vjContentWrap);
 
   const topRow = document.createElement('div');
   topRow.style.display = 'flex';
-  topRow.style.gap = '6px';
+  topRow.style.gap = '4px';
   topRow.style.flexWrap = 'wrap';
   const powerBtn = document.createElement('button');
   powerBtn.className = 'looper-btn';
@@ -7652,6 +7661,8 @@ function showVJWindowToggle() {
   });
   topRow.appendChild(resetMapBtn);
 
+  let syncVJControlsToUI = () => {};
+
   const resetFxBtn = document.createElement('button');
   resetFxBtn.className = 'looper-btn';
   resetFxBtn.style.flex = '1 1 auto';
@@ -7666,6 +7677,7 @@ function showVJWindowToggle() {
     vjControls.streamPins = Array.from({ length: 8 }, () => ([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]));
     vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
     persistVJControls();
+    syncVJControlsToUI();
   });
   topRow.appendChild(resetFxBtn);
 
@@ -7797,10 +7809,12 @@ function showVJWindowToggle() {
     { v: 'fullBoost', t: 'Full+' }
   ];
 
+  const effectBindings = [];
+
   defs.forEach((d) => {
     const row = document.createElement('div');
     row.style.display = 'grid';
-    row.style.gridTemplateColumns = '90px 1fr 48px 68px 54px 90px';
+    row.style.gridTemplateColumns = '78px minmax(120px,1fr) 44px 64px 48px 78px';
     row.style.gap = '6px';
     row.style.alignItems = 'center';
 
@@ -7819,12 +7833,17 @@ function showVJWindowToggle() {
 
     const reactSel = document.createElement('select');
     reactSel.className = 'looper-btn';
+    reactSel.style.width = '100%';
+    reactSel.style.minWidth = '0';
     reactiveModes.forEach(m => reactSel.add(new Option(m.t, m.v)));
     reactSel.value = vjControls.reactive[d.key] || 'off';
     reactSel.addEventListener('change', () => { vjControls.reactive[d.key] = reactSel.value; persistVJControls(); });
 
     const midiInp = document.createElement('input');
     midiInp.type = 'number'; midiInp.min = '0'; midiInp.max = '127'; midiInp.step = '1';
+    midiInp.style.width = '100%';
+    midiInp.style.minWidth = '0';
+    midiInp.style.boxSizing = 'border-box';
     midiInp.value = String(vjControls.midiNotes[d.key]);
     midiInp.title = 'MIDI note mapping';
     midiInp.addEventListener('change', () => {
@@ -7835,12 +7854,15 @@ function showVJWindowToggle() {
 
     const blendSel = document.createElement('select');
     blendSel.className = 'looper-btn';
+    blendSel.style.width = '100%';
+    blendSel.style.minWidth = '0';
     ['source-over','screen','multiply','overlay','lighten','difference'].forEach(m => blendSel.add(new Option(m, m)));
     blendSel.value = vjControls.effectBlend[d.key] || 'source-over';
     blendSel.addEventListener('change', () => { vjControls.effectBlend[d.key] = blendSel.value; persistVJControls(); });
 
     row.appendChild(l); row.appendChild(inp); row.appendChild(val); row.appendChild(reactSel); row.appendChild(midiInp); row.appendChild(blendSel);
     vjContentWrap.appendChild(row);
+    effectBindings.push({ def: d, inp, val, reactSel, midiInp, blendSel });
   });
 
   const mirrorRow = document.createElement('div');
@@ -7850,6 +7872,24 @@ function showVJWindowToggle() {
   const mirrorLbl = document.createElement('span'); mirrorLbl.textContent = 'Mirror horizontal';
   mirrorRow.appendChild(mirrorChk); mirrorRow.appendChild(mirrorLbl);
   vjContentWrap.appendChild(mirrorRow);
+
+  syncVJControlsToUI = () => {
+    streamCountSel.value = String(vjControls.streamCount || 1);
+    refreshActiveStreamSel();
+    activeStreamSel.value = String(Math.max(0, Math.min((vjControls.streamCount || 1) - 1, vjControls.streamActiveIndex || 0)));
+    syncActiveBlend();
+    syncTextBtn();
+    textInp.value = vjControls.textPhrase || '';
+    mirrorChk.checked = !!vjControls.mirror;
+    effectBindings.forEach(({ def, inp, val, reactSel, midiInp, blendSel }) => {
+      const v = Number(vjControls[def.key] ?? def.def);
+      inp.value = String(v);
+      val.textContent = Math.abs(def.step - 1) < 1e-9 ? `${Math.round(v)}` : `${v.toFixed(2)}`;
+      reactSel.value = vjControls.reactive[def.key] || 'off';
+      midiInp.value = String(vjControls.midiNotes[def.key] || 0);
+      blendSel.value = vjControls.effectBlend[def.key] || 'source-over';
+    });
+  };
 
   makePanelDraggable(vjWindowContainer, vjDragHandle, 'ytbm_vjWindowPos');
 
@@ -7889,6 +7929,17 @@ function showVJWindowToggle() {
       vjControls.streamActiveIndex = dragStream;
       activeStreamSel.value = String(dragStream);
       syncActiveBlend();
+    }
+  });
+  vjPreviewCanvas.addEventListener('dblclick', (evt) => {
+    const r = vjPreviewCanvas.getBoundingClientRect();
+    const picked = pickCorner(evt.clientX - r.left, evt.clientY - r.top);
+    if (picked.stream >= 0 && picked.corner >= 0) {
+      resetStreamPinCorner(picked.stream, picked.corner);
+      vjControls.streamActiveIndex = picked.stream;
+      activeStreamSel.value = String(picked.stream);
+      syncActiveBlend();
+      persistVJControls();
     }
   });
   window.addEventListener('mousemove', moveCorner);
