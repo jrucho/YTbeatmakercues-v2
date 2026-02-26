@@ -928,6 +928,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjContentWrap = null,
       vjPreviewCanvas = null,
       vjPreviewCtx = null,
+      vjOutputCanvas = null,
+      vjOutputCtx = null,
       vjSourceCanvas = null,
       vjSourceCtx = null,
       vjAnimationFrame = null,
@@ -7186,6 +7188,10 @@ function ensureVJCanvases() {
     vjSourceCanvas = document.createElement('canvas');
     vjSourceCtx = vjSourceCanvas.getContext('2d', { alpha: false });
   }
+  if (!vjOutputCanvas) {
+    vjOutputCanvas = document.createElement('canvas');
+    vjOutputCtx = vjOutputCanvas.getContext('2d', { alpha: false });
+  }
   if (!vjFeedbackCanvas) {
     vjFeedbackCanvas = document.createElement('canvas');
     vjFeedbackCtx = vjFeedbackCanvas.getContext('2d', { alpha: false });
@@ -7193,6 +7199,10 @@ function ensureVJCanvases() {
   if (vjPreviewCanvas.width !== w || vjPreviewCanvas.height !== h) {
     vjPreviewCanvas.width = w;
     vjPreviewCanvas.height = h;
+  }
+  if (vjOutputCanvas.width !== w || vjOutputCanvas.height !== h) {
+    vjOutputCanvas.width = w;
+    vjOutputCanvas.height = h;
   }
   if (vjSourceCanvas.width !== w || vjSourceCanvas.height !== h) {
     vjSourceCanvas.width = w;
@@ -7509,17 +7519,25 @@ function drawVJPinsOverlay(ctx, w, h) {
 
 function drawVJFrame(tMs = performance.now()) {
   vjAnimationFrame = requestAnimationFrame(drawVJFrame);
-  if (!ensureVJCanvases() || !vjPreviewCtx) return;
+  if (!ensureVJCanvases() || !vjPreviewCtx || !vjOutputCtx) return;
   const vid = getVideoElement();
   if (!vid) return;
   updateVJBandLevels();
   const w = vjPreviewCanvas.width, h = vjPreviewCanvas.height;
+
+  // Render clean output (no pins) for monitor and capture.
+  vjOutputCtx.fillStyle = '#000';
+  vjOutputCtx.fillRect(0, 0, w, h);
+  applyVJEffectsToSource(vid, w, h, tMs);
+  drawStreamMosaic(vjOutputCtx, vjSourceCanvas, w, h);
+
+  // Preview mirrors output then overlays editable pins.
   vjPreviewCtx.fillStyle = '#000';
   vjPreviewCtx.fillRect(0, 0, w, h);
-  applyVJEffectsToSource(vid, w, h, tMs);
-  drawStreamMosaic(vjPreviewCtx, vjSourceCanvas, w, h);
+  vjPreviewCtx.drawImage(vjOutputCanvas, 0, 0, w, h);
   drawVJPinsOverlay(vjPreviewCtx, w, h);
-  if (vjMonitorVideo && !vjMonitorVideo.srcObject && vjMonitorStream) {
+
+  if (vjMonitorVideo && vjMonitorStream && vjMonitorVideo.srcObject !== vjMonitorStream) {
     vjMonitorVideo.srcObject = vjMonitorStream;
     vjMonitorVideo.play().catch(() => {});
   }
@@ -7529,7 +7547,7 @@ function startVJRenderer() {
   ensureVJDefaults();
   ensureVJAnalyser();
   if (!vjPreviewCanvas || !vjPreviewCtx) return;
-  if (!vjMonitorStream) vjMonitorStream = vjPreviewCanvas.captureStream(30);
+  if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
   if (!vjAnimationFrame) vjAnimationFrame = requestAnimationFrame(drawVJFrame);
 }
 
@@ -7547,25 +7565,18 @@ function setupVJMonitorWindow() {
   if (!vjMonitorWindow) { alert('Unable to open monitor window. Please allow popups for this page.'); return; }
   const doc = vjMonitorWindow.document;
   doc.open();
-  doc.write(`<!doctype html><html><head><title>YTBM VJ Monitor</title><style>html,body{margin:0;background:#000;width:100%;height:100%;overflow:hidden}video{width:100%;height:100%;object-fit:contain;background:#000}.tools{position:fixed;right:8px;top:8px;display:flex;gap:6px}button{background:#111;color:#fff;border:1px solid #444;border-radius:6px;padding:6px 9px;cursor:pointer}</style></head><body><video id="m" autoplay muted playsinline></video><div class="tools"><button id="dl">Download frame</button></div></body></html>`);
+  doc.write(`<!doctype html><html><head><title>YTBM VJ Monitor</title><style>html,body{margin:0;background:#000;width:100%;height:100%;overflow:hidden}video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000;border:0;outline:none;}</style></head><body><video id="m" autoplay muted playsinline></video></body></html>`);
   doc.close();
   vjMonitorVideo = doc.getElementById('m');
   doc.addEventListener('keydown', (e) => {
     const k = (e.key || '').toLowerCase();
     if ((e.metaKey || e.ctrlKey) && k === 'f') {
       e.preventDefault();
-      if (!doc.fullscreenElement) doc.documentElement.requestFullscreen?.(); else doc.exitFullscreen?.();
+      const target = doc.getElementById('m') || doc.documentElement;
+      if (!doc.fullscreenElement) target.requestFullscreen?.(); else doc.exitFullscreen?.();
     }
   });
-  const dl = doc.getElementById('dl');
-  dl?.addEventListener('click', () => {
-    if (!vjPreviewCanvas) return;
-    const a = doc.createElement('a');
-    a.href = vjPreviewCanvas.toDataURL('image/png');
-    a.download = 'ytbm-vj-frame.png';
-    a.click();
-  });
-  if (!vjMonitorStream && vjPreviewCanvas) vjMonitorStream = vjPreviewCanvas.captureStream(30);
+  if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
   if (vjMonitorVideo && vjMonitorStream) {
     vjMonitorVideo.srcObject = vjMonitorStream;
     vjMonitorVideo.play().catch(() => {});
@@ -7911,7 +7922,7 @@ function getVideoCaptureStreamForLooper(videoElement) {
   if (!videoElement) return null;
   if (vjModuleEnabled && vjPreviewCanvas) {
     startVJRenderer();
-    if (!vjMonitorStream) vjMonitorStream = vjPreviewCanvas.captureStream(30);
+    if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
     return vjMonitorStream;
   }
   return videoElement.captureStream?.() || null;
