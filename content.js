@@ -7502,6 +7502,7 @@ function drawVJFrame(tMs = performance.now()) {
 }
 
 function startVJRenderer() {
+  if (!vjModuleEnabled) return;
   ensureVJDefaults();
   ensureVJAnalyser();
   if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
@@ -7528,6 +7529,10 @@ function stopVJRenderer() {
 }
 
 function setupVJMonitorWindow() {
+  if (!vjModuleEnabled) {
+    alert('Enable VJ FX first to project monitor output.');
+    return;
+  }
   if (!vjMonitorWindow || vjMonitorWindow.closed) {
     // Use about:blank popup and write into it to avoid data: top-frame navigation restrictions.
     vjMonitorWindow = window.open('', 'ytbm_vj_monitor', 'popup,width=960,height=540,toolbar=0,location=0,menubar=0,status=0');
@@ -7557,7 +7562,7 @@ function showVJWindowToggle() {
   if (vjWindowContainer) {
     const isOpen = vjWindowContainer.style.display !== 'none';
     vjWindowContainer.style.display = isOpen ? 'none' : 'block';
-    if (!isOpen) startVJRenderer();
+    if (!isOpen && vjModuleEnabled) startVJRenderer();
     return;
   }
 
@@ -7996,7 +8001,7 @@ function showVJWindowToggle() {
   window.addEventListener('mousemove', moveCorner);
   window.addEventListener('mouseup', () => { dragCorner = -1; dragStream = -1; });
 
-  startVJRenderer();
+  if (vjModuleEnabled) startVJRenderer();
 }
 
 function handleVJMidiNote(note, velocity, command) {
