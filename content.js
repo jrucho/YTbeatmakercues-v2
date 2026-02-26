@@ -7185,9 +7185,12 @@ function ensureVJCanvases() {
   if (!vjPreviewCanvas) return false;
   const vid = getVideoElement();
   if (!vid) return false;
-  const w = Math.max(320, vid.videoWidth || 1280);
-  const h = Math.max(180, vid.videoHeight || 720);
-  const ratio = `${w} / ${h}`;
+  // Keep a stable widescreen VJ stage while preserving input aspect inside it.
+  const stageRatio = 19 / 9;
+  const srcW = Math.max(320, vid.videoWidth || 1280);
+  const srcH = Math.max(180, vid.videoHeight || 720);
+  const w = Math.max(1140, srcW);
+  const h = Math.max(540, Math.round(w / stageRatio));
   if (!vjSourceCanvas) {
     vjSourceCanvas = document.createElement('canvas');
     vjSourceCtx = vjSourceCanvas.getContext('2d', { alpha: false });
@@ -7204,7 +7207,7 @@ function ensureVJCanvases() {
     vjPreviewCanvas.width = w;
     vjPreviewCanvas.height = h;
   }
-  if (vjPreviewCanvas.style.aspectRatio !== ratio) vjPreviewCanvas.style.aspectRatio = ratio;
+  if (vjPreviewCanvas.style.aspectRatio !== '19 / 9') vjPreviewCanvas.style.aspectRatio = '19 / 9';
   if (vjOutputCanvas.width !== w || vjOutputCanvas.height !== h) {
     vjOutputCanvas.width = w;
     vjOutputCanvas.height = h;
@@ -7630,7 +7633,7 @@ function setupVJMonitorWindow() {
   if (!vjMonitorWindow) { alert('Unable to open monitor window. Please allow popups for this page.'); return; }
   const doc = vjMonitorWindow.document;
   doc.open();
-  doc.write(`<!doctype html><html><head><title>YTBM VJ Monitor</title><style>html,body{margin:0;background:#000;width:100%;height:100%;overflow:hidden}video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000;border:0;outline:none;}</style></head><body><video id="m" autoplay muted playsinline></video></body></html>`);
+  doc.write(`<!doctype html><html><head><title>YTBM VJ Monitor</title><style>html,body{margin:0;background:#000;width:100%;height:100%;overflow:hidden}video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;background:#000;border:0;outline:none;}</style></head><body><video id="m" autoplay muted playsinline></video></body></html>`);
   doc.close();
   vjMonitorVideo = doc.getElementById('m');
   doc.addEventListener('keydown', (e) => {
@@ -7664,7 +7667,7 @@ function showVJWindowToggle() {
   vjWindowContainer.style.position = 'fixed';
   vjWindowContainer.style.top = '70px';
   vjWindowContainer.style.right = '30px';
-  vjWindowContainer.style.width = 'min(700px, 56vw)';
+  vjWindowContainer.style.width = 'min(560px, 44vw)';
   vjWindowContainer.style.maxHeight = '82vh';
   vjWindowContainer.style.zIndex = '999999';
   vjWindowContainer.style.display = 'flex';
@@ -7791,7 +7794,7 @@ function showVJWindowToggle() {
 
   vjPreviewCanvas = document.createElement('canvas');
   vjPreviewCanvas.style.width = '100%';
-  vjPreviewCanvas.style.aspectRatio = '16 / 9';
+  vjPreviewCanvas.style.aspectRatio = '19 / 9';
   vjPreviewCanvas.style.background = '#000';
   vjPreviewCanvas.style.border = '1px solid rgba(255,255,255,0.2)';
   vjPreviewCanvas.style.borderRadius = '6px';
