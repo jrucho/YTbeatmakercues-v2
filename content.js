@@ -7624,7 +7624,7 @@ function showVJWindowToggle() {
   vjWindowContainer.style.position = 'fixed';
   vjWindowContainer.style.top = '70px';
   vjWindowContainer.style.right = '30px';
-  vjWindowContainer.style.width = 'min(620px, 50vw)';
+  vjWindowContainer.style.width = 'min(700px, 56vw)';
   vjWindowContainer.style.maxHeight = '82vh';
   vjWindowContainer.style.zIndex = '999999';
   vjWindowContainer.style.display = 'flex';
@@ -7642,8 +7642,12 @@ function showVJWindowToggle() {
   vjContentWrap.style.flexDirection = 'column';
   vjContentWrap.style.gap = '8px';
   vjContentWrap.style.overflowY = 'auto';
+  vjContentWrap.style.overflowX = 'hidden';
   vjContentWrap.style.maxHeight = 'calc(82vh - 46px)';
-  vjContentWrap.style.paddingRight = '2px';
+  vjContentWrap.style.paddingRight = '6px';
+  vjContentWrap.style.position = 'relative';
+  vjContentWrap.style.background = '#171717';
+  vjContentWrap.style.borderRadius = '0 0 10px 10px';
   vjWindowContainer.appendChild(vjContentWrap);
 
   const topRow = document.createElement('div');
@@ -7703,9 +7707,12 @@ function showVJWindowToggle() {
   const previewSticky = document.createElement('div');
   previewSticky.style.position = 'sticky';
   previewSticky.style.top = '0';
-  previewSticky.style.zIndex = '3';
-  previewSticky.style.background = '#1b1b1b';
-  previewSticky.style.paddingBottom = '6px';
+  previewSticky.style.zIndex = '20';
+  previewSticky.style.background = '#151515';
+  previewSticky.style.paddingBottom = '8px';
+  previewSticky.style.paddingTop = '2px';
+  previewSticky.style.marginTop = '-2px';
+  previewSticky.style.boxShadow = '0 8px 14px rgba(0,0,0,0.45)';
   vjContentWrap.appendChild(previewSticky);
 
   vjPreviewCanvas = document.createElement('canvas');
@@ -7714,6 +7721,8 @@ function showVJWindowToggle() {
   vjPreviewCanvas.style.background = '#000';
   vjPreviewCanvas.style.border = '1px solid rgba(255,255,255,0.2)';
   vjPreviewCanvas.style.borderRadius = '6px';
+  vjPreviewCanvas.style.position = 'relative';
+  vjPreviewCanvas.style.zIndex = '21';
   previewSticky.appendChild(vjPreviewCanvas);
   vjPreviewCtx = vjPreviewCanvas.getContext('2d', { alpha: false });
 
@@ -7834,6 +7843,8 @@ function showVJWindowToggle() {
     row.style.gridTemplateColumns = '78px minmax(120px,1fr) 44px 64px 48px 78px';
     row.style.gap = '6px';
     row.style.alignItems = 'center';
+    row.style.position = 'relative';
+    row.style.zIndex = '1';
 
     const l = document.createElement('span'); l.textContent = d.label;
     const inp = document.createElement('input');
