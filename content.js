@@ -9693,7 +9693,7 @@ function quantizedStopOtherAudioLoops(targetIndex) {
   for (let i = 0; i < MAX_AUDIO_LOOPS; i++) {
     if (i === targetIndex) continue;
     if (loopPlaying[i] || loopSources[i]) {
-      scheduleQuantizedTrackAction('audio', i, 'clipStop', () => stopLoop(i), { unit: 'bar' });
+      scheduleQuantizedTrackAction('audio', i, 'clipStop', () => stopLoopImmediately(i), { unit: 'bar' });
     }
   }
 }
@@ -9708,13 +9708,14 @@ function quantizedStopOtherMidiLoops(targetIndex) {
 }
 
 function stopAllAudioLoopsTriggeredByDoublePress() {
+  // Double-press is a hard stop action: immediate in FREE, boundary-aligned in SYNC.
   const active = [];
   for (let i = 0; i < MAX_AUDIO_LOOPS; i++) if (loopPlaying[i] || loopSources[i]) active.push(i);
   if (!active.length) return;
   if (shouldQuantizeActionsNow()) {
-    active.forEach((i) => scheduleQuantizedTrackAction('audio', i, 'clipStop', () => stopLoop(i), { unit: 'bar' }));
+    active.forEach((i) => scheduleQuantizedTrackAction('audio', i, 'clipStop', () => stopLoopImmediately(i), { unit: 'bar' }));
   } else {
-    active.forEach((i) => stopLoop(i));
+    active.forEach((i) => stopLoopImmediately(i));
   }
 }
 
@@ -9874,7 +9875,7 @@ function singlePressAudioLooperAction() {
       }, { unit: 'bar' });
     } else {
       if (clipMode) {
-        scheduleQuantizedTrackAction('audio', activeLoopIndex, 'clipStop', () => stopLoop(activeLoopIndex), { unit: 'bar' });
+        scheduleQuantizedTrackAction('audio', activeLoopIndex, 'clipStop', () => stopLoopImmediately(activeLoopIndex), { unit: 'bar' });
       } else {
         scheduleQuantizedTrackAction('audio', activeLoopIndex, 'overdubToggle', () => toggleOverdub(), { unit: 'bar' });
       }
