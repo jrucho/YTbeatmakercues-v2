@@ -821,6 +821,9 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       midiMultiLaunch = false,
       audioMultiLaunch = false,
       syncedFourLooperMode = localStorage.getItem('ytbm_syncedFourLooperMode') === '1',
+      looperPerformanceMode = localStorage.getItem('ytbm_looperPerformanceMode') || 'loopstation',
+      looperDebugEnabled = localStorage.getItem('ytbm_looperDebug') === '1',
+      masterLoopLengthBeats = null,
       // 4-Bus Audio nodes
       audioContext = null,
       videoGain = null,
@@ -1128,6 +1131,157 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       refreshBpmDisplay();
     }
   });
+
+
+  // TRANSPORT + QUANTIZED SCHEDULER
+  class Transport {
+    constructor(clockRef) {
+      this.clock = clockRef;
+      this.quantizeUnit = 'bar';
+      this.quantizeBars = 1;
+      this.timeSig = clockRef.timeSig;
+    }
+
+    get bpm() { return this.clock.bpm; }
+    get isPlaying() { return this.clock.isRunning; }
+
+    beatDuration() { return this.clock.beatDuration(); }
+    barDuration() { return this.clock.barDuration(); }
+
+    nextQuantizedTime(fromTime = this.clock.getNow(), unit = this.quantizeUnit) {
+      if (!this.clock.isRunning) {
+        const startAt = fromTime + PLAY_PADDING;
+        this.clock.start(startAt);
+      }
+      if (unit === 'beat') return this.clock.nextBeatTime(fromTime);
+      const size = this.barDuration() * Math.max(1, this.quantizeBars);
+      const anchor = this.clock.startTime;
+      const elapsed = Math.max(0, fromTime - anchor);
+      const steps = Math.ceil(elapsed / size);
+      const t = anchor + steps * size;
+      return t <= fromTime + 1e-6 ? t + size : t;
+    }
+
+    toBeats(seconds) {
+      return seconds / this.beatDuration();
+    }
+
+    debug(...args) {
+      if (!looperDebugEnabled) return;
+      console.log('[YTBM Transport]', ...args);
+    }
+  }
+
+  class QuantizedScheduler {
+    constructor(transportRef) {
+      this.transport = transportRef;
+      this.pending = new Map();
+      this.counter = 1;
+    }
+
+    schedule(actionName, fn, { unit = 'bar', atTime = null } = {}) {
+      const id = this.counter++;
+      const now = audioContext ? audioContext.currentTime : performance.now() / 1000;
+      const targetTime = typeof atTime === 'number' ? atTime : this.transport.nextQuantizedTime(now + PLAY_PADDING, unit);
+      const delayMs = Math.max(0, (targetTime - now) * 1000);
+      const handle = setTimeout(() => {
+        this.pending.delete(id);
+        try { fn(targetTime); } catch (err) { console.warn('QuantizedScheduler action failed', actionName, err); }
+      }, delayMs);
+      this.pending.set(id, { actionName, targetTime, handle });
+      if (looperDebugEnabled) console.log('[YTBM Scheduler]', actionName, '->', targetTime.toFixed(4));
+      return id;
+    }
+
+    cancel(id) {
+      const p = this.pending.get(id);
+      if (!p) return;
+      clearTimeout(p.handle);
+      this.pending.delete(id);
+    }
+  }
+
+  class LooperTrack {
+    constructor({ id, type, index }) {
+      this.id = id;
+      this.type = type;
+      this.index = index;
+      this.state = 'EMPTY';
+      this.loopLengthBeats = 0;
+      this.loopStartTime = 0;
+      this.armedAction = null;
+      this.mode = 'loopstation';
+    }
+
+    setState(next, meta = '') {
+      const prev = this.state;
+      this.state = next;
+      if (looperDebugEnabled) {
+        console.log(`[YTBM Track ${this.id}] ${prev} -> ${next}`, meta);
+      }
+    }
+  }
+
+  class AudioLooperTrack extends LooperTrack {
+    constructor(opts) { super({ ...opts, type: 'audio' }); }
+  }
+
+  class MidiLooperTrack extends LooperTrack {
+    constructor(opts) { super({ ...opts, type: 'midi' }); }
+  }
+
+  class LooperManager {
+    constructor(transportRef, schedulerRef) {
+      this.transport = transportRef;
+      this.scheduler = schedulerRef;
+      this.audioTracks = Array.from({ length: MAX_AUDIO_LOOPS }, (_, i) => new AudioLooperTrack({ id: `audio-${i + 1}`, index: i }));
+      this.midiTracks = Array.from({ length: MAX_MIDI_LOOPS }, (_, i) => new MidiLooperTrack({ id: `midi-${i + 1}`, index: i }));
+      this.masterLoopLengthBeats = null;
+    }
+
+    getTrack(type, index) {
+      return (type === 'audio' ? this.audioTracks : this.midiTracks)[index] || null;
+    }
+
+    setMode(mode) {
+      const normalized = mode === 'clip' ? 'clip' : 'loopstation';
+      this.audioTracks.forEach(t => t.mode = normalized);
+      this.midiTracks.forEach(t => t.mode = normalized);
+    }
+
+    scheduleTrackAction(type, index, actionName, fn, opts = {}) {
+      const track = this.getTrack(type, index);
+      if (track) track.armedAction = actionName;
+      return this.scheduler.schedule(`${type}:${index}:${actionName}`, (t) => {
+        if (track) track.armedAction = null;
+        fn(t, track);
+      }, opts);
+    }
+
+    commitTrackLength(type, index, loopLengthBeats) {
+      const track = this.getTrack(type, index);
+      if (!track || !Number.isFinite(loopLengthBeats) || loopLengthBeats <= 0) return;
+      track.loopLengthBeats = loopLengthBeats;
+      if (!this.masterLoopLengthBeats) {
+        this.masterLoopLengthBeats = loopLengthBeats;
+        masterLoopLengthBeats = loopLengthBeats;
+      }
+    }
+
+    debugSnapshot() {
+      if (!looperDebugEnabled) return;
+      console.log('[YTBM LooperManager]', {
+        masterLoopLengthBeats: this.masterLoopLengthBeats,
+        audio: this.audioTracks.map(t => ({ id: t.id, st: t.state, len: t.loopLengthBeats, start: t.loopStartTime })),
+        midi: this.midiTracks.map(t => ({ id: t.id, st: t.state, len: t.loopLengthBeats, start: t.loopStartTime }))
+      });
+    }
+  }
+
+  const transport = new Transport(clock);
+  const quantizedScheduler = new QuantizedScheduler(transport);
+  const looperManager = new LooperManager(transport, quantizedScheduler);
+  looperManager.setMode(looperPerformanceMode === 'clip' ? 'clip' : 'loopstation');
 
   // LOOPER BASE
   class Looper {
@@ -3051,6 +3205,12 @@ function finalizeLoopBuffer(buf) {
     loopsBPM = Math.round((60 * 4) / baseLoopDuration);
   }
   loopDurations[activeLoopIndex] = exactDur;
+  looperManager.commitTrackLength('audio', activeLoopIndex, transport.toBeats(exactDur));
+  const managedAudioTrack = looperManager.getTrack('audio', activeLoopIndex);
+  if (managedAudioTrack) {
+    managedAudioTrack.loopStartTime = clock.startTime;
+    managedAudioTrack.setState('PLAYING', `lenBeats=${managedAudioTrack.loopLengthBeats.toFixed(2)}`);
+  }
   audioLoopRates[activeLoopIndex] = 1;
   audioLoopBuffers[activeLoopIndex] = buf;
   if (loopsBPM) {
@@ -6147,20 +6307,23 @@ function beginLoopRecording() {
 function startRecording() {
   ensureAudioContext().then(() => {
     if (!audioContext) return;
-    if (recordingNewLoop && looperState !== "idle" && baseLoopDuration) {
-      const now = audioContext.currentTime;
-      let d = baseLoopDuration;
-      if (pitchTarget === "loop") d /= getCurrentPitchRate();
-      const elapsed = (now - loopStartAbsoluteTime) % d;
-      const remain = d - elapsed;
-      if (newLoopStartTimeout) clearTimeout(newLoopStartTimeout);
-      newLoopStartTimeout = setTimeout(() => {
-        beginLoopRecording();
-      }, remain * 1000);
-    } else {
-      if (!recordingNewLoop && looperState !== "idle") return;
+    if (!recordingNewLoop && looperState !== "idle") return;
+    scheduleQuantizedTrackAction('audio', activeLoopIndex, 'recordStart', () => {
       beginLoopRecording();
-    }
+      const track = looperManager.getTrack('audio', activeLoopIndex);
+      if (track) {
+        track.loopStartTime = audioContext.currentTime;
+        track.setState('RECORDING', `start=${audioContext.currentTime.toFixed(4)}`);
+      }
+      if (looperManager.masterLoopLengthBeats && looperPerformanceMode !== 'clip') {
+        const secs = looperManager.masterLoopLengthBeats * transport.beatDuration();
+        setTimeout(() => {
+          if (looperState === 'recording' && activeLoopIndex === (track ? track.index : activeLoopIndex)) {
+            stopRecordingAndPlay();
+          }
+        }, Math.max(0, secs * 1000));
+      }
+    }, { unit: 'bar' });
   });
 }
 
@@ -6175,20 +6338,10 @@ function stopRecordingAndPlay() {
 function scheduleStopRecording() {
   ensureAudioContext().then(() => {
     if (!audioContext || looperState !== "recording") return;
-    const shouldSyncStop = !!baseLoopDuration && loopStartAbsoluteTime !== null && hasActiveSyncLoop();
-    if (!shouldSyncStop) {
-      stopRecordingAndPlay();
-      return;
-    }
-    let d = baseLoopDuration;
-    if (pitchTarget === "loop") d /= getCurrentPitchRate();
-    const now = audioContext.currentTime;
-    const elapsed = (now - loopStartAbsoluteTime) % d;
-    const remain = d - elapsed;
-    scheduledStopTime = now + remain;
-    setTimeout(() => {
-      if (looperState === "recording") stopRecordingAndPlay();
-    }, remain * 1000);
+    scheduleQuantizedTrackAction('audio', activeLoopIndex, 'recordStop', () => {
+      scheduledStopTime = audioContext.currentTime;
+      if (looperState === 'recording') stopRecordingAndPlay();
+    }, { unit: 'bar' });
   });
 }
 
@@ -8950,6 +9103,37 @@ function playUserSample(us) {
   });
 }
 
+
+function getCurrentPerformanceMode() {
+  return looperPerformanceMode === 'clip' ? 'clip' : 'loopstation';
+}
+
+function shouldUseClipLauncherMode() {
+  return getCurrentPerformanceMode() === 'clip';
+}
+
+function scheduleQuantizedTrackAction(type, index, actionName, fn, opts = {}) {
+  return looperManager.scheduleTrackAction(type, index, actionName, fn, opts);
+}
+
+function quantizedStopOtherAudioLoops(targetIndex) {
+  for (let i = 0; i < MAX_AUDIO_LOOPS; i++) {
+    if (i === targetIndex) continue;
+    if (loopPlaying[i] || loopSources[i]) {
+      scheduleQuantizedTrackAction('audio', i, 'clipStop', () => stopLoop(i), { unit: 'bar' });
+    }
+  }
+}
+
+function quantizedStopOtherMidiLoops(targetIndex) {
+  for (let i = 0; i < MAX_MIDI_LOOPS; i++) {
+    if (i === targetIndex) continue;
+    if (midiLoopStates[i] === 'playing' || midiLoopStates[i] === 'overdubbing') {
+      scheduleQuantizedTrackAction('midi', i, 'clipStop', () => stopMidiLoop(i), { unit: 'bar' });
+    }
+  }
+}
+
 function onLooperButtonMouseDown(e) {
   if (useMidiLoopers) {
     if (e && e.metaKey && e.altKey) {
@@ -9044,16 +9228,17 @@ function onLooperButtonMouseUp() {
 }
 
 function singlePressAudioLooperAction() {
+  const clipMode = shouldUseClipLauncherMode();
   if (looperState === "idle") {
-    if (!shouldAllowMultiLooperPlayback('audio')) stopOtherAudioLoops(activeLoopIndex);
+    if (clipMode && !shouldAllowMultiLooperPlayback('audio')) quantizedStopOtherAudioLoops(activeLoopIndex);
+    else if (!shouldAllowMultiLooperPlayback('audio')) stopOtherAudioLoops(activeLoopIndex);
     if (audioLoopBuffers[activeLoopIndex]) {
       looperState = "playing";
       loopPlaying[activeLoopIndex] = true;
-      if (loopSources.some(Boolean)) {
-        playNewLoop(activeLoopIndex);
-      } else {
-        schedulePlayLoop(activeLoopIndex);
-      }
+      scheduleQuantizedTrackAction('audio', activeLoopIndex, 'play', () => {
+        if (loopSources.some(Boolean)) playNewLoop(activeLoopIndex);
+        else schedulePlayLoop(activeLoopIndex);
+      }, { unit: 'bar' });
       updateLooperButtonColor();
       updateExportButtonColor();
       if (window.refreshMinimalState) window.refreshMinimalState();
@@ -9064,19 +9249,20 @@ function singlePressAudioLooperAction() {
     scheduleStopRecording();
   } else {
     if (!audioLoopBuffers[activeLoopIndex]) {
-      if (!shouldAllowMultiLooperPlayback('audio')) stopOtherAudioLoops(activeLoopIndex);
+      if (clipMode && !shouldAllowMultiLooperPlayback('audio')) quantizedStopOtherAudioLoops(activeLoopIndex);
+      else if (!shouldAllowMultiLooperPlayback('audio')) stopOtherAudioLoops(activeLoopIndex);
       recordingNewLoop = true;
       startRecording();
     } else if (!loopPlaying[activeLoopIndex]) {
-      if (!shouldAllowMultiLooperPlayback('audio')) stopOtherAudioLoops(activeLoopIndex);
+      if (clipMode && !shouldAllowMultiLooperPlayback('audio')) quantizedStopOtherAudioLoops(activeLoopIndex);
+      else if (!shouldAllowMultiLooperPlayback('audio')) stopOtherAudioLoops(activeLoopIndex);
       loopPlaying[activeLoopIndex] = true;
-      if (loopSources.some(Boolean)) {
-        scheduleResumeLoop(activeLoopIndex);
-      } else {
-        schedulePlayLoop(activeLoopIndex);
-      }
+      scheduleQuantizedTrackAction('audio', activeLoopIndex, 'resume', () => {
+        if (loopSources.some(Boolean)) scheduleResumeLoop(activeLoopIndex);
+        else schedulePlayLoop(activeLoopIndex);
+      }, { unit: 'bar' });
     } else {
-      toggleOverdub();
+      scheduleQuantizedTrackAction('audio', activeLoopIndex, 'overdubToggle', () => toggleOverdub(), { unit: 'bar' });
     }
   }
 }
@@ -9150,18 +9336,20 @@ function onMidiLooperButtonMouseUp() {
 function singlePressMidiLooperAction() {
   const idx = activeMidiLoopIndex;
   const state = midiLoopStates[idx];
+  const clipMode = shouldUseClipLauncherMode();
   if (state === 'idle' || state === 'stopped') {
     if (!shouldAllowMultiLooperPlayback('midi')) {
-      for (let i = 0; i < MAX_MIDI_LOOPS; i++) {
-        if (i === idx) continue;
-        if (midiLoopStates[i] === 'playing' || midiLoopStates[i] === 'overdubbing') {
-          stopMidiLoop(i);
+      if (clipMode) quantizedStopOtherMidiLoops(idx);
+      else {
+        for (let i = 0; i < MAX_MIDI_LOOPS; i++) {
+          if (i === idx) continue;
+          if (midiLoopStates[i] === 'playing' || midiLoopStates[i] === 'overdubbing') stopMidiLoop(i);
         }
       }
     }
     if (midiLoopEvents[idx].length) {
       midiLoopStates[idx] = 'playing';
-      playMidiLoop(idx);
+      scheduleQuantizedTrackAction('midi', idx, 'play', () => playMidiLoop(idx), { unit: 'bar' });
     } else {
       startMidiLoopRecording(idx);
     }
@@ -9172,10 +9360,11 @@ function singlePressMidiLooperAction() {
       startMidiLoopOverdub(idx);
     } else {
       if (!shouldAllowMultiLooperPlayback('midi')) {
-        for (let i = 0; i < MAX_MIDI_LOOPS; i++) {
-          if (i === idx) continue;
-          if (midiLoopStates[i] === 'playing' || midiLoopStates[i] === 'overdubbing') {
-            stopMidiLoop(i);
+        if (clipMode) quantizedStopOtherMidiLoops(idx);
+        else {
+          for (let i = 0; i < MAX_MIDI_LOOPS; i++) {
+            if (i === idx) continue;
+            if (midiLoopStates[i] === 'playing' || midiLoopStates[i] === 'overdubbing') stopMidiLoop(i);
           }
         }
       }
@@ -9363,7 +9552,17 @@ function beginMidiLoopRecording(idx, startTime = nowMs()) {
 
 function startMidiLoopRecording(idx) {
   ensureAudioContext();
-  beginMidiLoopRecording(idx, nowMs());
+  scheduleQuantizedTrackAction('midi', idx, 'recordStart', (atTime) => {
+    beginMidiLoopRecording(idx, atTime * 1000);
+    const tr = looperManager.getTrack('midi', idx);
+    if (tr) { tr.loopStartTime = atTime; tr.setState('RECORDING', `start=${atTime.toFixed(4)}`); }
+    if (looperManager.masterLoopLengthBeats && looperPerformanceMode !== 'clip') {
+      const secs = looperManager.masterLoopLengthBeats * transport.beatDuration();
+      setTimeout(() => {
+        if (midiLoopStates[idx] === 'recording') stopMidiLoopRecording(idx);
+      }, Math.max(0, secs * 1000));
+    }
+  }, { unit: 'bar' });
 }
 
 function beginMidiLoopOverdub(idx, startTime = nowMs()) {
@@ -9379,28 +9578,22 @@ function beginMidiLoopOverdub(idx, startTime = nowMs()) {
 }
 
 function startMidiLoopOverdub(idx) {
-  const dur = midiLoopDurations[idx];
-  const now = nowMs();
-  if (midiOverdubStartTimeouts[idx]) clearTimeout(midiOverdubStartTimeouts[idx]);
-  if (dur > 0 && midiLoopStartTimes[idx]) {
-    const elapsed = (now - midiLoopStartTimes[idx]) % dur;
-    const remain = dur - elapsed;
-    midiOverdubStartTimeouts[idx] = setTimeout(() => {
-      midiOverdubStartTimeouts[idx] = null;
-      beginMidiLoopOverdub(idx, nowMs());
-    }, remain);
-  } else {
-    beginMidiLoopOverdub(idx, now);
-  }
+  scheduleQuantizedTrackAction('midi', idx, 'overdubStart', (atTime) => {
+    beginMidiLoopOverdub(idx, atTime * 1000);
+    const tr = looperManager.getTrack('midi', idx);
+    if (tr) tr.setState('OVERDUBBING');
+  }, { unit: 'bar' });
 }
 
 function stopMidiLoopRecording(idx) {
   if (midiLoopStates[idx] !== 'recording' && midiLoopStates[idx] !== 'overdubbing') return;
-  midiStopPressTime = nowMs();
-  if (midiStopTimeouts[idx]) clearTimeout(midiStopTimeouts[idx]);
-  midiStopTargets[idx] = nowMs();
-  finalizeMidiLoopRecording(idx);
-  updateLooperButtonColor();
+  scheduleQuantizedTrackAction('midi', idx, 'recordStop', (atTime) => {
+    midiStopPressTime = atTime * 1000;
+    if (midiStopTimeouts[idx]) clearTimeout(midiStopTimeouts[idx]);
+    midiStopTargets[idx] = atTime * 1000;
+    finalizeMidiLoopRecording(idx);
+    updateLooperButtonColor();
+  }, { unit: 'bar' });
 }
 
 function finalizeMidiLoopRecording(idx, autoPlay = true) {
@@ -9440,6 +9633,9 @@ function finalizeMidiLoopRecording(idx, autoPlay = true) {
       looper.lengthBars = 0;
     }
     midiLoopDurations[idx] = loopDurationMs;
+    looperManager.commitTrackLength('midi', idx, (loopDurationMs / 1000) / transport.beatDuration());
+    const managedMidiTrack = looperManager.getTrack('midi', idx);
+    if (managedMidiTrack) managedMidiTrack.setState('PLAYING', `lenBeats=${managedMidiTrack.loopLengthBeats.toFixed(2)}`);
     midiLoopBpms[idx] = loopBpm;
     midiLoopStates[idx] = 'playing';
     if (looper) {
@@ -9470,6 +9666,9 @@ function playMidiLoop(idx, offset = 0, startTime = null) {
   if (!dur) return;
   const now = nowMs();
   let start = (startTime !== null) ? startTime : now;
+  if (startTime === null) {
+    start = transport.nextQuantizedTime((now / 1000) + PLAY_PADDING, 'bar') * 1000;
+  }
   if (startTime === null && hasActiveMidiSyncLoop(idx)) {
     const aligned = getNextMidiLoopAlignedStart(now, idx);
     if (aligned !== null) {
@@ -9525,6 +9724,8 @@ function playMidiLoop(idx, offset = 0, startTime = null) {
 }
 
 function stopMidiLoop(idx) {
+  const tr = looperManager.getTrack('midi', idx);
+  if (tr) tr.setState('STOPPED');
   if (midiLoopStartDelays[idx]) {
     clearTimeout(midiLoopStartDelays[idx]);
     midiLoopStartDelays[idx] = null;
@@ -9558,10 +9759,12 @@ function resumeMidiLoop(idx) {
   if (!dur) return;
   const now = nowMs();
   let offset = 0;
-  if (midiLoopStartTimes[idx]) {
-    offset = (now - midiLoopStartTimes[idx]) % dur;
-  }
-  playMidiLoop(idx, offset, now);
+  if (midiLoopStartTimes[idx]) offset = (now - midiLoopStartTimes[idx]) % dur;
+  scheduleQuantizedTrackAction('midi', idx, 'resume', (atTime) => {
+    playMidiLoop(idx, offset, atTime * 1000);
+    const tr = looperManager.getTrack('midi', idx);
+    if (tr) tr.setState('PLAYING');
+  }, { unit: 'bar' });
 }
 
 function playMidiEvent(ev) {
@@ -9948,7 +10151,7 @@ function addControls() {
 
   const syncedLoopersBtn = document.createElement('button');
   syncedLoopersBtn.className = 'looper-btn';
-  syncedLoopersBtn.style.flex = '1 1 100%';
+  syncedLoopersBtn.style.flex = '1 1 50%';
   const syncSyncedLoopersBtn = () => {
     syncedLoopersBtn.innerText = syncedFourLooperMode ? '4 Loopers Sync: On (layer mode)' : '4 Loopers Sync: Off (pattern mode)';
     syncedLoopersBtn.style.background = syncedFourLooperMode ? '#2a6' : '#333';
@@ -9961,6 +10164,25 @@ function addControls() {
     syncSyncedLoopersBtn();
   });
   looperModeRow.appendChild(syncedLoopersBtn);
+
+  const perfModeBtn = document.createElement('button');
+  perfModeBtn.className = 'looper-btn';
+  perfModeBtn.style.flex = '1 1 50%';
+  const syncPerfModeBtn = () => {
+    const isClip = getCurrentPerformanceMode() === 'clip';
+    perfModeBtn.innerText = isClip ? 'Mode: Clip Launcher' : 'Mode: Loopstation';
+    perfModeBtn.style.background = isClip ? '#2a6' : '#333';
+  };
+  syncPerfModeBtn();
+  perfModeBtn.title = 'Switch between quantized loopstation behavior and clip-launcher behavior.';
+  perfModeBtn.addEventListener('click', () => {
+    looperPerformanceMode = getCurrentPerformanceMode() === 'clip' ? 'loopstation' : 'clip';
+    localStorage.setItem('ytbm_looperPerformanceMode', looperPerformanceMode);
+    looperManager.setMode(looperPerformanceMode);
+    syncPerfModeBtn();
+  });
+  looperModeRow.appendChild(perfModeBtn);
+
   cw.appendChild(looperModeRow);
 
   const midiInputRow = document.createElement('div');
@@ -13637,6 +13859,45 @@ async function initialize() {
     console.error("Initialization error:", err.message || err);
   }
 }
+
+
+function runLooperDeterministicSimulation() {
+  const sim = {
+    bpm: 120,
+    beat: 0.5,
+    bar: 2,
+    transportStart: 0,
+    quantize(t) { return Math.ceil(t / this.bar) * this.bar; }
+  };
+  const events = [];
+  const schedule = (name, t) => events.push({ name, t: sim.quantize(t) });
+
+  // two tracks armed at different times -> same boundary when inside same bar
+  schedule('audio1.recordStart', 0.12);
+  schedule('audio2.recordStart', 0.88);
+
+  // master loop length propagation (4 beats = 1 bar)
+  const masterLoopLengthBeatsSim = 4;
+  events.push({ name: 'master.loopLengthBeats', t: 0, v: masterLoopLengthBeatsSim });
+
+  // overdub toggles at boundaries
+  schedule('audio1.overdubOn', 2.13);
+  schedule('audio1.overdubOff', 2.77);
+
+  // clip launcher switches at boundaries
+  schedule('clip.launch.A', 4.01);
+  schedule('clip.launch.B.stopA', 4.62);
+
+  const checks = {
+    sameBoundaryForArmedStarts: events.find(e => e.name === 'audio1.recordStart')?.t === events.find(e => e.name === 'audio2.recordStart')?.t,
+    hasMasterLength: masterLoopLengthBeatsSim === 4,
+    overdubBoundaryAligned: events.filter(e => e.name.includes('overdub')).every(e => Number.isFinite(e.t) && Math.abs(e.t / sim.bar - Math.round(e.t / sim.bar)) < 1e-6),
+    clipSwitchBoundaryAligned: events.filter(e => e.name.includes('clip.launch')).every(e => Number.isFinite(e.t) && Math.abs(e.t / sim.bar - Math.round(e.t / sim.bar)) < 1e-6)
+  };
+  const pass = Object.values(checks).every(Boolean);
+  return { pass, checks, events };
+}
+window.runLooperDeterministicSimulation = runLooperDeterministicSimulation;
 
 initialize();
 })();
