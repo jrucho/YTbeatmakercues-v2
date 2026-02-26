@@ -7628,7 +7628,8 @@ function stopVJRenderer() {
 
 function setupVJMonitorWindow() {
   if (!vjMonitorWindow || vjMonitorWindow.closed) {
-    vjMonitorWindow = window.open('data:text/html,<title>YTBM VJ Monitor</title>', 'ytbm_vj_monitor', 'popup,width=960,height=540,toolbar=0,location=0,menubar=0,status=0');
+    // Use about:blank popup and write into it to avoid data: top-frame navigation restrictions.
+    vjMonitorWindow = window.open('', 'ytbm_vj_monitor', 'popup,width=960,height=540,toolbar=0,location=0,menubar=0,status=0');
   }
   if (!vjMonitorWindow) { alert('Unable to open monitor window. Please allow popups for this page.'); return; }
   const doc = vjMonitorWindow.document;
@@ -14212,31 +14213,31 @@ async function initialize() {
   try {
     if (!shouldRunOnThisPage()) return;
     let isAudioPrimed = false;
+    let samplePacksPrimed = false;
 
-    document.addEventListener('click', function primeAudio() {
+    const primeAudio = () => {
       if (isAudioPrimed) return;
       isAudioPrimed = true;
+      ensureAudioContext().then(async () => {
+        if (!samplePacksPrimed) {
+          samplePacksPrimed = true;
+          await applySelectedSamplePacks();
+        }
+        console.log("Audio primed on first gesture.");
+      }).catch((err) => {
+        console.warn('Audio prime failed:', err);
+      });
+    };
+    document.addEventListener('click', primeAudio, { once: true, capture: true });
+    document.addEventListener('keydown', primeAudio, { once: true, capture: true });
 
-      if (!audioContext) {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        setupAudioNodes();
-      }
-      if (audioContext.state === 'suspended') {
-        audioContext.resume();
-      }
-      console.log("Audio primed on first click.");
-    }, { once: true });
-    
     await loadMappingsFromLocalStorage();
     loadMidiPresetsFromLocalStorage();
     await loadSamplePacksFromLocalStorage();
     await loadMonitorPrefs();
-    await ensureAudioContext();
-    if (activeSamplePackNames.length) {
-      await applySelectedSamplePacks();
-    } else if (currentSamplePackName) {
+    // Defer AudioContext creation/resume and sample decoding to first user gesture.
+    if (!activeSamplePackNames.length && currentSamplePackName) {
       activeSamplePackNames = [currentSamplePackName];
-      await applySelectedSamplePacks();
     }
     if (!isSampletteEmbed) {
       initializeMIDI();
@@ -14253,9 +14254,6 @@ async function initialize() {
     updateSampleDisplay("snare");
     addTrackedListener(document, "mousemove", onDocumentMouseMove);
     addTrackedListener(document, "mouseup", onDocumentMouseUp);
-    document.addEventListener("click", function primeAudio() {
-      ensureAudioContext();
-    }, { once: true });
     loadVJControls();
     vjModuleEnabled = localStorage.getItem('ytbm_vjEnabled') === '1';
     detectVideoChanges();
