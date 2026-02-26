@@ -701,6 +701,16 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         zoom: 1,
         rotate: 0,
         mirror: false,
+        scanlines: 0,
+        rgbSplit: 0,
+        vignette: 0,
+        trail: 0,
+        pixelate: 0,
+        kaleido: 0,
+        textSeqOn: false,
+        textPhrase: 'YT BEAT MAKER VJ',
+        reactive: {},
+        midiNotes: {},
         corners: [
           { x: 0.0, y: 0.0 },
           { x: 1.0, y: 0.0 },
@@ -916,7 +926,14 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjMonitorWindow = null,
       vjMonitorVideo = null,
       vjMonitorStream = null,
+      vjAnalyser = null,
+      vjBandData = new Uint8Array(256),
+      vjBandLevels = { low: 0, mid: 0, high: 0, full: 0 },
       vjModuleEnabled = false,
+      vjTextIndex = 0,
+      vjLastTextStep = 0,
+      vjFeedbackCanvas = null,
+      vjFeedbackCtx = null,
       // We'll keep them to identify which button is which
       reverbButton = null,
       cassetteButton = null,
@@ -6921,24 +6938,64 @@ function createOrUpdateVideoPreviewElement() {
 
 
 
+function getVJEffectDefs() {
+  return [
+    { key: 'brightness', label: 'Brightness', min: 0, max: 2, step: 0.01, def: 1 },
+    { key: 'contrast', label: 'Contrast', min: 0, max: 3, step: 0.01, def: 1 },
+    { key: 'saturate', label: 'Saturation', min: 0, max: 3, step: 0.01, def: 1 },
+    { key: 'hue', label: 'Hue', min: -180, max: 180, step: 1, def: 0 },
+    { key: 'blur', label: 'Blur', min: 0, max: 12, step: 0.1, def: 0 },
+    { key: 'glitch', label: 'Glitch', min: 0, max: 1, step: 0.01, def: 0 },
+    { key: 'strobe', label: 'Strobe', min: 0, max: 1, step: 0.01, def: 0 },
+    { key: 'zoom', label: 'Zoom', min: 0.4, max: 2.5, step: 0.01, def: 1 },
+    { key: 'rotate', label: 'Rotate', min: -180, max: 180, step: 1, def: 0 },
+    { key: 'scanlines', label: 'Scanlines', min: 0, max: 1, step: 0.01, def: 0 },
+    { key: 'rgbSplit', label: 'RGB Split', min: 0, max: 1, step: 0.01, def: 0 },
+    { key: 'vignette', label: 'Vignette', min: 0, max: 1, step: 0.01, def: 0 },
+    { key: 'trail', label: 'Trail', min: 0, max: 0.96, step: 0.01, def: 0 },
+    { key: 'pixelate', label: 'Pixelate', min: 0, max: 1, step: 0.01, def: 0 },
+    { key: 'kaleido', label: 'Kaleido', min: 0, max: 1, step: 0.01, def: 0 }
+  ];
+}
+
 function persistVJControls() {
   try { localStorage.setItem('ytbm_vjControls', JSON.stringify(vjControls)); } catch {}
+}
+
+function ensureVJDefaults() {
+  const defs = getVJEffectDefs();
+  if (!vjControls.reactive || typeof vjControls.reactive !== 'object') vjControls.reactive = {};
+  if (!vjControls.midiNotes || typeof vjControls.midiNotes !== 'object') vjControls.midiNotes = {};
+  defs.forEach((d, i) => {
+    if (typeof vjControls[d.key] !== 'number') vjControls[d.key] = d.def;
+    if (!vjControls.reactive[d.key]) vjControls.reactive[d.key] = 'off';
+    if (typeof vjControls.midiNotes[d.key] !== 'number') vjControls.midiNotes[d.key] = 90 + i;
+  });
+  if (typeof vjControls.midiNotes.textSeqOn !== 'number') vjControls.midiNotes.textSeqOn = 118;
+  if (!Array.isArray(vjControls.corners) || vjControls.corners.length !== 4) {
+    vjControls.corners = [{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];
+  }
+  if (typeof vjControls.textSeqOn !== 'boolean') vjControls.textSeqOn = false;
+  if (!vjControls.textPhrase) vjControls.textPhrase = 'YT BEAT MAKER VJ';
 }
 
 function loadVJControls() {
   try {
     const raw = localStorage.getItem('ytbm_vjControls');
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    if (!data || typeof data !== 'object') return;
-    vjControls = {
-      ...vjControls,
-      ...data,
-      corners: Array.isArray(data.corners) && data.corners.length === 4
-        ? data.corners.map(c => ({ x: Math.min(1, Math.max(0, Number(c.x) || 0)), y: Math.min(1, Math.max(0, Number(c.y) || 0)) }))
-        : vjControls.corners
-    };
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && typeof data === 'object') {
+        vjControls = {
+          ...vjControls,
+          ...data,
+          corners: Array.isArray(data.corners) && data.corners.length === 4
+            ? data.corners.map(c => ({ x: Math.min(1, Math.max(0, Number(c.x) || 0)), y: Math.min(1, Math.max(0, Number(c.y) || 0)) }))
+            : vjControls.corners
+        };
+      }
+    }
   } catch {}
+  ensureVJDefaults();
 }
 
 function setVJModuleEnabled(enabled) {
@@ -6957,6 +7014,10 @@ function ensureVJCanvases() {
     vjSourceCanvas = document.createElement('canvas');
     vjSourceCtx = vjSourceCanvas.getContext('2d', { alpha: false });
   }
+  if (!vjFeedbackCanvas) {
+    vjFeedbackCanvas = document.createElement('canvas');
+    vjFeedbackCtx = vjFeedbackCanvas.getContext('2d', { alpha: false });
+  }
   if (vjPreviewCanvas.width !== w || vjPreviewCanvas.height !== h) {
     vjPreviewCanvas.width = w;
     vjPreviewCanvas.height = h;
@@ -6965,7 +7026,59 @@ function ensureVJCanvases() {
     vjSourceCanvas.width = w;
     vjSourceCanvas.height = h;
   }
+  if (vjFeedbackCanvas.width !== w || vjFeedbackCanvas.height !== h) {
+    vjFeedbackCanvas.width = w;
+    vjFeedbackCanvas.height = h;
+  }
   return true;
+}
+
+function ensureVJAnalyser() {
+  if (!audioContext || !mainRecorderMix || vjAnalyser) return;
+  try {
+    vjAnalyser = audioContext.createAnalyser();
+    vjAnalyser.fftSize = 512;
+    vjBandData = new Uint8Array(vjAnalyser.frequencyBinCount);
+    mainRecorderMix.connect(vjAnalyser);
+  } catch {}
+}
+
+function updateVJBandLevels() {
+  if (!vjAnalyser || !vjBandData) return;
+  vjAnalyser.getByteFrequencyData(vjBandData);
+  const n = vjBandData.length;
+  const avg = (a,b) => {
+    a = Math.max(0, Math.min(n-1, a)); b = Math.max(a+1, Math.min(n, b));
+    let s=0,c=0; for (let i=a;i<b;i++){s+=vjBandData[i];c++;}
+    return c ? (s/c)/255 : 0;
+  };
+  vjBandLevels.low = avg(2, Math.floor(n*0.12));
+  vjBandLevels.mid = avg(Math.floor(n*0.12), Math.floor(n*0.45));
+  vjBandLevels.high = avg(Math.floor(n*0.45), Math.floor(n*0.9));
+  vjBandLevels.full = avg(0, n);
+}
+
+function getReactiveValue(key) {
+  const defs = getVJEffectDefs();
+  const d = defs.find(x => x.key === key);
+  if (!d) return vjControls[key] ?? 0;
+  const base = Number(vjControls[key] ?? d.def);
+  const mode = vjControls.reactive?.[key] || 'off';
+  if (mode === 'off') return base;
+  const table = {
+    low: { band: 'low', amt: 0.35 },
+    mid: { band: 'mid', amt: 0.35 },
+    high: { band: 'high', amt: 0.35 },
+    full: { band: 'full', amt: 0.45 },
+    lowBoost: { band: 'low', amt: 0.65 },
+    midBoost: { band: 'mid', amt: 0.65 },
+    highBoost: { band: 'high', amt: 0.65 },
+    fullBoost: { band: 'full', amt: 0.75 }
+  };
+  const m = table[mode] || table.full;
+  const energy = vjBandLevels[m.band] || 0;
+  const span = d.max - d.min;
+  return Math.min(d.max, Math.max(d.min, base + energy * span * m.amt));
 }
 
 function drawImageTriangle(ctx, img, s0, s1, s2, d0, d1, d2) {
@@ -7016,30 +7129,158 @@ function drawMappedQuad(ctx, img, corners, width, height, subdivisions = 10) {
 function applyVJEffectsToSource(video, width, height, tMs) {
   if (!vjSourceCtx) return;
   const g = vjSourceCtx;
+  const brightness = getReactiveValue('brightness');
+  const contrast = getReactiveValue('contrast');
+  const saturate = getReactiveValue('saturate');
+  const hue = getReactiveValue('hue');
+  const blur = getReactiveValue('blur');
+  const zoom = getReactiveValue('zoom');
+  const rotate = getReactiveValue('rotate');
+
   g.save();
   g.clearRect(0, 0, width, height);
-  g.filter = `brightness(${vjControls.brightness}) contrast(${vjControls.contrast}) saturate(${vjControls.saturate}) hue-rotate(${vjControls.hue}deg) blur(${vjControls.blur}px)`;
+  g.filter = `brightness(${brightness}) contrast(${contrast}) saturate(${saturate}) hue-rotate(${hue}deg) blur(${blur}px)`;
   g.translate(width / 2, height / 2);
-  g.rotate((vjControls.rotate * Math.PI) / 180);
-  g.scale((vjControls.mirror ? -1 : 1) * vjControls.zoom, vjControls.zoom);
+  g.rotate((rotate * Math.PI) / 180);
+  g.scale((vjControls.mirror ? -1 : 1) * zoom, zoom);
   g.drawImage(video, -width / 2, -height / 2, width, height);
   g.restore();
-  if (vjControls.glitch > 0) {
-    const slices = Math.floor(2 + vjControls.glitch * 14);
+
+  const glitch = getReactiveValue('glitch');
+  if (glitch > 0.01) {
+    const slices = Math.floor(2 + glitch * 14);
     for (let i = 0; i < slices; i++) {
       const sh = Math.max(2, Math.floor((Math.random() * 0.08 + 0.01) * height));
       const sy = Math.floor(Math.random() * (height - sh));
-      const dx = (Math.random() - 0.5) * vjControls.glitch * 80;
+      const dx = (Math.random() - 0.5) * glitch * 90;
       g.drawImage(vjSourceCanvas, 0, sy, width, sh, dx, sy, width, sh);
     }
   }
-  if (vjControls.strobe > 0) {
-    const phase = (tMs / 1000) * (4 + vjControls.strobe * 20);
+
+  const strobe = getReactiveValue('strobe');
+  if (strobe > 0.01) {
+    const phase = (tMs / 1000) * (4 + strobe * 20);
     if (Math.sin(phase * Math.PI * 2) > 0.4) {
       g.fillStyle = 'rgba(255,255,255,0.22)';
       g.fillRect(0, 0, width, height);
     }
   }
+
+  const rgbSplit = getReactiveValue('rgbSplit');
+  if (rgbSplit > 0.01) {
+    const d = Math.max(1, Math.floor(rgbSplit * 12));
+    g.globalCompositeOperation = 'screen';
+    g.drawImage(vjSourceCanvas, d, 0);
+    g.globalCompositeOperation = 'multiply';
+    g.drawImage(vjSourceCanvas, -d, 0);
+    g.globalCompositeOperation = 'source-over';
+  }
+
+  const scan = getReactiveValue('scanlines');
+  if (scan > 0.01) {
+    g.save();
+    g.globalAlpha = Math.min(0.7, scan * 0.7);
+    g.fillStyle = '#000';
+    for (let y = 0; y < height; y += 3) g.fillRect(0, y, width, 1);
+    g.restore();
+  }
+
+  const vig = getReactiveValue('vignette');
+  if (vig > 0.01) {
+    const grad = g.createRadialGradient(width/2, height/2, Math.min(width,height)*0.2, width/2, height/2, Math.max(width,height)*0.65);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, `rgba(0,0,0,${Math.min(0.9, vig*0.9)})`);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, width, height);
+  }
+
+  const pix = getReactiveValue('pixelate');
+  if (pix > 0.01) {
+    const scale = Math.max(0.03, 1 - pix * 0.94);
+    const sw = Math.max(16, Math.floor(width * scale));
+    const sh = Math.max(9, Math.floor(height * scale));
+    const tmp = document.createElement('canvas');
+    tmp.width = sw; tmp.height = sh;
+    const tx = tmp.getContext('2d', { alpha: false });
+    tx.imageSmoothingEnabled = false;
+    tx.drawImage(vjSourceCanvas, 0, 0, sw, sh);
+    g.imageSmoothingEnabled = false;
+    g.drawImage(tmp, 0, 0, sw, sh, 0, 0, width, height);
+    g.imageSmoothingEnabled = true;
+  }
+
+  const kal = getReactiveValue('kaleido');
+  if (kal > 0.01) {
+    g.save();
+    g.globalAlpha = Math.min(0.7, kal * 0.75);
+    g.translate(width/2, height/2);
+    const seg = 2 + Math.floor(kal * 6);
+    for (let i = 0; i < seg; i++) {
+      g.rotate((Math.PI * 2) / seg);
+      g.scale(i % 2 ? -1 : 1, 1);
+      g.drawImage(vjSourceCanvas, -width/2, -height/2, width, height);
+    }
+    g.restore();
+  }
+
+  const trail = getReactiveValue('trail');
+  if (trail > 0.01 && vjFeedbackCtx && vjFeedbackCanvas) {
+    vjFeedbackCtx.globalAlpha = Math.min(0.96, trail);
+    vjFeedbackCtx.drawImage(vjFeedbackCanvas, 0, 0);
+    vjFeedbackCtx.globalAlpha = 1;
+    vjFeedbackCtx.drawImage(vjSourceCanvas, 0, 0);
+    g.globalAlpha = 1;
+    g.drawImage(vjFeedbackCanvas, 0, 0);
+  }
+
+  if (vjControls.textSeqOn && vjControls.textPhrase) {
+    const bpm = Math.max(40, Math.min(300, clock?.bpm || loopsBPM || 120));
+    const stepMs = (60000 / bpm);
+    if (tMs - vjLastTextStep > stepMs) {
+      vjLastTextStep = tMs;
+      vjTextIndex = (vjTextIndex + 1) % Math.max(1, vjControls.textPhrase.trim().split(/\s+/).length);
+    }
+    const words = vjControls.textPhrase.trim().split(/\s+/);
+    const word = words[vjTextIndex] || words[0] || '';
+    const amp = Math.max(vjBandLevels.low, vjBandLevels.full);
+    g.save();
+    g.font = `${Math.floor(height * (0.07 + amp * 0.08))}px sans-serif`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.lineWidth = 6;
+    g.strokeStyle = 'rgba(0,0,0,0.65)';
+    g.fillStyle = `hsl(${(tMs / 25) % 360} 90% 60%)`;
+    g.strokeText(word, width/2, height*0.85);
+    g.fillText(word, width/2, height*0.85);
+    g.restore();
+  }
+}
+
+function drawVJPinsOverlay(ctx, w, h) {
+  const pts = vjControls.corners.map(c => ({ x: c.x * w, y: c.y * h }));
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  ctx.lineTo(pts[1].x, pts[1].y);
+  ctx.lineTo(pts[2].x, pts[2].y);
+  ctx.lineTo(pts[3].x, pts[3].y);
+  ctx.closePath();
+  ctx.stroke();
+  pts.forEach((p, i) => {
+    ctx.fillStyle = '#2ea7ff';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(String(i + 1), p.x + 10, p.y - 10);
+  });
+  ctx.restore();
 }
 
 function drawVJFrame(tMs = performance.now()) {
@@ -7047,11 +7288,13 @@ function drawVJFrame(tMs = performance.now()) {
   if (!ensureVJCanvases() || !vjPreviewCtx) return;
   const vid = getVideoElement();
   if (!vid) return;
+  updateVJBandLevels();
   const w = vjPreviewCanvas.width, h = vjPreviewCanvas.height;
   vjPreviewCtx.fillStyle = '#000';
   vjPreviewCtx.fillRect(0, 0, w, h);
   applyVJEffectsToSource(vid, w, h, tMs);
   drawMappedQuad(vjPreviewCtx, vjSourceCanvas, vjControls.corners, w, h, 10);
+  drawVJPinsOverlay(vjPreviewCtx, w, h);
   if (vjMonitorVideo && !vjMonitorVideo.srcObject && vjMonitorStream) {
     vjMonitorVideo.srcObject = vjMonitorStream;
     vjMonitorVideo.play().catch(() => {});
@@ -7059,6 +7302,8 @@ function drawVJFrame(tMs = performance.now()) {
 }
 
 function startVJRenderer() {
+  ensureVJDefaults();
+  ensureVJAnalyser();
   if (!vjPreviewCanvas || !vjPreviewCtx) return;
   if (!vjMonitorStream) vjMonitorStream = vjPreviewCanvas.captureStream(30);
   if (!vjAnimationFrame) vjAnimationFrame = requestAnimationFrame(drawVJFrame);
@@ -7072,11 +7317,13 @@ function stopVJRenderer() {
 }
 
 function setupVJMonitorWindow() {
-  if (!vjMonitorWindow || vjMonitorWindow.closed) vjMonitorWindow = window.open('', 'ytbm_vj_monitor', 'popup,width=960,height=540');
+  if (!vjMonitorWindow || vjMonitorWindow.closed) {
+    vjMonitorWindow = window.open('data:text/html,<title>YTBM VJ Monitor</title>', 'ytbm_vj_monitor', 'popup,width=960,height=540,toolbar=0,location=0,menubar=0,status=0');
+  }
   if (!vjMonitorWindow) { alert('Unable to open monitor window. Please allow popups for this page.'); return; }
   const doc = vjMonitorWindow.document;
   doc.open();
-  doc.write(`<!doctype html><html><head><title>YTBM VJ Monitor</title><style>html,body{margin:0;background:#000;width:100%;height:100%;overflow:hidden}video{width:100%;height:100%;object-fit:contain;background:#000}.hint{position:fixed;left:10px;bottom:10px;color:#9aa;font:12px sans-serif;opacity:.7}</style></head><body><video id="m" autoplay muted playsinline></video><div class="hint">Cmd/Ctrl+F = fullscreen monitor</div></body></html>`);
+  doc.write(`<!doctype html><html><head><title>YTBM VJ Monitor</title><style>html,body{margin:0;background:#000;width:100%;height:100%;overflow:hidden}video{width:100%;height:100%;object-fit:contain;background:#000}.tools{position:fixed;right:8px;top:8px;display:flex;gap:6px}button{background:#111;color:#fff;border:1px solid #444;border-radius:6px;padding:6px 9px;cursor:pointer}</style></head><body><video id="m" autoplay muted playsinline></video><div class="tools"><button id="dl">Download frame</button></div></body></html>`);
   doc.close();
   vjMonitorVideo = doc.getElementById('m');
   doc.addEventListener('keydown', (e) => {
@@ -7085,6 +7332,14 @@ function setupVJMonitorWindow() {
       e.preventDefault();
       if (!doc.fullscreenElement) doc.documentElement.requestFullscreen?.(); else doc.exitFullscreen?.();
     }
+  });
+  const dl = doc.getElementById('dl');
+  dl?.addEventListener('click', () => {
+    if (!vjPreviewCanvas) return;
+    const a = doc.createElement('a');
+    a.href = vjPreviewCanvas.toDataURL('image/png');
+    a.download = 'ytbm-vj-frame.png';
+    a.click();
   });
   if (!vjMonitorStream && vjPreviewCanvas) vjMonitorStream = vjPreviewCanvas.captureStream(30);
   if (vjMonitorVideo && vjMonitorStream) {
@@ -7101,12 +7356,15 @@ function showVJWindowToggle() {
     return;
   }
 
+  ensureVJDefaults();
+  const defs = getVJEffectDefs();
+
   vjWindowContainer = document.createElement('div');
   vjWindowContainer.className = 'looper-midimap-container';
   vjWindowContainer.style.position = 'fixed';
   vjWindowContainer.style.top = '70px';
   vjWindowContainer.style.right = '30px';
-  vjWindowContainer.style.width = '420px';
+  vjWindowContainer.style.width = '460px';
   vjWindowContainer.style.zIndex = '999999';
   document.body.appendChild(vjWindowContainer);
 
@@ -7138,7 +7396,6 @@ function showVJWindowToggle() {
   const monitorBtn = document.createElement('button');
   monitorBtn.className = 'looper-btn';
   monitorBtn.textContent = 'Open Monitor';
-  monitorBtn.title = 'Open external monitor window. Cmd/Ctrl+F in monitor toggles fullscreen.';
   monitorBtn.addEventListener('click', setupVJMonitorWindow);
   topRow.appendChild(monitorBtn);
 
@@ -7161,47 +7418,84 @@ function showVJWindowToggle() {
   vjContentWrap.appendChild(vjPreviewCanvas);
   vjPreviewCtx = vjPreviewCanvas.getContext('2d', { alpha: false });
 
+  const textRow = document.createElement('div');
+  textRow.style.display = 'flex';
+  textRow.style.gap = '6px';
+  const textToggle = document.createElement('button');
+  textToggle.className = 'looper-btn';
+  const syncTextBtn = () => { textToggle.textContent = `Text Seq:${vjControls.textSeqOn ? 'On' : 'Off'}`; };
+  syncTextBtn();
+  textToggle.addEventListener('click', () => { vjControls.textSeqOn = !vjControls.textSeqOn; syncTextBtn(); persistVJControls(); });
+  const textInp = document.createElement('input');
+  textInp.type = 'text'; textInp.value = vjControls.textPhrase || '';
+  textInp.placeholder = 'Type phrase for tempo text sequence';
+  textInp.style.flex = '1 1 auto';
+  textInp.addEventListener('change', () => { vjControls.textPhrase = textInp.value || 'YT BEAT MAKER VJ'; persistVJControls(); });
+  textRow.appendChild(textToggle);
+  textRow.appendChild(textInp);
+  vjContentWrap.appendChild(textRow);
+
   const pinHud = document.createElement('div');
   pinHud.style.fontSize = '11px';
-  pinHud.style.opacity = '0.8';
-  pinHud.textContent = 'Drag a pin on preview for 4-corner projection mapping.';
+  pinHud.style.opacity = '0.9';
+  pinHud.textContent = 'Pins are always visible on preview. Drag pin 1-4 for mapping.';
   vjContentWrap.appendChild(pinHud);
 
-  const mkSlider = (label, min, max, step, key) => {
+  const reactiveModes = [
+    { v: 'off', t: 'Off' },
+    { v: 'low', t: 'Low' },
+    { v: 'mid', t: 'Mid' },
+    { v: 'high', t: 'High' },
+    { v: 'full', t: 'Full' },
+    { v: 'lowBoost', t: 'Low+' },
+    { v: 'midBoost', t: 'Mid+' },
+    { v: 'highBoost', t: 'High+' },
+    { v: 'fullBoost', t: 'Full+' }
+  ];
+
+  defs.forEach((d) => {
     const row = document.createElement('div');
     row.style.display = 'grid';
-    row.style.gridTemplateColumns = '110px 1fr 44px';
+    row.style.gridTemplateColumns = '95px 1fr 52px 70px 56px';
     row.style.gap = '6px';
     row.style.alignItems = 'center';
-    const l = document.createElement('span'); l.textContent = label;
+
+    const l = document.createElement('span'); l.textContent = d.label;
     const inp = document.createElement('input');
-    inp.type = 'range'; inp.min = String(min); inp.max = String(max); inp.step = String(step); inp.value = String(vjControls[key]);
+    inp.type = 'range'; inp.min = String(d.min); inp.max = String(d.max); inp.step = String(d.step); inp.value = String(vjControls[d.key]);
     const val = document.createElement('span');
-    val.textContent = key === 'hue' || key === 'rotate' ? `${Math.round(Number(vjControls[key]))}` : `${Number(vjControls[key]).toFixed(2)}`;
+    const fmt = (v) => (Math.abs(d.step - 1) < 1e-9 ? `${Math.round(v)}` : `${Number(v).toFixed(2)}`);
+    val.textContent = fmt(vjControls[d.key]);
     inp.addEventListener('input', () => {
-      const v = Number(inp.value); vjControls[key] = v;
-      val.textContent = key === 'hue' || key === 'rotate' ? `${Math.round(v)}` : `${v.toFixed(2)}`;
+      const v = Number(inp.value); vjControls[d.key] = v; val.textContent = fmt(v); persistVJControls();
+    });
+    inp.addEventListener('dblclick', () => {
+      vjControls[d.key] = d.def; inp.value = String(d.def); val.textContent = fmt(d.def); persistVJControls();
+    });
+
+    const reactSel = document.createElement('select');
+    reactSel.className = 'looper-btn';
+    reactiveModes.forEach(m => reactSel.add(new Option(m.t, m.v)));
+    reactSel.value = vjControls.reactive[d.key] || 'off';
+    reactSel.addEventListener('change', () => { vjControls.reactive[d.key] = reactSel.value; persistVJControls(); });
+
+    const midiInp = document.createElement('input');
+    midiInp.type = 'number'; midiInp.min = '0'; midiInp.max = '127'; midiInp.step = '1';
+    midiInp.value = String(vjControls.midiNotes[d.key]);
+    midiInp.title = 'MIDI note mapping';
+    midiInp.addEventListener('change', () => {
+      vjControls.midiNotes[d.key] = Math.max(0, Math.min(127, Number(midiInp.value) || 0));
+      midiInp.value = String(vjControls.midiNotes[d.key]);
       persistVJControls();
     });
-    row.appendChild(l); row.appendChild(inp); row.appendChild(val); vjContentWrap.appendChild(row);
-  };
 
-  mkSlider('Brightness', 0, 2, 0.01, 'brightness');
-  mkSlider('Contrast', 0, 3, 0.01, 'contrast');
-  mkSlider('Saturation', 0, 3, 0.01, 'saturate');
-  mkSlider('Hue', -180, 180, 1, 'hue');
-  mkSlider('Blur', 0, 12, 0.1, 'blur');
-  mkSlider('Glitch', 0, 1, 0.01, 'glitch');
-  mkSlider('Strobe', 0, 1, 0.01, 'strobe');
-  mkSlider('Zoom', 0.4, 2.5, 0.01, 'zoom');
-  mkSlider('Rotate', -180, 180, 1, 'rotate');
+    row.appendChild(l); row.appendChild(inp); row.appendChild(val); row.appendChild(reactSel); row.appendChild(midiInp);
+    vjContentWrap.appendChild(row);
+  });
 
   const mirrorRow = document.createElement('div');
-  mirrorRow.style.display = 'flex';
-  mirrorRow.style.alignItems = 'center';
-  mirrorRow.style.gap = '8px';
-  const mirrorChk = document.createElement('input');
-  mirrorChk.type = 'checkbox'; mirrorChk.checked = !!vjControls.mirror;
+  mirrorRow.style.display = 'flex'; mirrorRow.style.alignItems = 'center'; mirrorRow.style.gap = '8px';
+  const mirrorChk = document.createElement('input'); mirrorChk.type = 'checkbox'; mirrorChk.checked = !!vjControls.mirror;
   mirrorChk.addEventListener('change', () => { vjControls.mirror = mirrorChk.checked; persistVJControls(); });
   const mirrorLbl = document.createElement('span'); mirrorLbl.textContent = 'Mirror horizontal';
   mirrorRow.appendChild(mirrorChk); mirrorRow.appendChild(mirrorLbl);
@@ -7217,9 +7511,8 @@ function showVJWindowToggle() {
       const d = Math.hypot(x - c.x * w, y - c.y * h);
       if (d < bestD) { best = i; bestD = d; }
     });
-    return bestD < 28 ? best : -1;
+    return bestD < 30 ? best : -1;
   };
-
   const moveCorner = (evt) => {
     if (dragCorner < 0) return;
     const r = vjPreviewCanvas.getBoundingClientRect();
@@ -7227,7 +7520,6 @@ function showVJWindowToggle() {
     vjControls.corners[dragCorner].y = Math.min(1, Math.max(0, (evt.clientY - r.top) / Math.max(1, r.height)));
     persistVJControls();
   };
-
   vjPreviewCanvas.addEventListener('mousedown', (evt) => {
     const r = vjPreviewCanvas.getBoundingClientRect();
     dragCorner = pickCorner(evt.clientX - r.left, evt.clientY - r.top);
@@ -7235,26 +7527,28 @@ function showVJWindowToggle() {
   window.addEventListener('mousemove', moveCorner);
   window.addEventListener('mouseup', () => { dragCorner = -1; });
 
-  const drawPinsOverlay = () => {
-    if (!vjPreviewCtx || !vjPreviewCanvas || vjWindowContainer.style.display === 'none') { requestAnimationFrame(drawPinsOverlay); return; }
-    const w = vjPreviewCanvas.width, h = vjPreviewCanvas.height;
-    const pts = vjControls.corners.map(c => ({ x: c.x * w, y: c.y * h }));
-    vjPreviewCtx.save();
-    vjPreviewCtx.strokeStyle = 'rgba(255,255,255,0.85)';
-    vjPreviewCtx.lineWidth = 2;
-    vjPreviewCtx.beginPath();
-    vjPreviewCtx.moveTo(pts[0].x, pts[0].y); vjPreviewCtx.lineTo(pts[1].x, pts[1].y); vjPreviewCtx.lineTo(pts[2].x, pts[2].y); vjPreviewCtx.lineTo(pts[3].x, pts[3].y); vjPreviewCtx.closePath();
-    vjPreviewCtx.stroke();
-    pts.forEach((p, i) => {
-      vjPreviewCtx.fillStyle = i === dragCorner ? '#ffba53' : '#37f';
-      vjPreviewCtx.beginPath(); vjPreviewCtx.arc(p.x, p.y, 7, 0, Math.PI * 2); vjPreviewCtx.fill();
-    });
-    vjPreviewCtx.restore();
-    requestAnimationFrame(drawPinsOverlay);
-  };
-  requestAnimationFrame(drawPinsOverlay);
-
   startVJRenderer();
+}
+
+function handleVJMidiNote(note, velocity, command) {
+  if (command !== 144 || velocity <= 0) return false;
+  ensureVJDefaults();
+  const defs = getVJEffectDefs();
+  let handled = false;
+  defs.forEach((d) => {
+    if (Number(vjControls.midiNotes[d.key]) === Number(note)) {
+      const nv = velocity / 127;
+      const target = d.min + (d.max - d.min) * nv;
+      vjControls[d.key] = target;
+      handled = true;
+    }
+  });
+  if (vjControls.midiNotes.textSeqOn === Number(note)) {
+    vjControls.textSeqOn = !vjControls.textSeqOn;
+    handled = true;
+  }
+  if (handled) persistVJControls();
+  return handled;
 }
 
 function getVideoCaptureStreamForLooper(videoElement) {
@@ -10613,6 +10907,9 @@ function handleMIDIMessage(e) {
       }
     }
   } else if (command === 144 && velocity > 0) {
+    if (handleVJMidiNote(note, velocity, command)) {
+      return;
+    }
         if (Number(note) === Number(midiNotes.randomCues)) {
       cueInputMode = 'midi';
       randomizeCuesInOneClick();
