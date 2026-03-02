@@ -16,6 +16,20 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.3
+- Added a major Touch Sequencer overhaul with expanded pattern capacity (32 steps) and 4 banks, including per-target bank/length management for pads, drums, and sidechain. 
+- Added new sequencer target architecture covering pad-*, drum voices, and sidechain, with dedicated bank/length state and UI selection flow. 
+- Added a redesigned Touch Sequencer popup UI with utility controls (mark cues, bank mode, erase bank), pad grid, step grid, and transport/record/quantize controls. 
+- Added sequencer tempo editing improvements (input, wheel, drag behavior) with internal-clock gating and live BPM application. 
+- Added sequencer transport engine updates with dedicated startSequencer, stopSequencer, and interval scheduler tick loop for step playback. 
+- Added clock source routing with Internal / MIDI Clock / Ableton Link mode selection and persistence. 
+- Added MIDI clock input selection and persistence so a specific MIDI device (or all devices) can drive sequencer clock. 
+- Added Ableton Link bridge auto-connect logic with localhost endpoint probing, message handling for tempo/start/stop, and retry on disconnect. 
+- Improved Touch Sequencer visual spacing and wrapped-row vertical breathing room in popup layout. 
+- Improved draggable window reliability by using pointer-driven panel drag with capture, clamp-to-viewport, and resize clamping. 
+- Improved VJ pin-corner interaction reliability with better corner pick logic and pointer-based dragging flow for mapped corners. 
+- Included docs cleanup previously noted in changelog history (sidechain “panel” typo correction). 
+
 ## New in 2.2
 - Added a new **VJ Module** for live visuals: open a dedicated panel, route up to 8 streams, and process them through a canvas-based effect pipeline in realtime.
 - Added **4-corner pin mapping** per stream so each source can be perspective-mapped and composed as a live mosaic.
