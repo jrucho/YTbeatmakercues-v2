@@ -14447,6 +14447,16 @@ function injectCustomCSS() {
     .ytbm-touch-control-row {
       row-gap: 14px;
     }
+    .ytbm-touch-popup .ytbm-panel-row {
+      align-items: stretch;
+    }
+    .ytbm-touch-popup .looper-btn,
+    .ytbm-touch-popup select.looper-btn,
+    .ytbm-touch-popup .ytbm-touch-bpm-input {
+      margin: 0;
+      min-height: 36px;
+      box-sizing: border-box;
+    }
     .ytbm-touch-step-row {
       display: grid;
       grid-template-columns: repeat(16, minmax(0, 1fr));

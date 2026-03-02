@@ -1,9 +1,10 @@
-# Release 2.2
+# Release 2.3
 
 ## Summary
-Release **2.2** introduces a full VJ (video jockey) module integrated with the looper workflow, plus UI/layout cleanup and safer device-selection defaults for Advanced panel users.
+Release **2.3** fixes Touch Sequencer popup spacing consistency after reopening, while carrying forward all features from 2.2.
 
 ## Clean changelog
+- Fixed Touch Sequencer popup control spacing so button/input rows keep consistent vertical alignment after closing and reopening the popup.
 - Added a new VJ Module window with realtime visual processing and live controls.
 - Added a dedicated VJ canvas pipeline (source -> effects -> output -> preview) with render loop and monitor stream support.
 - Added up to 8-stream composition with per-stream blend modes and per-stream FX profile support.
@@ -16,7 +17,7 @@ Release **2.2** introduces a full VJ (video jockey) module integrated with the l
 - Fixed VJ-to-video-looper capture routing so video looper records the processed VJ output even when FX are enabled and/or the VJ panel is closed.
 - Reorganized Advanced panel layout under a cleaner **Packs (Advanced)** grouping.
 - Fixed output/input/monitor dropdowns so they default to visible fallback choices when saved device IDs are missing.
-- Updated extension version to **2.2** in `manifest.json`.
+- Updated extension version to **2.3** in `manifest.json`.
 
 ## Detailed: How the new VJ Module works
 
