@@ -967,7 +967,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjModuleEnabled = false,
       vjTextIndex = 0,
       tabPlaybackGateGain = null,
-      singleTabPlaybackMode = localStorage.getItem('ytbm_singleTabPlaybackMode') !== '0',
+      singleTabPlaybackMode = localStorage.getItem('ytbm_singleTabPlaybackMode') === '1',
       ytbmTabId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`,
       vjLastTextStep = 0,
       vjFeedbackCanvas = null,
@@ -4764,7 +4764,7 @@ addTrackedListener(window, 'storage', (evt) => {
     applySharedVJControlsFromStorage(evt.newValue);
   }
   if (evt.key === 'ytbm_singleTabPlaybackMode') {
-    singleTabPlaybackMode = evt.newValue !== '0';
+    singleTabPlaybackMode = evt.newValue === '1';
     updateTabPlaybackGate();
     if (typeof vjControlsSyncUI === 'function') vjControlsSyncUI();
   }
@@ -8311,7 +8311,7 @@ function showVJWindowToggle() {
     updateTabPlaybackGate();
   });
   const tabAudioLbl = document.createElement('span');
-  tabAudioLbl.textContent = 'Solo active tab audio/MIDI (default)';
+  tabAudioLbl.textContent = 'Solo active tab audio/MIDI';
   tabAudioRow.appendChild(tabAudioChk);
   tabAudioRow.appendChild(tabAudioLbl);
   vjContentWrap.appendChild(tabAudioRow);
