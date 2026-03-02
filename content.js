@@ -1815,9 +1815,11 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   let touchPopup = null;
   let currentPad = null; // current selected pad index (0–9)
   const DRUM_SEQ_VOICES = ["kick", "hihat", "snare"];
+  const SEQUENCER_STEP_COUNT = 32;
   const sequencerPatterns = {};
-  for (let i = 0; i < 10; i++) sequencerPatterns[`pad-${i}`] = new Array(16).fill(false);
-  DRUM_SEQ_VOICES.forEach((voice) => { sequencerPatterns[`drum-${voice}`] = new Array(16).fill(false); });
+  for (let i = 0; i < 10; i++) sequencerPatterns[`pad-${i}`] = new Array(SEQUENCER_STEP_COUNT).fill(false);
+  DRUM_SEQ_VOICES.forEach((voice) => { sequencerPatterns[`drum-${voice}`] = new Array(SEQUENCER_STEP_COUNT).fill(false); });
+  sequencerPatterns.sidechain = new Array(SEQUENCER_STEP_COUNT).fill(false);
   let activeSequencerTarget = "pad-0";
   let sequencerBPM = 120; // default BPM
   let sequencerPlaying = false;
@@ -2304,6 +2306,16 @@ function toggleBlindMode() {
       });
       drumRow.appendChild(btn);
     });
+    const sidechainSeqBtn = document.createElement("button");
+    sidechainSeqBtn.className = "looper-btn ytbm-seq-voice-btn";
+    sidechainSeqBtn.dataset.voice = "sidechain";
+    sidechainSeqBtn.innerText = "Sidechain";
+    sidechainSeqBtn.addEventListener("click", () => {
+      activeSequencerTarget = 'sidechain';
+      triggerSidechainEnvelope('pad');
+      updateSequencerUI();
+    });
+    drumRow.appendChild(sidechainSeqBtn);
     touchPopup.appendChild(drumRow);
 
     const padGrid = document.createElement("div");
@@ -2349,7 +2361,7 @@ function toggleBlindMode() {
     stepRow.className = "ytbm-touch-step-row";
     seqContainer.appendChild(stepRow);
 
-    for (let s = 0; s < 16; s++) {
+    for (let s = 0; s < SEQUENCER_STEP_COUNT; s++) {
       const stepBtn = document.createElement("button");
       stepBtn.className = "looper-btn stepBtn";
       stepBtn.dataset.step = s;
@@ -2469,7 +2481,9 @@ function toggleBlindMode() {
     });
     if (touchPopup) {
       touchPopup.querySelectorAll('.ytbm-seq-voice-btn').forEach((btn) => {
-        const active = `drum-${btn.dataset.voice}` === activeSequencerTarget;
+        const active = (btn.dataset.voice === 'sidechain')
+          ? activeSequencerTarget === 'sidechain'
+          : `drum-${btn.dataset.voice}` === activeSequencerTarget;
         btn.dataset.state = active ? 'on' : 'off';
       });
       touchPopup.querySelectorAll('.touch-pad-btn').forEach((btn) => {
@@ -2578,13 +2592,14 @@ function toggleBlindMode() {
     if (targetKey === 'drum-kick') playSample('kick');
     if (targetKey === 'drum-hihat') playSample('hihat');
     if (targetKey === 'drum-snare') playSample('snare');
+    if (targetKey === 'sidechain') triggerSidechainEnvelope('sequencer');
   }
 
   function runSequencerTick() {
     if (!sequencerPlaying || !clock.isRunning) return;
     const beatDur = clock.beatDuration();
     const phaseBeats = ((clock.getNow() - clock.startTime) / beatDur) % 4;
-    const step = Math.floor((((phaseBeats % 4) + 4) % 4) * 4) % 16;
+    const step = Math.floor((((phaseBeats % 4) + 4) % 4) * (SEQUENCER_STEP_COUNT / 4)) % SEQUENCER_STEP_COUNT;
     if (step === lastSequencerStep) return;
     lastSequencerStep = step;
     Object.entries(sequencerPatterns).forEach(([targetKey, steps]) => {
@@ -14027,6 +14042,7 @@ function injectCustomCSS() {
     .ytbm-touch-step-row {
       display: grid;
       grid-template-columns: repeat(16, minmax(0, 1fr));
+      grid-template-rows: repeat(2, minmax(0, 1fr));
       gap: 6px;
     }
     .ytbm-touch-step-row .stepBtn {
