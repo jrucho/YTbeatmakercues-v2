@@ -2730,14 +2730,16 @@ function toggleBlindMode() {
   function startSequencer() {
     if (sequencerClockSource === 'ableton_link') ensureAbletonLinkSession();
     if (sequencerPlaying) return;
-    sequencerPlaying = true;
     if (!clock.isRunning) {
       const now = audioContext ? audioContext.currentTime : clock.getNow();
       clock.start(now);
     }
+    const beatDur = clock.beatDuration();
+    const phaseBeats = ((clock.getNow() - clock.startTime) / beatDur) % 4;
+    lastSequencerStep = Math.floor((((phaseBeats % 4) + 4) % 4) * (SEQUENCER_STEP_COUNT / 4)) % SEQUENCER_STEP_COUNT;
+    sequencerPlaying = true;
     if (sequencerScheduler) clearInterval(sequencerScheduler);
     sequencerScheduler = setInterval(runSequencerTick, 25);
-    runSequencerTick();
     refreshSequencerControls();
   }
 
@@ -11610,7 +11612,6 @@ async function ensureAbletonLinkSession() {
   abletonLinkSession = null;
   abletonLinkSocket = null;
   refreshSequencerControls();
-  console.warn('Ableton Link bridge unavailable. Start a localhost Ableton Link bridge on ws://127.0.0.1:20808');
   return false;
 }
 
@@ -14264,7 +14265,7 @@ function injectCustomCSS() {
       box-sizing: border-box;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 12px;
     }
     .ytbm-touch-header {
       display: flex;
@@ -14297,10 +14298,7 @@ function injectCustomCSS() {
       display: grid;
       grid-template-columns: repeat(16, minmax(0, 1fr));
       grid-template-rows: repeat(2, minmax(0, 1fr));
-      column-gap: 6px;
-      row-gap: 9px;
-      margin-top: 2px;
-      margin-bottom: 4px;
+      gap: 6px;
     }
     .ytbm-touch-step-row .stepBtn {
       padding: 0;
@@ -14314,12 +14312,6 @@ function injectCustomCSS() {
       gap: 6px;
       flex-wrap: wrap;
       justify-content: flex-end;
-    }
-    .ytbm-touch-utility-row,
-    .ytbm-touch-voice-row,
-    .ytbm-touch-control-row {
-      row-gap: 10px;
-      margin-bottom: 2px;
     }
     .ytbm-touch-footer-row {
       justify-content: flex-end;
