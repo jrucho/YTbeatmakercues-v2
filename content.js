@@ -12081,7 +12081,7 @@ function handleMIDIMessage(e) {
       return;
     }
   }
-  if (command === 0xb0 && currentlyDetectingMidiControl) {
+  if (currentlyDetectingMidiControl && (command === 0xb0 || (command === 144 && velocity > 0))) {
     midiNotes[currentlyDetectingMidiControl] = note;
     updateMidiMapInput(currentlyDetectingMidiControl, note);
     currentlyDetectingMidiControl = null;
