@@ -33,7 +33,7 @@ async function buildOrderForWindow(windowId) {
   if (typeof windowId !== 'number') return [];
   const tabs = await chrome.tabs.query({ windowId });
   return tabs
-    .sort((a, b) => (b.index ?? 0) - (a.index ?? 0))
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
     .filter((tab) => typeof tab.id === 'number' && isVideoTabUrl(tab.url))
     .map((tab) => ytbmByChromeTabId.get(tab.id))
     .filter(Boolean);
