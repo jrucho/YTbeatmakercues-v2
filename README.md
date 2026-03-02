@@ -123,14 +123,13 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 
 ## Ableton Link Bridge Setup (Local)
 
-The Touch Sequencer now supports a **custom Link bridge URL** in the popup (next to the clock selector).
+The extension auto-connects to a local Link bridge when **Clock: Ableton Link** is selected.
 
 1. Run a local WebSocket bridge process that publishes Link tempo/start/stop events.
 2. In Touch Sequencer, set clock source to **Clock: Ableton Link**.
-3. Paste your bridge URL (for example `ws://127.0.0.1:20808/ableton-link`) in the Link bridge field.
-4. The extension will persist that URL and reconnect automatically.
+3. Keep your Link-enabled app open on your Mac; the extension will retry and sync as soon as a local bridge endpoint is available.
 
-If no custom URL is set, the extension falls back to localhost discovery on:
+Auto-discovery tries localhost bridge endpoints:
 `ws://127.0.0.1:20808`, `/link`, `/ableton-link` (and `localhost` equivalents).
 
 ## Installation

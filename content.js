@@ -259,7 +259,6 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   let abletonLinkAvailable = false;
   let abletonLinkSocket = null;
   let abletonLinkRetryTimer = null;
-  let abletonLinkBridgeUrl = localStorage.getItem('ytbm_abletonLinkBridgeUrl') || '';
   let currentOutputNode = null;
   let externalOutputDest = null;
   let outputAudio = null;
@@ -2321,24 +2320,6 @@ function toggleBlindMode() {
     });
     utilityRow.appendChild(sequencerClockModeSelect);
 
-    const sequencerLinkUrlInput = document.createElement("input");
-    sequencerLinkUrlInput.className = "ytbm-touch-link-url";
-    sequencerLinkUrlInput.type = "text";
-    sequencerLinkUrlInput.placeholder = "Link bridge ws://127.0.0.1:20808/ableton-link";
-    sequencerLinkUrlInput.title = "Optional custom Ableton Link bridge websocket URL";
-    sequencerLinkUrlInput.value = abletonLinkBridgeUrl || '';
-    sequencerLinkUrlInput.addEventListener("change", async () => {
-      abletonLinkBridgeUrl = (sequencerLinkUrlInput.value || '').trim();
-      if (abletonLinkBridgeUrl) localStorage.setItem('ytbm_abletonLinkBridgeUrl', abletonLinkBridgeUrl);
-      else localStorage.removeItem('ytbm_abletonLinkBridgeUrl');
-      if (sequencerClockSource === 'ableton_link') {
-        teardownAbletonLinkSession();
-        const ok = await ensureAbletonLinkSession();
-        if (!ok) scheduleAbletonLinkRetry();
-      }
-    });
-    utilityRow.appendChild(sequencerLinkUrlInput);
-
     sequencerClockDeviceSelect = document.createElement("select");
     sequencerClockDeviceSelect.className = "looper-btn";
     sequencerClockDeviceSelect.title = "Choose which MIDI input drives sequencer clock";
@@ -2348,10 +2329,6 @@ function toggleBlindMode() {
       refreshSequencerControls();
     });
     utilityRow.appendChild(sequencerClockDeviceSelect);
-
-    sequencerLinkStatusEl = document.createElement("span");
-    sequencerLinkStatusEl.className = "ytbm-touch-link-status";
-    utilityRow.appendChild(sequencerLinkStatusEl);
 
     const drumRow = document.createElement("div");
     drumRow.className = "ytbm-panel-row ytbm-touch-voice-row";
@@ -11674,17 +11651,14 @@ function teardownAbletonLinkSession() {
 async function ensureAbletonLinkSession() {
   clearAbletonLinkRetry();
   if (abletonLinkSession) return true;
-  const endpoints = [];
-  const normalizedCustom = (abletonLinkBridgeUrl || '').trim();
-  if (normalizedCustom) endpoints.push(normalizedCustom);
-  [
+  const endpoints = [
     'ws://127.0.0.1:20808',
     'ws://127.0.0.1:20808/link',
     'ws://127.0.0.1:20808/ableton-link',
     'ws://localhost:20808',
     'ws://localhost:20808/link',
     'ws://localhost:20808/ableton-link'
-  ].forEach((ep) => { if (!endpoints.includes(ep)) endpoints.push(ep); });
+  ];
 
   function connect(url) {
     return new Promise((resolve) => {
@@ -14519,18 +14493,6 @@ function injectCustomCSS() {
       color: rgba(255,255,255,0.72);
       margin-left: auto;
       white-space: nowrap;
-    }
-    .ytbm-touch-link-url {
-      flex: 1 1 260px;
-      min-width: 220px;
-      height: 36px;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.18);
-      background: rgba(255,255,255,0.08);
-      color: #fff;
-      padding: 0 12px;
-      font-size: 12px;
-      outline: none;
     }
     .looper-manual-container,
     .looper-keymap-container,
