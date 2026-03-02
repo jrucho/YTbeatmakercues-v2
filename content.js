@@ -258,6 +258,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   let abletonLinkSession = null;
   let abletonLinkAvailable = false;
   let abletonLinkSocket = null;
+  let abletonLinkRetryTimer = null;
   let currentOutputNode = null;
   let externalOutputDest = null;
   let outputAudio = null;
@@ -2309,7 +2310,12 @@ function toggleBlindMode() {
       sequencerClockSource = sequencerClockModeSelect.value || 'internal';
       if (!['internal', 'midi_clock', 'ableton_link'].includes(sequencerClockSource)) sequencerClockSource = 'internal';
       localStorage.setItem('ytbm_sequencerClockSource', sequencerClockSource);
-      if (sequencerClockSource === 'ableton_link') await ensureAbletonLinkSession();
+      if (sequencerClockSource === 'ableton_link') {
+        const ok = await ensureAbletonLinkSession();
+        if (!ok) scheduleAbletonLinkRetry();
+      } else {
+        teardownAbletonLinkSession();
+      }
       refreshSequencerControls();
     });
     utilityRow.appendChild(sequencerClockModeSelect);
@@ -2572,7 +2578,7 @@ function toggleBlindMode() {
     currentPad = 0;
     activeSequencerTarget = "pad-0";
     populateMidiInputSelect();
-    if (sequencerClockSource === 'ableton_link') ensureAbletonLinkSession();
+    if (sequencerClockSource === 'ableton_link') { ensureAbletonLinkSession(); scheduleAbletonLinkRetry(); }
     updateSequencerUI();
     refreshSequencerControls();
   }
@@ -2763,7 +2769,7 @@ function toggleBlindMode() {
       } else if (sequencerClockSource === 'midi_clock') {
         sequencerLinkStatusEl.textContent = `Following MIDI clock (${selectedMidiClockInputId === 'all' ? 'All Inputs' : selectedMidiClockInputId})`;
       } else {
-        sequencerLinkStatusEl.textContent = abletonLinkAvailable ? `Ableton Link bridge active (${abletonLinkSession?.url || 'localhost'})` : 'Ableton Link bridge not found (start localhost bridge)';
+        sequencerLinkStatusEl.textContent = abletonLinkAvailable ? `Ableton Link bridge active (${abletonLinkSession?.url || 'localhost'})` : 'Searching localhost Link bridge…';
       }
     }
   }
@@ -2790,7 +2796,7 @@ function toggleBlindMode() {
   }
 
   function startSequencer() {
-    if (sequencerClockSource === 'ableton_link') ensureAbletonLinkSession();
+    if (sequencerClockSource === 'ableton_link') { ensureAbletonLinkSession(); scheduleAbletonLinkRetry(); }
     if (sequencerPlaying) return;
     if (!clock.isRunning) {
       const now = audioContext ? audioContext.currentTime : clock.getNow();
@@ -7919,7 +7925,6 @@ function showVJWindowToggle() {
   vjContentWrap.style.background = '#171717';
   vjContentWrap.style.borderRadius = '0 0 10px 10px';
   vjContentWrap.style.boxSizing = 'border-box';
-  vjContentWrap.style.scrollbarGutter = 'stable both-edges';
   vjWindowContainer.appendChild(vjContentWrap);
 
   const topRow = document.createElement('div');
@@ -11599,7 +11604,36 @@ async function initializeMIDI() {
   }
 }
 
+function clearAbletonLinkRetry() {
+  if (abletonLinkRetryTimer) {
+    clearTimeout(abletonLinkRetryTimer);
+    abletonLinkRetryTimer = null;
+  }
+}
+
+function scheduleAbletonLinkRetry() {
+  clearAbletonLinkRetry();
+  if (sequencerClockSource !== 'ableton_link' || abletonLinkSession) return;
+  abletonLinkRetryTimer = setTimeout(async () => {
+    abletonLinkRetryTimer = null;
+    if (sequencerClockSource !== 'ableton_link' || abletonLinkSession) return;
+    const ok = await ensureAbletonLinkSession();
+    if (!ok) scheduleAbletonLinkRetry();
+  }, 2000);
+}
+
+function teardownAbletonLinkSession() {
+  clearAbletonLinkRetry();
+  if (abletonLinkSocket) {
+    try { abletonLinkSocket.close(); } catch {}
+  }
+  abletonLinkSocket = null;
+  abletonLinkSession = null;
+  abletonLinkAvailable = false;
+}
+
 async function ensureAbletonLinkSession() {
+  clearAbletonLinkRetry();
   if (abletonLinkSession) return true;
   const endpoints = [
     'ws://127.0.0.1:20808',
@@ -11661,6 +11695,7 @@ async function ensureAbletonLinkSession() {
       abletonLinkSession = null;
       abletonLinkSocket = null;
       refreshSequencerControls();
+      scheduleAbletonLinkRetry();
     });
 
     try {
@@ -11676,6 +11711,7 @@ async function ensureAbletonLinkSession() {
   abletonLinkSession = null;
   abletonLinkSocket = null;
   refreshSequencerControls();
+  scheduleAbletonLinkRetry();
   return false;
 }
 
