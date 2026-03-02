@@ -11988,14 +11988,14 @@ function handleMIDIMessage(e) {
   if (!e?.data || e.data.length < 1) return;
 
   const st = Number(e.data[0] || 0);
-  if (st === 254 || st === 255) return; // Active sensing / reset noise
+  if (st === 254) return; // Active sensing noise
   const note = Number(e.data[1] || 0);
   const velocity = Number(e.data[2] || 0);
 
   const sig = `${st}:${note}:${velocity}`;
   const ts = Number(e.timeStamp || performance.now());
   const lastForInput = midiLastByInput.get(inputId);
-  if (lastForInput && lastForInput.sig === sig && Math.abs(ts - lastForInput.ts) < 0.5) {
+  if (lastForInput && lastForInput.sig === sig && ts === lastForInput.ts) {
     return;
   }
   midiLastByInput.set(inputId, { sig, ts });
