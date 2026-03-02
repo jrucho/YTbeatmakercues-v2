@@ -16,6 +16,12 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.3.1
+- Added cross-tab VJ frame sharing through BroadcastChannel with per-tab.
+- Added VJ UI toggles for:
+“Include streams from other tabs”
+“Solo active tab audio/MIDI” 
+
 ## New in 2.3
 - Added a major Touch Sequencer overhaul with expanded pattern capacity (32 steps) and 4 banks, including per-target bank/length management for pads, drums, and sidechain. 
 - Added new sequencer target architecture covering pad-*, drum voices, and sidechain, with dedicated bank/length state and UI selection flow. 
