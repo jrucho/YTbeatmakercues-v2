@@ -259,6 +259,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   let abletonLinkAvailable = false;
   let abletonLinkSocket = null;
   let abletonLinkRetryTimer = null;
+  let abletonLinkBridgeUrl = localStorage.getItem('ytbm_abletonLinkBridgeUrl') || '';
   let currentOutputNode = null;
   let externalOutputDest = null;
   let outputAudio = null;
@@ -2319,6 +2320,24 @@ function toggleBlindMode() {
       refreshSequencerControls();
     });
     utilityRow.appendChild(sequencerClockModeSelect);
+
+    const sequencerLinkUrlInput = document.createElement("input");
+    sequencerLinkUrlInput.className = "ytbm-touch-link-url";
+    sequencerLinkUrlInput.type = "text";
+    sequencerLinkUrlInput.placeholder = "Link bridge ws://127.0.0.1:20808/ableton-link";
+    sequencerLinkUrlInput.title = "Optional custom Ableton Link bridge websocket URL";
+    sequencerLinkUrlInput.value = abletonLinkBridgeUrl || '';
+    sequencerLinkUrlInput.addEventListener("change", async () => {
+      abletonLinkBridgeUrl = (sequencerLinkUrlInput.value || '').trim();
+      if (abletonLinkBridgeUrl) localStorage.setItem('ytbm_abletonLinkBridgeUrl', abletonLinkBridgeUrl);
+      else localStorage.removeItem('ytbm_abletonLinkBridgeUrl');
+      if (sequencerClockSource === 'ableton_link') {
+        teardownAbletonLinkSession();
+        const ok = await ensureAbletonLinkSession();
+        if (!ok) scheduleAbletonLinkRetry();
+      }
+    });
+    utilityRow.appendChild(sequencerLinkUrlInput);
 
     sequencerClockDeviceSelect = document.createElement("select");
     sequencerClockDeviceSelect.className = "looper-btn";
@@ -8278,6 +8297,7 @@ function showVJWindowToggle() {
 
   let dragCorner = -1;
   let dragStream = -1;
+  let dragPointerId = null;
   const pickCorner = (x, y) => {
     const w = vjPreviewCanvas.clientWidth || 1, h = vjPreviewCanvas.clientHeight || 1;
     let best = { stream: -1, corner: -1, dist: 1e9 };
@@ -8289,10 +8309,18 @@ function showVJWindowToggle() {
         if (d < best.dist) best = { stream: si, corner: ci, dist: d };
       });
     }
-    return best.dist < 28 ? best : { stream: -1, corner: -1, dist: best.dist };
+    const pickupRadius = (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 42 : 30;
+    return best.dist < pickupRadius ? best : { stream: -1, corner: -1, dist: best.dist };
+  };
+  const clearCornerDrag = () => {
+    dragCorner = -1;
+    dragStream = -1;
+    dragPointerId = null;
+    vjPreviewCanvas.style.cursor = 'crosshair';
   };
   const moveCorner = (evt) => {
     if (dragCorner < 0 || dragStream < 0) return;
+    if (dragPointerId !== null && evt.pointerId !== undefined && evt.pointerId !== dragPointerId) return;
     const r = vjPreviewCanvas.getBoundingClientRect();
     const nx = Math.min(1, Math.max(0, (evt.clientX - r.left) / Math.max(1, r.width)));
     const ny = Math.min(1, Math.max(0, (evt.clientY - r.top) / Math.max(1, r.height)));
@@ -8303,17 +8331,30 @@ function showVJWindowToggle() {
     syncActiveBlend();
     persistVJControls();
   };
-  vjPreviewCanvas.addEventListener('mousedown', (evt) => {
+  vjPreviewCanvas.style.cursor = 'crosshair';
+  vjPreviewCanvas.addEventListener('pointerdown', (evt) => {
     const r = vjPreviewCanvas.getBoundingClientRect();
     const picked = pickCorner(evt.clientX - r.left, evt.clientY - r.top);
     dragStream = picked.stream;
     dragCorner = picked.corner;
+    dragPointerId = picked.corner >= 0 ? evt.pointerId : null;
     if (dragStream >= 0) {
       vjControls.streamActiveIndex = dragStream;
       activeStreamSel.value = String(dragStream);
       syncActiveBlend();
+      try { vjPreviewCanvas.setPointerCapture(evt.pointerId); } catch {}
+      moveCorner(evt);
+      evt.preventDefault();
     }
   });
+  vjPreviewCanvas.addEventListener('pointermove', moveCorner);
+  vjPreviewCanvas.addEventListener('pointerup', (evt) => {
+    if (dragPointerId !== null && evt.pointerId !== dragPointerId) return;
+    try { vjPreviewCanvas.releasePointerCapture(evt.pointerId); } catch {}
+    clearCornerDrag();
+  });
+  vjPreviewCanvas.addEventListener('pointercancel', clearCornerDrag);
+  vjPreviewCanvas.addEventListener('lostpointercapture', clearCornerDrag);
   vjPreviewCanvas.addEventListener('dblclick', (evt) => {
     const r = vjPreviewCanvas.getBoundingClientRect();
     const picked = pickCorner(evt.clientX - r.left, evt.clientY - r.top);
@@ -8325,8 +8366,6 @@ function showVJWindowToggle() {
       persistVJControls();
     }
   });
-  window.addEventListener('mousemove', moveCorner);
-  window.addEventListener('mouseup', () => { dragCorner = -1; dragStream = -1; });
 
   if (vjModuleEnabled) startVJRenderer();
 }
@@ -11635,14 +11674,17 @@ function teardownAbletonLinkSession() {
 async function ensureAbletonLinkSession() {
   clearAbletonLinkRetry();
   if (abletonLinkSession) return true;
-  const endpoints = [
+  const endpoints = [];
+  const normalizedCustom = (abletonLinkBridgeUrl || '').trim();
+  if (normalizedCustom) endpoints.push(normalizedCustom);
+  [
     'ws://127.0.0.1:20808',
     'ws://127.0.0.1:20808/link',
     'ws://127.0.0.1:20808/ableton-link',
     'ws://localhost:20808',
     'ws://localhost:20808/link',
     'ws://localhost:20808/ableton-link'
-  ];
+  ].forEach((ep) => { if (!endpoints.includes(ep)) endpoints.push(ep); });
 
   function connect(url) {
     return new Promise((resolve) => {
@@ -12019,31 +12061,63 @@ function stopPitchUpRepeat() {
  * Draggable Helpers
  **************************************/
 function makePanelDraggable(panel, handle, storageKey) {
-  let offsetX = 0, offsetY = 0, dragging = false;
-  handle.addEventListener("mousedown", e => {
-    dragging = true;
-    let rect = panel.getBoundingClientRect();
-    offsetX = e.clientX - rect.left;
-    offsetY = e.clientY - rect.top;
-    document.body.style.userSelect = "none";
-  });
-  addTrackedListener(document, "mousemove", e => {
-    if (!dragging) return;
-    let nl = e.clientX - offsetX;
-    let nt = e.clientY - offsetY;
-    let rect = panel.getBoundingClientRect();
-    nl = Math.max(0, Math.min(window.innerWidth - rect.width, nl));
-    nt = Math.max(0, Math.min(window.innerHeight - rect.height, nt));
-    panel.style.left = nl + "px";
-    panel.style.top = nt + "px";
-  });
-  addTrackedListener(document, "mouseup", () => {
-    if (dragging) {
-      dragging = false;
-      document.body.style.userSelect = "";
-      storePanelPosition(panel, storageKey);
+  if (!panel || !handle || handle.dataset.ytbmDragReady === '1') return;
+  handle.dataset.ytbmDragReady = '1';
+
+  const state = { dragging: false, pointerId: null, offsetX: 0, offsetY: 0 };
+
+  const clamp = (x, y) => {
+    const rect = panel.getBoundingClientRect();
+    const maxX = Math.max(0, window.innerWidth - rect.width);
+    const maxY = Math.max(0, window.innerHeight - rect.height);
+    return { x: Math.max(0, Math.min(maxX, x)), y: Math.max(0, Math.min(maxY, y)) };
+  };
+
+  const endDrag = (e) => {
+    if (!state.dragging) return;
+    if (e && e.pointerId !== undefined && e.pointerId !== state.pointerId) return;
+    state.dragging = false;
+    const pid = state.pointerId;
+    state.pointerId = null;
+    document.body.style.userSelect = '';
+    if (pid !== null) {
+      try { handle.releasePointerCapture(pid); } catch {}
     }
+    storePanelPosition(panel, storageKey);
+  };
+
+  const onMove = (e) => {
+    if (!state.dragging || e.pointerId !== state.pointerId) return;
+    const pos = clamp(e.clientX - state.offsetX, e.clientY - state.offsetY);
+    panel.style.left = pos.x + 'px';
+    panel.style.top = pos.y + 'px';
+  };
+
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const rect = panel.getBoundingClientRect();
+    state.dragging = true;
+    state.pointerId = e.pointerId;
+    state.offsetX = e.clientX - rect.left;
+    state.offsetY = e.clientY - rect.top;
+    document.body.style.userSelect = 'none';
+    try { handle.setPointerCapture(e.pointerId); } catch {}
+    e.preventDefault();
   });
+
+  handle.addEventListener('pointermove', onMove);
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+  handle.addEventListener('lostpointercapture', endDrag);
+
+  const clampOnResize = () => {
+    const rect = panel.getBoundingClientRect();
+    const pos = clamp(rect.left, rect.top);
+    panel.style.left = pos.x + 'px';
+    panel.style.top = pos.y + 'px';
+    if (!state.dragging) storePanelPosition(panel, storageKey);
+  };
+  addTrackedListener(window, 'resize', clampOnResize);
 }
 function storePanelPosition(panel, key) {
   let rect = panel.getBoundingClientRect();
@@ -14445,6 +14519,18 @@ function injectCustomCSS() {
       color: rgba(255,255,255,0.72);
       margin-left: auto;
       white-space: nowrap;
+    }
+    .ytbm-touch-link-url {
+      flex: 1 1 260px;
+      min-width: 220px;
+      height: 36px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      padding: 0 12px;
+      font-size: 12px;
+      outline: none;
     }
     .looper-manual-container,
     .looper-keymap-container,

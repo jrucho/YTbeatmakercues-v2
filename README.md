@@ -120,6 +120,19 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 - 👇 **Touch Sequencer**  
   10 pads, 16-step sequencer, tap tempo, and BPM-based triggering.
 
+
+## Ableton Link Bridge Setup (Local)
+
+The Touch Sequencer now supports a **custom Link bridge URL** in the popup (next to the clock selector).
+
+1. Run a local WebSocket bridge process that publishes Link tempo/start/stop events.
+2. In Touch Sequencer, set clock source to **Clock: Ableton Link**.
+3. Paste your bridge URL (for example `ws://127.0.0.1:20808/ableton-link`) in the Link bridge field.
+4. The extension will persist that URL and reconnect automatically.
+
+If no custom URL is set, the extension falls back to localhost discovery on:
+`ws://127.0.0.1:20808`, `/link`, `/ableton-link` (and `localhost` equivalents).
+
 ## Installation
 
 1. Download the latest version of the Extension.
