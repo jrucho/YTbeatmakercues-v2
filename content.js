@@ -743,6 +743,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         streamFx: [],
         sharedFxRack: true,
         preserveAspectRatio: true,
+        crossTabStreamsEnabled: false,
         corners: [
           { x: 0.0, y: 0.0 },
           { x: 1.0, y: 0.0 },
@@ -806,6 +807,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       // Track last processed MIDI message to filter duplicates
       lastMidiTimestamp = 0,
       lastMidiData = [],
+      lastMidiInputId = '',
+      midiLastByInput = new Map(),
       currentlyDetectingMidiControl = null,
       selectedCueKey = null,
       lastSuperKnobValue = null,
@@ -964,9 +967,18 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjBandLevels = { low: 0, mid: 0, high: 0, full: 0 },
       vjModuleEnabled = false,
       vjTextIndex = 0,
+      tabPlaybackGateGain = null,
+      singleTabPlaybackMode = localStorage.getItem('ytbm_singleTabPlaybackMode') === '1',
+      ytbmTabId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`,
       vjLastTextStep = 0,
       vjFeedbackCanvas = null,
       vjFeedbackCtx = null,
+      crossTabVJChannel = null,
+      remoteVJFrames = new Map(),
+      vjBroadcastBusy = false,
+      vjLastBroadcastAt = 0,
+      vjTabOrder = [],
+      vjControlsSyncUI = null,
       // We'll keep them to identify which button is which
       reverbButton = null,
       cassetteButton = null,
@@ -4664,6 +4676,112 @@ function onMinimalPointerUp(e) {
 /**************************************
  * Deferred AudioContext & Node Setup
  **************************************/
+
+function isTabPlaybackAllowed() {
+  return !singleTabPlaybackMode || !document.hidden;
+}
+
+function canProcessRealtimeInputs() {
+  return isTabPlaybackAllowed();
+}
+
+function updateTabPlaybackGate() {
+  if (!tabPlaybackGateGain) return;
+  tabPlaybackGateGain.gain.value = isTabPlaybackAllowed() ? 1 : 0;
+}
+
+
+function updateVJTabOrder(order) {
+  if (!Array.isArray(order)) return;
+  vjTabOrder = order.filter((id) => typeof id === 'string' && id.length);
+}
+
+function registerTabOrderSync() {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) return;
+  try {
+    chrome.runtime.sendMessage({ type: 'ytbm-register-tab', ytbmTabId }, (res) => {
+      if (chrome.runtime?.lastError) return;
+      if (res && Array.isArray(res.order)) updateVJTabOrder(res.order);
+    });
+  } catch {}
+}
+
+function requestTabOrderRefresh() {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) return;
+  try {
+    chrome.runtime.sendMessage({ type: 'ytbm-get-tab-order' }, (res) => {
+      if (chrome.runtime?.lastError) return;
+      if (res && Array.isArray(res.order)) updateVJTabOrder(res.order);
+    });
+  } catch {}
+}
+
+function initCrossTabChannel() {
+  if (crossTabVJChannel || typeof BroadcastChannel === 'undefined') return;
+  try {
+    crossTabVJChannel = new BroadcastChannel('ytbm_cross_tab_v1');
+    crossTabVJChannel.onmessage = (evt) => {
+      const msg = evt?.data;
+      if (!msg || msg.tabId === ytbmTabId) return;
+      if (msg.type === 'vj-frame' && msg.frame && vjControls.crossTabStreamsEnabled) {
+        const prev = remoteVJFrames.get(msg.tabId);
+        if (prev?.bitmap?.close) {
+          try { prev.bitmap.close(); } catch {}
+        }
+        remoteVJFrames.set(msg.tabId, { bitmap: msg.frame, ts: Number(msg.ts) || Date.now() });
+      }
+      if (msg.type === 'vj-frame-clear') {
+        const prev = remoteVJFrames.get(msg.tabId);
+        if (prev?.bitmap?.close) {
+          try { prev.bitmap.close(); } catch {}
+        }
+        remoteVJFrames.delete(msg.tabId);
+      }
+    };
+    registerTabOrderSync();
+    requestTabOrderRefresh();
+  } catch {}
+}
+
+
+addTrackedListener(document, 'visibilitychange', () => {
+  updateTabPlaybackGate();
+});
+addTrackedListener(window, 'focus', () => {
+  updateTabPlaybackGate();
+});
+addTrackedListener(window, 'blur', () => {
+  updateTabPlaybackGate();
+});
+addTrackedListener(window, 'pagehide', () => {
+  if (crossTabVJChannel) {
+    try { crossTabVJChannel.postMessage({ type: 'vj-frame-clear', tabId: ytbmTabId }); } catch {}
+  }
+});
+
+addTrackedListener(window, 'storage', (evt) => {
+  if (!evt) return;
+  if (evt.key === 'ytbm_vjControls' && typeof evt.newValue === 'string') {
+    applySharedVJControlsFromStorage(evt.newValue);
+  }
+  if (evt.key === 'ytbm_singleTabPlaybackMode') {
+    singleTabPlaybackMode = evt.newValue === '1';
+    updateTabPlaybackGate();
+    if (typeof vjControlsSyncUI === 'function') vjControlsSyncUI();
+  }
+  if (evt.key === 'ytbm_vjEnabled') {
+    const enabled = evt.newValue === '1';
+    if (enabled !== vjModuleEnabled) setVJModuleEnabled(enabled);
+  }
+});
+
+if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (!msg || msg.type !== 'ytbm-tab-order-update') return;
+    updateVJTabOrder(msg.order || []);
+  });
+}
+
 async function ensureAudioContext() {
   let created = false;
   if (!audioContext) {
@@ -4687,6 +4805,12 @@ async function ensureAudioContext() {
     }
     created = true;
   }
+  if (!tabPlaybackGateGain) {
+    tabPlaybackGateGain = audioContext.createGain();
+    tabPlaybackGateGain.gain.value = 1;
+  }
+  initCrossTabChannel();
+
   if (audioContext.state === "suspended") {
     await audioContext.resume().catch(err => console.error("AudioContext resume failed:", err.message));
   }
@@ -4809,6 +4933,10 @@ let videoCheckInterval = setInterval(() => {
 cleanupFunctions.push(() => clearInterval(videoCheckInterval));
 
 async function setupAudioNodes() {
+  if (!tabPlaybackGateGain) {
+    tabPlaybackGateGain = audioContext.createGain();
+    tabPlaybackGateGain.gain.value = 1;
+  }
   videoGain = audioContext.createGain();
   sidechainGain = audioContext.createGain();
   sidechainGain.gain.value = 1;
@@ -5497,6 +5625,7 @@ function applyAllFXRouting() {
   loFiCompNode.disconnect();
   postCompGain.disconnect();
   overallOutputGain.disconnect();
+  if (tabPlaybackGateGain) tabPlaybackGateGain.disconnect();
 
   // If you have a videoPreviewElement, ensure it has a MediaElementSource:
   if (videoPreviewElement) {
@@ -5586,19 +5715,20 @@ function applyAllFXRouting() {
     // bus1..3 => masterGain => fxPad => loFiComp => postComp => destination
     fxPadMasterOut.connect(loFiCompNode);
     loFiCompNode.connect(postCompGain);
-    postCompGain.connect(currentOutputNode || audioContext.destination);
-    postCompGain.connect(videoDestination);
+    postCompGain.connect(tabPlaybackGateGain);
 
     // bus4 => directly to output (skips compressor)
-    bus4Gain.connect(currentOutputNode || audioContext.destination);
-    bus4Gain.connect(videoDestination);
+    bus4Gain.connect(tabPlaybackGateGain);
   } else {
     // No compressor: just send everyone (including bus4) through masterGain => overallOutput => out
     bus4Gain.connect(masterGain);
     fxPadMasterOut.connect(overallOutputGain);
-    overallOutputGain.connect(currentOutputNode || audioContext.destination);
-    overallOutputGain.connect(videoDestination);
+    overallOutputGain.connect(tabPlaybackGateGain);
   }
+
+  tabPlaybackGateGain.connect(currentOutputNode || audioContext.destination);
+  tabPlaybackGateGain.connect(videoDestination);
+  updateTabPlaybackGate();
 
   // If eqFilterApplyTarget === "master", route masterGain -> eqFilterNode -> etc.
   // (But the above logic already demonstrates separate compression paths.)
@@ -7339,6 +7469,7 @@ function ensureVJDefaults() {
   if (!Array.isArray(vjControls.streamFx)) vjControls.streamFx = [];
   if (typeof vjControls.sharedFxRack !== 'boolean') vjControls.sharedFxRack = true;
   if (typeof vjControls.preserveAspectRatio !== 'boolean') vjControls.preserveAspectRatio = true;
+  if (typeof vjControls.crossTabStreamsEnabled !== 'boolean') vjControls.crossTabStreamsEnabled = false;
   if (!Number.isFinite(vjControls.streamCount)) vjControls.streamCount = 1;
   if (!Number.isFinite(vjControls.streamActiveIndex)) vjControls.streamActiveIndex = 0;
   defs.forEach((d, i) => {
@@ -7390,6 +7521,24 @@ function loadVJControls() {
     }
   } catch {}
   ensureVJDefaults();
+}
+
+
+function applySharedVJControlsFromStorage(raw) {
+  try {
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object') return;
+    vjControls = {
+      ...vjControls,
+      ...data,
+      corners: Array.isArray(data.corners) && data.corners.length === 4
+        ? data.corners.map(c => ({ x: Math.min(1, Math.max(0, Number(c.x) || 0)), y: Math.min(1, Math.max(0, Number(c.y) || 0)) }))
+        : vjControls.corners
+    };
+    ensureVJDefaults();
+    if (typeof vjControlsSyncUI === 'function') vjControlsSyncUI();
+  } catch {}
 }
 
 function setVJModuleEnabled(enabled) {
@@ -7456,8 +7605,8 @@ function ensureVJCanvases(requirePreview = false) {
 
 function drawVJVideoFrame(g, video, x, y, width, height) {
   if (!video || !width || !height) return;
-  const srcW = Math.max(1, Number(video.videoWidth) || width);
-  const srcH = Math.max(1, Number(video.videoHeight) || height);
+  const srcW = Math.max(1, Number(video.videoWidth || video.width || video.naturalWidth) || width);
+  const srcH = Math.max(1, Number(video.videoHeight || video.height || video.naturalHeight) || height);
   const srcRatio = srcW / srcH;
   const dstRatio = width / height;
 
@@ -7618,13 +7767,49 @@ function resetStreamPinCorner(streamIndex, cornerIndex) {
   vjControls.streamPins[streamIndex][cornerIndex] = { x: src.x, y: src.y };
 }
 
+
+function getVJStreamSources(localVideo) {
+  const entries = [];
+  if (localVideo) entries.push({ tabId: ytbmTabId, source: localVideo, ts: Date.now() });
+  if (vjControls.crossTabStreamsEnabled) {
+    remoteVJFrames.forEach((f, tabId) => {
+      if (f && f.bitmap) entries.push({ tabId, source: f.bitmap, ts: f.ts || 0 });
+    });
+  }
+  const orderMap = new Map((vjTabOrder || []).map((id, idx) => [id, idx]));
+  entries.sort((a, b) => {
+    const ai = orderMap.has(a.tabId) ? orderMap.get(a.tabId) : Number.MAX_SAFE_INTEGER;
+    const bi = orderMap.has(b.tabId) ? orderMap.get(b.tabId) : Number.MAX_SAFE_INTEGER;
+    if (ai !== bi) return ai - bi;
+    return (a.ts || 0) - (b.ts || 0);
+  });
+  const sources = entries.map((e) => e.source).filter(Boolean);
+  return sources.length ? sources : [localVideo];
+}
+
+async function broadcastLocalVJFrame(video) {
+  if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !video) return;
+  const now = performance.now();
+  if (vjBroadcastBusy || now - vjLastBroadcastAt < 120) return;
+  if (typeof createImageBitmap !== 'function') return;
+  vjBroadcastBusy = true;
+  vjLastBroadcastAt = now;
+  try {
+    const bitmap = await createImageBitmap(video);
+    crossTabVJChannel.postMessage({ type: 'vj-frame', tabId: ytbmTabId, ts: Date.now(), frame: bitmap }, [bitmap]);
+  } catch {}
+  vjBroadcastBusy = false;
+}
+
 function drawStreamMosaic(ctx, video, width, height, tMs) {
   const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+  const sources = getVJStreamSources(video);
   for (let i = 0; i < count; i++) {
+    const source = sources[i % sources.length] || video;
     const blend = vjControls.streamBlendMap?.[i] || 'source-over';
     const quad = (vjControls.streamPins && vjControls.streamPins[i]) ? vjControls.streamPins[i] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
     const fxIndex = vjControls.sharedFxRack ? 0 : i;
-    applyVJEffectsToSource(video, width, height, tMs, fxIndex);
+    applyVJEffectsToSource(source, width, height, tMs, fxIndex);
     ctx.save();
     ctx.globalCompositeOperation = blend;
     drawMappedQuad(ctx, vjSourceCanvas, quad, width, height, 8);
@@ -7803,6 +7988,7 @@ function renderVJFrameCore(tMs = performance.now()) {
   vjOutputCtx.fillStyle = '#000';
   vjOutputCtx.fillRect(0, 0, w, h);
   drawStreamMosaic(vjOutputCtx, vid, w, h, tMs);
+  broadcastLocalVJFrame(vid);
 
   // Preview mirrors output then overlays editable pins when the VJ panel is open.
   if (vjPreviewCtx && vjPreviewCanvas) {
@@ -8001,6 +8187,8 @@ function showVJWindowToggle() {
   ratioBtn.addEventListener('click', () => {
     vjControls.preserveAspectRatio = !vjControls.preserveAspectRatio;
     syncRatioBtn();
+    crossTabChk.checked = !!vjControls.crossTabStreamsEnabled;
+    tabAudioChk.checked = !!singleTabPlaybackMode;
     persistVJControls();
   });
   topRow.appendChild(ratioBtn);
@@ -8012,6 +8200,8 @@ function showVJWindowToggle() {
   ratioResetBtn.addEventListener('click', () => {
     vjControls.preserveAspectRatio = true;
     syncRatioBtn();
+    crossTabChk.checked = !!vjControls.crossTabStreamsEnabled;
+    tabAudioChk.checked = !!singleTabPlaybackMode;
     persistVJControls();
   });
   topRow.appendChild(ratioResetBtn);
@@ -8086,6 +8276,46 @@ function showVJWindowToggle() {
   streamRow.appendChild(streamLbl);
   streamRow.appendChild(streamCountSel);
   vjContentWrap.appendChild(streamRow);
+
+  const crossTabRow = document.createElement('div');
+  crossTabRow.style.display = 'flex';
+  crossTabRow.style.alignItems = 'center';
+  crossTabRow.style.gap = '8px';
+  const crossTabChk = document.createElement('input');
+  crossTabChk.type = 'checkbox';
+  crossTabChk.checked = !!vjControls.crossTabStreamsEnabled;
+  crossTabChk.addEventListener('change', () => {
+    vjControls.crossTabStreamsEnabled = crossTabChk.checked;
+    if (!crossTabChk.checked) {
+      remoteVJFrames.forEach((f) => { try { f?.bitmap?.close?.(); } catch {} });
+      remoteVJFrames.clear();
+      crossTabVJChannel?.postMessage({ type: 'vj-frame-clear', tabId: ytbmTabId });
+    }
+    persistVJControls();
+  });
+  const crossTabLbl = document.createElement('span');
+  crossTabLbl.textContent = 'Include streams from other tabs';
+  crossTabRow.appendChild(crossTabChk);
+  crossTabRow.appendChild(crossTabLbl);
+  vjContentWrap.appendChild(crossTabRow);
+
+  const tabAudioRow = document.createElement('div');
+  tabAudioRow.style.display = 'flex';
+  tabAudioRow.style.alignItems = 'center';
+  tabAudioRow.style.gap = '8px';
+  const tabAudioChk = document.createElement('input');
+  tabAudioChk.type = 'checkbox';
+  tabAudioChk.checked = !!singleTabPlaybackMode;
+  tabAudioChk.addEventListener('change', () => {
+    singleTabPlaybackMode = !!tabAudioChk.checked;
+    localStorage.setItem('ytbm_singleTabPlaybackMode', singleTabPlaybackMode ? '1' : '0');
+    updateTabPlaybackGate();
+  });
+  const tabAudioLbl = document.createElement('span');
+  tabAudioLbl.textContent = 'Solo active tab audio/MIDI';
+  tabAudioRow.appendChild(tabAudioChk);
+  tabAudioRow.appendChild(tabAudioLbl);
+  vjContentWrap.appendChild(tabAudioRow);
 
   const streamBlendModes = ['source-over','screen','multiply','overlay','lighten','difference'];
   const streamConfigRow = document.createElement('div');
@@ -8259,6 +8489,8 @@ function showVJWindowToggle() {
     mirrorChk.checked = !!getActiveStreamFx().mirror;
     syncFxRackBtn();
     syncRatioBtn();
+    crossTabChk.checked = !!vjControls.crossTabStreamsEnabled;
+    tabAudioChk.checked = !!singleTabPlaybackMode;
     effectBindings.forEach(({ def, inp, val, reactSel, midiInp, blendSel }) => {
       const activeFx = getActiveStreamFx();
       const v = Number(activeFx[def.key] ?? vjControls[def.key] ?? def.def);
@@ -8269,6 +8501,8 @@ function showVJWindowToggle() {
       blendSel.value = vjControls.effectBlend[def.key] || 'source-over';
     });
   };
+
+  vjControlsSyncUI = syncVJControlsToUI;
 
   makePanelDraggable(vjWindowContainer, vjDragHandle, 'ytbm_vjWindowPos');
 
@@ -11597,6 +11831,7 @@ function populateMidiInputSelect() {
 
 function attachMidiInputHandlers() {
   if (!midiAccess) return;
+  midiLastByInput.clear();
   midiAccess.inputs.forEach(input => {
     input.onmidimessage = handleMIDIMessage;
   });
@@ -11749,22 +11984,24 @@ function handleMidiClockTick() {
 }
 
 function handleMIDIMessage(e) {
-  // Filter out duplicate events which can happen on some controllers
-  if (e.timeStamp === lastMidiTimestamp &&
-      e.data[0] === lastMidiData[0] &&
-      e.data[1] === lastMidiData[1] &&
-      e.data[2] === lastMidiData[2]) {
-    return;
-  }
-  lastMidiTimestamp = e.timeStamp;
-  lastMidiData = [...e.data];
+  const inputId = e?.currentTarget?.id || e?.target?.id || 'unknown';
+  if (!e?.data || e.data.length < 1) return;
+
+  const st = Number(e.data[0] || 0);
+  if (st === 254) return; // Active sensing noise
+  const note = Number(e.data[1] || 0);
+  const velocity = Number(e.data[2] || 0);
+
+  // Do not dedupe note events here: some controllers send valid repeated
+  // hits with identical data/timestamps and deduping can drop drum triggers.
+
+  const command = st & 0xf0;
+  const channel = st & 0x0f;
+  const isNoteOffLike = command === 128 || (command === 144 && velocity === 0);
+  if (!canProcessRealtimeInputs() && !isNoteOffLike) return;
 
   if (unhideOnInput) pulseShowYTControls();
 
-  let [st, note, velocity = 0] = e.data;
-  const command = st & 0xf0;
-  const channel = st & 0x0f;
-  const inputId = e?.currentTarget?.id || e?.target?.id || 'unknown';
   const midiClockAllowed = selectedMidiClockInputId === 'all' || inputId === selectedMidiClockInputId;
 
   if (st === 248) {
@@ -11830,87 +12067,38 @@ function handleMIDIMessage(e) {
       isModPressed = true;
       shiftDownTime = Date.now();
       shiftUsedAsModifier = false;
-    } else if (command === 128 || (command === 144 && velocity === 0)) {
+      return;
+    }
+    if (command === 128 || (command === 144 && velocity === 0)) {
       isModPressed = false;
+      const heldMs = Date.now() - (shiftDownTime || 0);
+      const wasModifier = shiftUsedAsModifier;
+      if (heldMs > 350 && !wasModifier) {
+        resetFXToDefaults();
+      }
+      shiftUsedAsModifier = false;
       lastMidiShiftReleaseTime = Date.now();
-    }
-    return;
-
-  }
-  if (currentlyDetectingMidi && command === 144 && velocity > 0) {
-    if (midiNotes[currentlyDetectingMidi] !== undefined) {
-      // Could be a base field or a cue
-      if (typeof midiNotes[currentlyDetectingMidi] === 'number') {
-        midiNotes[currentlyDetectingMidi] = note;
-        updateMidiMapInput(currentlyDetectingMidi, note);
-        currentlyDetectingMidi = null;
-        return;
-      }
-    }
-    if (midiNotes.cues[currentlyDetectingMidi] !== undefined) {
-      midiNotes.cues[currentlyDetectingMidi] = note;
-      updateMidiMapInput(currentlyDetectingMidi, note);
-      currentlyDetectingMidi = null;
       return;
     }
   }
 
-  if (command === 0xb0) {
-    if (Number(note) === Number(midiNotes.fxPadX)) {
-      const x = e.data[2] / 127;
-      handleFxPadJoystick(x, fxPadBall.y);
-      return;
-    }
-    if (Number(note) === Number(midiNotes.fxPadY)) {
-      const y = 1 - (e.data[2] / 127);
-      handleFxPadJoystick(fxPadBall.x, y);
-      return;
-    }
-    if (Number(note) === Number(midiNotes.superKnob)) {
-      if (selectedCueKey) {
-        if (isModPressed || isShiftKeyDown) {
-          syncSuperKnobBaseline(e.data[2]);
-        } else {
-          let diff = computeSuperKnobDelta(e.data[2]);
-          if (diff !== 0) {
-            adjustSelectedCue(diff * superKnobStep);
-          }
-        }
-      }
-    }
-  } else if (command === 144 && velocity > 0) {
-    if (handleVJMidiNote(note, velocity, command)) {
-      return;
-    }
-        if (Number(note) === Number(midiNotes.randomCues)) {
-      cueInputMode = 'midi';
-      randomizeCuesInOneClick();
-      return;
-    }
-    if (note === midiNotes.sidechainTap) {
-      triggerSidechainEnvelope('midi');
-      return;
-    }
-        if (note === midiNotes.undo) {
-      if (isModPressed) {
-        redoAction();
+  if (command === 176) {
+    if (note === midiNotes.superKnob) {
+      if (superKnobMode === 'absolute') {
+        applySuperKnobAbsolute(velocity / 127);
+      } else if (superKnobMode === 'relative') {
+        const next = convertRelativeMidiToNormalized(velocity);
+        if (next !== null) applySuperKnobAbsolute(next);
       } else {
-        undoAction();
+        applySuperKnob(velocity / 127);
       }
       return;
     }
+  }
+
+  if (command === 144 && velocity > 0) {
     if (note === midiNotes.pitchDown) startPitchDownRepeat();
     if (note === midiNotes.pitchUp) startPitchUpRepeat();
-    if (note === midiNotes.pitchMode) { pushUndoState(); togglePitchMode(); return; }
-    if (note === midiNotes.kick) {
-      if (isModPressed) toggleSampleMute("kick"); else playSample("kick");
-    }
-    if (note === midiNotes.hihat) {
-      if (isModPressed) toggleSampleMute("hihat"); else playSample("hihat");
-    }
-    if (note === midiNotes.snare) {
-      if (isModPressed) toggleSampleMute("snare"); else playSample("snare");
-    }
     if (note === midiNotes.looperA) {
       activeLoopIndex = 0;
       activeMidiLoopIndex = 0;
@@ -12008,6 +12196,7 @@ function handleMIDIMessage(e) {
     if (note === midiNotes.videoLooper) onVideoLooperButtonMouseUp();
   }
 }
+
 
 function startPitchDownRepeat() {
   if (pitchDownInterval) return;
