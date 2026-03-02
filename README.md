@@ -22,13 +22,10 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 - Added a redesigned Touch Sequencer popup UI with utility controls (mark cues, bank mode, erase bank), pad grid, step grid, and transport/record/quantize controls. 
 - Added sequencer tempo editing improvements (input, wheel, drag behavior) with internal-clock gating and live BPM application. 
 - Added sequencer transport engine updates with dedicated startSequencer, stopSequencer, and interval scheduler tick loop for step playback. 
-- Added clock source routing with Internal / MIDI Clock / Ableton Link mode selection and persistence. 
+- Added clock source routing with Internal / MIDI Clock mode selection. 
 - Added MIDI clock input selection and persistence so a specific MIDI device (or all devices) can drive sequencer clock. 
-- Added Ableton Link bridge auto-connect logic with localhost endpoint probing, message handling for tempo/start/stop, and retry on disconnect. 
-- Improved Touch Sequencer visual spacing and wrapped-row vertical breathing room in popup layout. 
 - Improved draggable window reliability by using pointer-driven panel drag with capture, clamp-to-viewport, and resize clamping. 
 - Improved VJ pin-corner interaction reliability with better corner pick logic and pointer-based dragging flow for mapped corners. 
-- Included docs cleanup previously noted in changelog history (sidechain “panel” typo correction). 
 
 ## New in 2.2
 - Added a new **VJ Module** for live visuals: open a dedicated panel, route up to 8 streams, and process them through a canvas-based effect pipeline in realtime.
