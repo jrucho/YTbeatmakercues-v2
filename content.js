@@ -808,6 +808,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       lastMidiTimestamp = 0,
       lastMidiData = [],
       lastMidiInputId = '',
+      midiLastByInput = new Map(),
       currentlyDetectingMidiControl = null,
       selectedCueKey = null,
       lastSuperKnobValue = null,
@@ -11830,6 +11831,7 @@ function populateMidiInputSelect() {
 
 function attachMidiInputHandlers() {
   if (!midiAccess) return;
+  midiLastByInput.clear();
   midiAccess.inputs.forEach(input => {
     input.onmidimessage = handleMIDIMessage;
   });
@@ -11983,7 +11985,22 @@ function handleMidiClockTick() {
 
 function handleMIDIMessage(e) {
   const inputId = e?.currentTarget?.id || e?.target?.id || 'unknown';
-  // Filter out duplicate events which can happen on some controllers
+  if (!e?.data || e.data.length < 1) return;
+
+  const st = Number(e.data[0] || 0);
+  if (st === 254 || st === 255) return; // Active sensing / reset noise
+  const note = Number(e.data[1] || 0);
+  const velocity = Number(e.data[2] || 0);
+
+  const sig = `${st}:${note}:${velocity}`;
+  const ts = Number(e.timeStamp || performance.now());
+  const lastForInput = midiLastByInput.get(inputId);
+  if (lastForInput && lastForInput.sig === sig && Math.abs(ts - lastForInput.ts) < 0.5) {
+    return;
+  }
+  midiLastByInput.set(inputId, { sig, ts });
+
+  // Backward-compatible global duplicate guard
   if (e.timeStamp === lastMidiTimestamp &&
       inputId === lastMidiInputId &&
       e.data[0] === lastMidiData[0] &&
@@ -11995,7 +12012,6 @@ function handleMIDIMessage(e) {
   lastMidiInputId = inputId;
   lastMidiData = [...e.data];
 
-  let [st, note, velocity = 0] = e.data;
   const command = st & 0xf0;
   const channel = st & 0x0f;
   const isNoteOffLike = command === 128 || (command === 144 && velocity === 0);
@@ -12068,87 +12084,38 @@ function handleMIDIMessage(e) {
       isModPressed = true;
       shiftDownTime = Date.now();
       shiftUsedAsModifier = false;
-    } else if (command === 128 || (command === 144 && velocity === 0)) {
+      return;
+    }
+    if (command === 128 || (command === 144 && velocity === 0)) {
       isModPressed = false;
+      const heldMs = Date.now() - (shiftDownTime || 0);
+      const wasModifier = shiftUsedAsModifier;
+      if (heldMs > 350 && !wasModifier) {
+        resetFXToDefaults();
+      }
+      shiftUsedAsModifier = false;
       lastMidiShiftReleaseTime = Date.now();
-    }
-    return;
-
-  }
-  if (currentlyDetectingMidi && command === 144 && velocity > 0) {
-    if (midiNotes[currentlyDetectingMidi] !== undefined) {
-      // Could be a base field or a cue
-      if (typeof midiNotes[currentlyDetectingMidi] === 'number') {
-        midiNotes[currentlyDetectingMidi] = note;
-        updateMidiMapInput(currentlyDetectingMidi, note);
-        currentlyDetectingMidi = null;
-        return;
-      }
-    }
-    if (midiNotes.cues[currentlyDetectingMidi] !== undefined) {
-      midiNotes.cues[currentlyDetectingMidi] = note;
-      updateMidiMapInput(currentlyDetectingMidi, note);
-      currentlyDetectingMidi = null;
       return;
     }
   }
 
-  if (command === 0xb0) {
-    if (Number(note) === Number(midiNotes.fxPadX)) {
-      const x = e.data[2] / 127;
-      handleFxPadJoystick(x, fxPadBall.y);
-      return;
-    }
-    if (Number(note) === Number(midiNotes.fxPadY)) {
-      const y = 1 - (e.data[2] / 127);
-      handleFxPadJoystick(fxPadBall.x, y);
-      return;
-    }
-    if (Number(note) === Number(midiNotes.superKnob)) {
-      if (selectedCueKey) {
-        if (isModPressed || isShiftKeyDown) {
-          syncSuperKnobBaseline(e.data[2]);
-        } else {
-          let diff = computeSuperKnobDelta(e.data[2]);
-          if (diff !== 0) {
-            adjustSelectedCue(diff * superKnobStep);
-          }
-        }
-      }
-    }
-  } else if (command === 144 && velocity > 0) {
-    if (handleVJMidiNote(note, velocity, command)) {
-      return;
-    }
-        if (Number(note) === Number(midiNotes.randomCues)) {
-      cueInputMode = 'midi';
-      randomizeCuesInOneClick();
-      return;
-    }
-    if (note === midiNotes.sidechainTap) {
-      triggerSidechainEnvelope('midi');
-      return;
-    }
-        if (note === midiNotes.undo) {
-      if (isModPressed) {
-        redoAction();
+  if (command === 176) {
+    if (note === midiNotes.superKnob) {
+      if (superKnobMode === 'absolute') {
+        applySuperKnobAbsolute(velocity / 127);
+      } else if (superKnobMode === 'relative') {
+        const next = convertRelativeMidiToNormalized(velocity);
+        if (next !== null) applySuperKnobAbsolute(next);
       } else {
-        undoAction();
+        applySuperKnob(velocity / 127);
       }
       return;
     }
+  }
+
+  if (command === 144 && velocity > 0) {
     if (note === midiNotes.pitchDown) startPitchDownRepeat();
     if (note === midiNotes.pitchUp) startPitchUpRepeat();
-    if (note === midiNotes.pitchMode) { pushUndoState(); togglePitchMode(); return; }
-    if (note === midiNotes.kick) {
-      if (isModPressed) toggleSampleMute("kick"); else playSample("kick");
-    }
-    if (note === midiNotes.hihat) {
-      if (isModPressed) toggleSampleMute("hihat"); else playSample("hihat");
-    }
-    if (note === midiNotes.snare) {
-      if (isModPressed) toggleSampleMute("snare"); else playSample("snare");
-    }
     if (note === midiNotes.looperA) {
       activeLoopIndex = 0;
       activeMidiLoopIndex = 0;
@@ -12246,6 +12213,7 @@ function handleMIDIMessage(e) {
     if (note === midiNotes.videoLooper) onVideoLooperButtonMouseUp();
   }
 }
+
 
 function startPitchDownRepeat() {
   if (pitchDownInterval) return;
