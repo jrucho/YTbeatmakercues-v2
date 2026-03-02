@@ -12129,6 +12129,7 @@ function handleMIDIMessage(e) {
     if (note === midiNotes.kick) { playSample('kick'); return; }
     if (note === midiNotes.hihat) { playSample('hihat'); return; }
     if (note === midiNotes.snare) { playSample('snare'); return; }
+    if (note === midiNotes.sidechainTap) { triggerSidechainEnvelope('midi'); return; }
     if (note === midiNotes.pitchDown) startPitchDownRepeat();
     if (note === midiNotes.pitchUp) startPitchUpRepeat();
     if (note === midiNotes.looperA) {
