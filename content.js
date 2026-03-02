@@ -12123,6 +12123,16 @@ function handleMIDIMessage(e) {
       }
       return;
     }
+    if (note === midiNotes.fxPadX) {
+      fxPadBall.x = Math.max(0, Math.min(1, velocity / 127));
+      if (fxPadTriggerCorner) fxPadTriggerCorner(fxPadBall.x, fxPadBall.y, true);
+      return;
+    }
+    if (note === midiNotes.fxPadY) {
+      fxPadBall.y = Math.max(0, Math.min(1, velocity / 127));
+      if (fxPadTriggerCorner) fxPadTriggerCorner(fxPadBall.x, fxPadBall.y, true);
+      return;
+    }
   }
 
   if (command === 144 && velocity > 0) {
@@ -12130,6 +12140,12 @@ function handleMIDIMessage(e) {
     if (note === midiNotes.hihat) { playSample('hihat'); return; }
     if (note === midiNotes.snare) { playSample('snare'); return; }
     if (note === midiNotes.sidechainTap) { triggerSidechainEnvelope('midi'); return; }
+    if (note === midiNotes.pitchMode) { togglePitchMode(); return; }
+    if (note === midiNotes.randomCues) {
+      if (isModPressed) suggestCuesFromTransients();
+      else placeRandomCues();
+      return;
+    }
     if (note === midiNotes.pitchDown) startPitchDownRepeat();
     if (note === midiNotes.pitchUp) startPitchUpRepeat();
     if (note === midiNotes.looperA) {
