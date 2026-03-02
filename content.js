@@ -7850,7 +7850,7 @@ function showVJWindowToggle() {
   vjWindowContainer.style.position = 'fixed';
   vjWindowContainer.style.top = '70px';
   vjWindowContainer.style.right = '30px';
-  vjWindowContainer.style.width = 'min(600px, 46vw)';
+  vjWindowContainer.style.width = 'min(680px, 52vw)';
   vjWindowContainer.style.maxHeight = '82vh';
   vjWindowContainer.style.zIndex = '999999';
   vjWindowContainer.style.display = 'flex';
@@ -14269,7 +14269,7 @@ function injectCustomCSS() {
     }
     .ytbm-touch-popup {
       position: fixed;
-      width: min(760px, calc(100vw - 24px));
+      width: min(920px, calc(100vw - 24px));
       top: 56px;
       left: 56px;
       background: rgba(18,18,18,0.82);
