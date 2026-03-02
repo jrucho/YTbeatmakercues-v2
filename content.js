@@ -117,10 +117,9 @@ async function suggestCuesFromTransients() {
 }
 // --- Random Cues Button logic (normal and modified press) ---
 if (typeof placeRandomCues === "undefined") {
-  function placeRandomCues() {
+  function applyRandomCuesToKeys(keys) {
     const vid = getVideoElement();
-    if (!vid || !Number.isFinite(vid.duration) || vid.duration <= 1) return;
-    const keys = ["1","2","3","4","5","6","7","8","9","0"];
+    if (!vid || !Number.isFinite(vid.duration) || vid.duration <= 1 || !Array.isArray(keys) || !keys.length) return;
     const minGap = Math.max(0.15, vid.duration / 120);
     const startPad = Math.min(1.5, vid.duration * 0.08);
     const endPad = Math.min(1.0, vid.duration * 0.05);
@@ -129,7 +128,7 @@ if (typeof placeRandomCues === "undefined") {
 
     const picks = [];
     let attempts = 0;
-    while (picks.length < keys.length && attempts < 400) {
+    while (picks.length < keys.length && attempts < 800) {
       attempts++;
       const t = minT + Math.random() * Math.max(0.1, (maxT - minT));
       if (picks.every((x) => Math.abs(x - t) >= minGap)) picks.push(t);
@@ -145,6 +144,14 @@ if (typeof placeRandomCues === "undefined") {
     updateCueMarkers();
     refreshCuesButton();
     if (window.refreshMinimalState) window.refreshMinimalState();
+  }
+
+  function placeRandomCues() {
+    applyRandomCuesToKeys(["1","2","3","4","5","6","7","8","9","0"]);
+  }
+
+  function placeRandomCuesMidi() {
+    applyRandomCuesToKeys(["1","2","3","4","5","6","7","8","9","0","11","12","13","14","15","16"]);
   }
 }
 if (typeof refreshCuesButton === "undefined") {
@@ -12168,7 +12175,7 @@ function handleMIDIMessage(e) {
     if (note === midiNotes.pitchMode) { togglePitchMode(); return; }
     if (note === midiNotes.randomCues) {
       if (isModPressed) suggestCuesFromTransients();
-      else placeRandomCues();
+      else placeRandomCuesMidi();
       return;
     }
     if (note === midiNotes.pitchDown) startPitchDownRepeat();
