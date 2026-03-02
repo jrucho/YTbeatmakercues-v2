@@ -743,6 +743,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         streamFx: [],
         sharedFxRack: true,
         preserveAspectRatio: true,
+        crossTabStreamsEnabled: false,
         corners: [
           { x: 0.0, y: 0.0 },
           { x: 1.0, y: 0.0 },
@@ -964,9 +965,16 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjBandLevels = { low: 0, mid: 0, high: 0, full: 0 },
       vjModuleEnabled = false,
       vjTextIndex = 0,
+      tabPlaybackGateGain = null,
+      singleTabPlaybackMode = localStorage.getItem('ytbm_singleTabPlaybackMode') !== '0',
+      ytbmTabId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`,
       vjLastTextStep = 0,
       vjFeedbackCanvas = null,
       vjFeedbackCtx = null,
+      crossTabVJChannel = null,
+      remoteVJFrames = new Map(),
+      vjBroadcastBusy = false,
+      vjLastBroadcastAt = 0,
       // We'll keep them to identify which button is which
       reverbButton = null,
       cassetteButton = null,
@@ -4664,6 +4672,61 @@ function onMinimalPointerUp(e) {
 /**************************************
  * Deferred AudioContext & Node Setup
  **************************************/
+
+function isTabPlaybackAllowed() {
+  return !singleTabPlaybackMode || !document.hidden;
+}
+
+function canProcessRealtimeInputs() {
+  return isTabPlaybackAllowed();
+}
+
+function updateTabPlaybackGate() {
+  if (!tabPlaybackGateGain) return;
+  tabPlaybackGateGain.gain.value = isTabPlaybackAllowed() ? 1 : 0;
+}
+
+function initCrossTabChannel() {
+  if (crossTabVJChannel || typeof BroadcastChannel === 'undefined') return;
+  try {
+    crossTabVJChannel = new BroadcastChannel('ytbm_cross_tab_v1');
+    crossTabVJChannel.onmessage = (evt) => {
+      const msg = evt?.data;
+      if (!msg || msg.tabId === ytbmTabId) return;
+      if (msg.type === 'vj-frame' && msg.frame && vjControls.crossTabStreamsEnabled) {
+        const prev = remoteVJFrames.get(msg.tabId);
+        if (prev?.bitmap?.close) {
+          try { prev.bitmap.close(); } catch {}
+        }
+        remoteVJFrames.set(msg.tabId, { bitmap: msg.frame, ts: Number(msg.ts) || Date.now() });
+      }
+      if (msg.type === 'vj-frame-clear') {
+        const prev = remoteVJFrames.get(msg.tabId);
+        if (prev?.bitmap?.close) {
+          try { prev.bitmap.close(); } catch {}
+        }
+        remoteVJFrames.delete(msg.tabId);
+      }
+    };
+  } catch {}
+}
+
+
+addTrackedListener(document, 'visibilitychange', () => {
+  updateTabPlaybackGate();
+});
+addTrackedListener(window, 'focus', () => {
+  updateTabPlaybackGate();
+});
+addTrackedListener(window, 'blur', () => {
+  updateTabPlaybackGate();
+});
+addTrackedListener(window, 'pagehide', () => {
+  if (crossTabVJChannel) {
+    try { crossTabVJChannel.postMessage({ type: 'vj-frame-clear', tabId: ytbmTabId }); } catch {}
+  }
+});
+
 async function ensureAudioContext() {
   let created = false;
   if (!audioContext) {
@@ -4687,6 +4750,12 @@ async function ensureAudioContext() {
     }
     created = true;
   }
+  if (!tabPlaybackGateGain) {
+    tabPlaybackGateGain = audioContext.createGain();
+    tabPlaybackGateGain.gain.value = 1;
+  }
+  initCrossTabChannel();
+
   if (audioContext.state === "suspended") {
     await audioContext.resume().catch(err => console.error("AudioContext resume failed:", err.message));
   }
@@ -4809,6 +4878,10 @@ let videoCheckInterval = setInterval(() => {
 cleanupFunctions.push(() => clearInterval(videoCheckInterval));
 
 async function setupAudioNodes() {
+  if (!tabPlaybackGateGain) {
+    tabPlaybackGateGain = audioContext.createGain();
+    tabPlaybackGateGain.gain.value = 1;
+  }
   videoGain = audioContext.createGain();
   sidechainGain = audioContext.createGain();
   sidechainGain.gain.value = 1;
@@ -5497,6 +5570,7 @@ function applyAllFXRouting() {
   loFiCompNode.disconnect();
   postCompGain.disconnect();
   overallOutputGain.disconnect();
+  if (tabPlaybackGateGain) tabPlaybackGateGain.disconnect();
 
   // If you have a videoPreviewElement, ensure it has a MediaElementSource:
   if (videoPreviewElement) {
@@ -5586,19 +5660,20 @@ function applyAllFXRouting() {
     // bus1..3 => masterGain => fxPad => loFiComp => postComp => destination
     fxPadMasterOut.connect(loFiCompNode);
     loFiCompNode.connect(postCompGain);
-    postCompGain.connect(currentOutputNode || audioContext.destination);
-    postCompGain.connect(videoDestination);
+    postCompGain.connect(tabPlaybackGateGain);
 
     // bus4 => directly to output (skips compressor)
-    bus4Gain.connect(currentOutputNode || audioContext.destination);
-    bus4Gain.connect(videoDestination);
+    bus4Gain.connect(tabPlaybackGateGain);
   } else {
     // No compressor: just send everyone (including bus4) through masterGain => overallOutput => out
     bus4Gain.connect(masterGain);
     fxPadMasterOut.connect(overallOutputGain);
-    overallOutputGain.connect(currentOutputNode || audioContext.destination);
-    overallOutputGain.connect(videoDestination);
+    overallOutputGain.connect(tabPlaybackGateGain);
   }
+
+  tabPlaybackGateGain.connect(currentOutputNode || audioContext.destination);
+  tabPlaybackGateGain.connect(videoDestination);
+  updateTabPlaybackGate();
 
   // If eqFilterApplyTarget === "master", route masterGain -> eqFilterNode -> etc.
   // (But the above logic already demonstrates separate compression paths.)
@@ -7339,6 +7414,7 @@ function ensureVJDefaults() {
   if (!Array.isArray(vjControls.streamFx)) vjControls.streamFx = [];
   if (typeof vjControls.sharedFxRack !== 'boolean') vjControls.sharedFxRack = true;
   if (typeof vjControls.preserveAspectRatio !== 'boolean') vjControls.preserveAspectRatio = true;
+  if (typeof vjControls.crossTabStreamsEnabled !== 'boolean') vjControls.crossTabStreamsEnabled = false;
   if (!Number.isFinite(vjControls.streamCount)) vjControls.streamCount = 1;
   if (!Number.isFinite(vjControls.streamActiveIndex)) vjControls.streamActiveIndex = 0;
   defs.forEach((d, i) => {
@@ -7456,8 +7532,8 @@ function ensureVJCanvases(requirePreview = false) {
 
 function drawVJVideoFrame(g, video, x, y, width, height) {
   if (!video || !width || !height) return;
-  const srcW = Math.max(1, Number(video.videoWidth) || width);
-  const srcH = Math.max(1, Number(video.videoHeight) || height);
+  const srcW = Math.max(1, Number(video.videoWidth || video.width || video.naturalWidth) || width);
+  const srcH = Math.max(1, Number(video.videoHeight || video.height || video.naturalHeight) || height);
   const srcRatio = srcW / srcH;
   const dstRatio = width / height;
 
@@ -7618,13 +7694,41 @@ function resetStreamPinCorner(streamIndex, cornerIndex) {
   vjControls.streamPins[streamIndex][cornerIndex] = { x: src.x, y: src.y };
 }
 
+
+function getVJStreamSources(localVideo) {
+  const list = [localVideo].filter(Boolean);
+  if (vjControls.crossTabStreamsEnabled) {
+    const remote = Array.from(remoteVJFrames.values())
+      .filter((f) => f && f.bitmap)
+      .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    remote.forEach((f) => list.push(f.bitmap));
+  }
+  return list.length ? list : [localVideo];
+}
+
+async function broadcastLocalVJFrame(video) {
+  if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !video || document.hidden) return;
+  const now = performance.now();
+  if (vjBroadcastBusy || now - vjLastBroadcastAt < 120) return;
+  if (typeof createImageBitmap !== 'function') return;
+  vjBroadcastBusy = true;
+  vjLastBroadcastAt = now;
+  try {
+    const bitmap = await createImageBitmap(video);
+    crossTabVJChannel.postMessage({ type: 'vj-frame', tabId: ytbmTabId, ts: Date.now(), frame: bitmap }, [bitmap]);
+  } catch {}
+  vjBroadcastBusy = false;
+}
+
 function drawStreamMosaic(ctx, video, width, height, tMs) {
   const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+  const sources = getVJStreamSources(video);
   for (let i = 0; i < count; i++) {
+    const source = sources[i % sources.length] || video;
     const blend = vjControls.streamBlendMap?.[i] || 'source-over';
     const quad = (vjControls.streamPins && vjControls.streamPins[i]) ? vjControls.streamPins[i] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
     const fxIndex = vjControls.sharedFxRack ? 0 : i;
-    applyVJEffectsToSource(video, width, height, tMs, fxIndex);
+    applyVJEffectsToSource(source, width, height, tMs, fxIndex);
     ctx.save();
     ctx.globalCompositeOperation = blend;
     drawMappedQuad(ctx, vjSourceCanvas, quad, width, height, 8);
@@ -7803,6 +7907,7 @@ function renderVJFrameCore(tMs = performance.now()) {
   vjOutputCtx.fillStyle = '#000';
   vjOutputCtx.fillRect(0, 0, w, h);
   drawStreamMosaic(vjOutputCtx, vid, w, h, tMs);
+  broadcastLocalVJFrame(vid);
 
   // Preview mirrors output then overlays editable pins when the VJ panel is open.
   if (vjPreviewCtx && vjPreviewCanvas) {
@@ -8001,6 +8106,8 @@ function showVJWindowToggle() {
   ratioBtn.addEventListener('click', () => {
     vjControls.preserveAspectRatio = !vjControls.preserveAspectRatio;
     syncRatioBtn();
+    crossTabChk.checked = !!vjControls.crossTabStreamsEnabled;
+    tabAudioChk.checked = !!singleTabPlaybackMode;
     persistVJControls();
   });
   topRow.appendChild(ratioBtn);
@@ -8012,6 +8119,8 @@ function showVJWindowToggle() {
   ratioResetBtn.addEventListener('click', () => {
     vjControls.preserveAspectRatio = true;
     syncRatioBtn();
+    crossTabChk.checked = !!vjControls.crossTabStreamsEnabled;
+    tabAudioChk.checked = !!singleTabPlaybackMode;
     persistVJControls();
   });
   topRow.appendChild(ratioResetBtn);
@@ -8086,6 +8195,46 @@ function showVJWindowToggle() {
   streamRow.appendChild(streamLbl);
   streamRow.appendChild(streamCountSel);
   vjContentWrap.appendChild(streamRow);
+
+  const crossTabRow = document.createElement('div');
+  crossTabRow.style.display = 'flex';
+  crossTabRow.style.alignItems = 'center';
+  crossTabRow.style.gap = '8px';
+  const crossTabChk = document.createElement('input');
+  crossTabChk.type = 'checkbox';
+  crossTabChk.checked = !!vjControls.crossTabStreamsEnabled;
+  crossTabChk.addEventListener('change', () => {
+    vjControls.crossTabStreamsEnabled = crossTabChk.checked;
+    if (!crossTabChk.checked) {
+      remoteVJFrames.forEach((f) => { try { f?.bitmap?.close?.(); } catch {} });
+      remoteVJFrames.clear();
+      crossTabVJChannel?.postMessage({ type: 'vj-frame-clear', tabId: ytbmTabId });
+    }
+    persistVJControls();
+  });
+  const crossTabLbl = document.createElement('span');
+  crossTabLbl.textContent = 'Include streams from other tabs';
+  crossTabRow.appendChild(crossTabChk);
+  crossTabRow.appendChild(crossTabLbl);
+  vjContentWrap.appendChild(crossTabRow);
+
+  const tabAudioRow = document.createElement('div');
+  tabAudioRow.style.display = 'flex';
+  tabAudioRow.style.alignItems = 'center';
+  tabAudioRow.style.gap = '8px';
+  const tabAudioChk = document.createElement('input');
+  tabAudioChk.type = 'checkbox';
+  tabAudioChk.checked = !!singleTabPlaybackMode;
+  tabAudioChk.addEventListener('change', () => {
+    singleTabPlaybackMode = !!tabAudioChk.checked;
+    localStorage.setItem('ytbm_singleTabPlaybackMode', singleTabPlaybackMode ? '1' : '0');
+    updateTabPlaybackGate();
+  });
+  const tabAudioLbl = document.createElement('span');
+  tabAudioLbl.textContent = 'Solo active tab audio/MIDI (default)';
+  tabAudioRow.appendChild(tabAudioChk);
+  tabAudioRow.appendChild(tabAudioLbl);
+  vjContentWrap.appendChild(tabAudioRow);
 
   const streamBlendModes = ['source-over','screen','multiply','overlay','lighten','difference'];
   const streamConfigRow = document.createElement('div');
@@ -8259,6 +8408,8 @@ function showVJWindowToggle() {
     mirrorChk.checked = !!getActiveStreamFx().mirror;
     syncFxRackBtn();
     syncRatioBtn();
+    crossTabChk.checked = !!vjControls.crossTabStreamsEnabled;
+    tabAudioChk.checked = !!singleTabPlaybackMode;
     effectBindings.forEach(({ def, inp, val, reactSel, midiInp, blendSel }) => {
       const activeFx = getActiveStreamFx();
       const v = Number(activeFx[def.key] ?? vjControls[def.key] ?? def.def);
@@ -11749,6 +11900,7 @@ function handleMidiClockTick() {
 }
 
 function handleMIDIMessage(e) {
+  if (!canProcessRealtimeInputs()) return;
   // Filter out duplicate events which can happen on some controllers
   if (e.timeStamp === lastMidiTimestamp &&
       e.data[0] === lastMidiData[0] &&
