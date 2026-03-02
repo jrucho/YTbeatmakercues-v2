@@ -177,6 +177,56 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     return true;
   }
 
+
+  const ytbmTabId = `ytbm_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+  const DRUM_TAB_LOCK_KEY = 'ytbm_active_drum_tab';
+
+  function getDrumTabLock() {
+    try {
+      const raw = localStorage.getItem(DRUM_TAB_LOCK_KEY);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      if (!data || typeof data !== 'object') return null;
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  function claimDrumTabLock(force = false) {
+    const now = Date.now();
+    const lock = getDrumTabLock();
+    const stale = !lock || !Number.isFinite(lock.ts) || (now - lock.ts) > 2500;
+    if (force || stale || lock.id === ytbmTabId) {
+      try {
+        localStorage.setItem(DRUM_TAB_LOCK_KEY, JSON.stringify({ id: ytbmTabId, ts: now }));
+      } catch {}
+      return true;
+    }
+    return lock.id === ytbmTabId;
+  }
+
+  function isDrumOutputAllowed() {
+    const focused = document.visibilityState === 'visible' && document.hasFocus();
+    if (!focused) return false;
+    return claimDrumTabLock(false);
+  }
+
+  const refreshDrumTabLock = () => {
+    if (document.visibilityState === 'visible' && document.hasFocus()) {
+      claimDrumTabLock(true);
+    }
+  };
+  addEventListener('focus', refreshDrumTabLock, true);
+  addEventListener('visibilitychange', refreshDrumTabLock, true);
+  cleanupFunctions.push(() => removeEventListener('focus', refreshDrumTabLock, true));
+  cleanupFunctions.push(() => removeEventListener('visibilitychange', refreshDrumTabLock, true));
+  const drumLockHeartbeat = setInterval(() => {
+    if (document.visibilityState === 'visible' && document.hasFocus()) claimDrumTabLock(true);
+  }, 1200);
+  cleanupFunctions.push(() => clearInterval(drumLockHeartbeat));
+  refreshDrumTabLock();
+
   async function setOutputDevice(deviceId) {
     if (!audioContext) return;
     localStorage.setItem('ytbm_outputDeviceId', deviceId);
@@ -7414,11 +7464,9 @@ function drawStreamMosaic(ctx, video, width, height, tMs) {
     const playerReady = !!(player && player.readyState >= 2 && (player.currentSrc || player.src));
     const playerActive = !!(playerReady && !player.paused && !player.ended);
 
-    // If a stream has cue mappings, only render it while its mapped player is actively playing.
-    // This keeps non-triggered mapped streams hidden instead of showing fallback video.
-    if (hasCueMapping && !playerActive) continue;
-
-    const streamVideo = hasCueMapping ? player : video;
+    // Mapped streams stay visible: when idle, they gracefully fall back to the base video.
+    // This keeps multi-stream layouts populated while still letting cues "take over" mapped streams.
+    const streamVideo = (hasCueMapping && playerActive) ? player : video;
     applyVJEffectsToSource(streamVideo, width, height, tMs, fxIndex);
     ctx.save();
     ctx.globalCompositeOperation = blend;
@@ -9622,6 +9670,7 @@ function handleShiftTap(source = 'keyboard') {
 
 function playSample(n) {
   ensureAudioContext().then(() => {
+    if (!isDrumOutputAllowed()) return;
     recordMidiEvent('sample', n);
     if (sampleMutes[n]) return;
     let samples = audioBuffers[n];
@@ -9647,6 +9696,7 @@ function playSample(n) {
 }
 function playUserSample(us) {
   ensureAudioContext().then(() => {
+    if (!isDrumOutputAllowed()) return;
     if (!us.buffer) return;
     const idx = userSamples.indexOf(us);
     if (idx !== -1) recordMidiEvent('userSample', idx);
