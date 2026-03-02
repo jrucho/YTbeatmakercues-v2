@@ -1147,8 +1147,10 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
           resumeMidiLoop(idx);
         }
       });
-      const bpmField = document.querySelector('#sequencerContainer input[type="number"]');
-      if (bpmField) bpmField.value = sequencerBPM;
+      if (sequencerBpmInput) {
+        sequencerBpmInput.value = String(Math.round((sequencerBPM || clock.bpm || 120) * 10) / 10);
+      }
+      refreshSequencerControls();
       refreshBpmDisplay();
     }
   });
@@ -1805,14 +1807,22 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   let modTouchActive = false;
   let touchPopup = null;
   let currentPad = null; // current selected pad index (0–9)
-  const padSequencers = []; // Array of sequencer data for each pad (16 booleans per pad)
+  const DRUM_SEQ_VOICES = ["kick", "hihat", "snare"];
+  const drumSequencerPatterns = {
+    kick: new Array(16).fill(false),
+    hihat: new Array(16).fill(false),
+    snare: new Array(16).fill(false)
+  };
+  let activeSequencerVoice = "kick";
   let sequencerBPM = 120; // default BPM
-  let sequencerInterval = null;
   let sequencerPlaying = false;
-  // Initialize pad sequencer data for 10 pads (all steps off)
-  for (let i = 0; i < 10; i++) {
-    padSequencers[i] = new Array(16).fill(false);
-  }
+  let sequencerScheduler = null;
+  let lastSequencerStep = -1;
+  let sequencerTransportButton = null;
+  let sequencerBpmInput = null;
+  let sequencerLinkStatusEl = null;
+  let useMidiClockLinkSync = true;
+  const midiClockTimestamps = [];
   
 // Global flag to track the toggle state.
 let alwaysShowYTBar = false;
@@ -2196,267 +2206,183 @@ function toggleBlindMode() {
   function buildTouchPopup() {
     if (touchPopup) {
       touchPopup.style.display = "block";
+      updateSequencerUI();
+      refreshSequencerControls();
       return;
     }
-    
+
     touchPopup = document.createElement("div");
     touchPopup.id = "touchPopup";
-    Object.assign(touchPopup.style, {
-      position: "fixed",
-      width: "700px",       // fixed width for two-row pads
-      height: "330px",      // fixed height
-      top: "50px",
-      left: "50px",
-      overflow: "hidden",
-      backgroundColor: "rgba(0, 0, 0, 0.85)",
-      zIndex: "100000",
-      borderRadius: "8px",
-      padding: "15px",
-      color: "#fff",
-      fontFamily: "sans-serif",
-      boxSizing: "border-box"
-    });
-    
-    // Header with title and close button
+    touchPopup.className = "ytbm-touch-popup";
+
     const header = document.createElement("div");
-    header.style.display = "flex";
-    header.style.justifyContent = "space-between";
-    header.style.alignItems = "center";
-    header.style.marginBottom = "10px";
+    header.className = "ytbm-touch-header";
     header.innerHTML = `
-      <span style="font-size:16px; font-weight:bold;">Touch Sequencer</span>
-      <button id="touchCloseBtn" style="background:#333; color:#fff; border:none; border-radius:4px; padding:4px 8px; cursor:pointer;">Close</button>
+      <span class="ytbm-touch-title">Touch Sequencer</span>
+      <button id="touchCloseBtn" class="looper-btn ytbm-touch-close">Close</button>
     `;
     touchPopup.appendChild(header);
-    
+
     const touchCloseBtn = header.querySelector("#touchCloseBtn");
     if (touchCloseBtn) {
       touchCloseBtn.addEventListener("click", () => {
         touchPopup.style.display = "none";
       });
     }
-    
-    // Utility row: Modifier button and Erase All Steps button
+
     const utilityRow = document.createElement("div");
-    utilityRow.style.display = "flex";
-    utilityRow.style.gap = "8px";
-    utilityRow.style.marginBottom = "10px";
+    utilityRow.className = "ytbm-panel-row ytbm-touch-utility-row";
     touchPopup.appendChild(utilityRow);
-    
-    // Modifier Button
+
     const modifierBtn = document.createElement("button");
+    modifierBtn.className = "looper-btn";
     modifierBtn.innerText = "Mark Cues: Off";
-    modifierBtn.style.padding = "6px 10px";
-    modifierBtn.style.borderRadius = "4px";
-    modifierBtn.style.background = "#444";
-    modifierBtn.style.color = "#fff";
-    modifierBtn.style.cursor = "pointer";
     modifierBtn.addEventListener("click", () => {
       modTouchActive = !modTouchActive;
       modifierBtn.innerText = modTouchActive ? "Mark Cues: On" : "Mark Cues: Off";
-      modifierBtn.style.background = modTouchActive ? "darkorange" : "#444";
+      modifierBtn.dataset.state = modTouchActive ? "on" : "off";
     });
     utilityRow.appendChild(modifierBtn);
-    
-    // Erase All Steps Button (no confirmation popup)
+
     const eraseAllStepsBtn = document.createElement("button");
-    eraseAllStepsBtn.innerText = "Erase All Steps";
-    eraseAllStepsBtn.style.padding = "6px 10px";
-    eraseAllStepsBtn.style.borderRadius = "4px";
-    eraseAllStepsBtn.style.background = "#c22";
-    eraseAllStepsBtn.style.color = "#fff";
-    eraseAllStepsBtn.style.cursor = "pointer";
+    eraseAllStepsBtn.className = "looper-btn";
+    eraseAllStepsBtn.innerText = "Erase Drum Steps";
     eraseAllStepsBtn.addEventListener("click", () => {
       pushUndoState();
-      for (let i = 0; i < padSequencers.length; i++) {
-        padSequencers[i].fill(false);
-      }
+      DRUM_SEQ_VOICES.forEach((voice) => drumSequencerPatterns[voice].fill(false));
       updateSequencerUI();
-      console.log("All sequencer steps erased.");
+      console.log("All drum sequencer steps erased.");
     });
     utilityRow.appendChild(eraseAllStepsBtn);
-    
-    // Pad grid container
+
+    const linkToggleBtn = document.createElement("button");
+    linkToggleBtn.className = "looper-btn";
+    linkToggleBtn.addEventListener("click", () => {
+      useMidiClockLinkSync = !useMidiClockLinkSync;
+      refreshSequencerControls();
+    });
+    utilityRow.appendChild(linkToggleBtn);
+
+    sequencerLinkStatusEl = document.createElement("span");
+    sequencerLinkStatusEl.className = "ytbm-touch-link-status";
+    utilityRow.appendChild(sequencerLinkStatusEl);
+
+    const drumRow = document.createElement("div");
+    drumRow.className = "ytbm-panel-row ytbm-touch-voice-row";
+    DRUM_SEQ_VOICES.forEach((voice) => {
+      const btn = document.createElement("button");
+      btn.className = "looper-btn ytbm-seq-voice-btn";
+      btn.dataset.voice = voice;
+      btn.innerText = voice[0].toUpperCase() + voice.slice(1);
+      btn.addEventListener("click", () => {
+        activeSequencerVoice = voice;
+        updateSequencerUI();
+      });
+      drumRow.appendChild(btn);
+    });
+    touchPopup.appendChild(drumRow);
+
     const padGrid = document.createElement("div");
-    padGrid.style.display = "grid";
-    padGrid.style.gap = "8px";
-    padGrid.style.marginBottom = "15px";
-    // Default layout is 2×5 (no layout toggle button)
-    padGrid.style.gridTemplateColumns = "repeat(5, 1fr)";
-    padGrid.style.gridTemplateRows = "repeat(2, auto)";
+    padGrid.className = "ytbm-touch-pad-grid";
     touchPopup.appendChild(padGrid);
-    
-    // Create 10 pad buttons
-for (let i = 0; i < 10; i++) {
-  const padBtn = document.createElement("button");
-  padBtn.innerText = `Pad ${i + 1}`;
-  padBtn.style.padding = "20px";
-  padBtn.style.fontSize = "14px";
-  padBtn.style.borderRadius = "4px";
-  padBtn.style.background = "#444";
-  padBtn.style.color = "#fff";
-  padBtn.style.cursor = "pointer";
-  // NEW: add a class and a data attribute so we can find it later
-  padBtn.classList.add("touch-pad-btn");
-  padBtn.setAttribute("data-pad-index", i);
-  
-  padBtn.addEventListener("mousedown", () => {
-    currentPad = i;
-    updateSequencerUI();
-    let cueKey = (i + 1) % 10;
-    cueKey = cueKey === 0 ? "0" : String(cueKey);
-    const vid = getVideoElement();
-    if (modTouchActive && vid) {
-      pushUndoState();
-      cueInputMode = 'keyboard';
-      setCueAtKey(cueKey, vid.currentTime);
-      saveCuePointsToURL();
-      updateCueMarkers();
-      refreshCuesButton();
-      console.log(`Modifier active: Pad ${i} marked cue ${cueKey} at time ${vid.currentTime}`);
-    } else {
-      // For normal pad taps, mirror the digit‑key path:
-      triggerPadCue(i);
+
+    for (let i = 0; i < 10; i++) {
+      const padBtn = document.createElement("button");
+      padBtn.innerText = `Pad ${i + 1}`;
+      padBtn.className = "looper-btn touch-pad-btn";
+      padBtn.setAttribute("data-pad-index", i);
+
+      padBtn.addEventListener("mousedown", () => {
+        currentPad = i;
+        let cueKey = (i + 1) % 10;
+        cueKey = cueKey === 0 ? "0" : String(cueKey);
+        const vid = getVideoElement();
+        if (modTouchActive && vid) {
+          pushUndoState();
+          cueInputMode = 'keyboard';
+          setCueAtKey(cueKey, vid.currentTime);
+          saveCuePointsToURL();
+          updateCueMarkers();
+          refreshCuesButton();
+          console.log(`Modifier active: Pad ${i} marked cue ${cueKey} at time ${vid.currentTime}`);
+        } else {
+          triggerPadCue(i);
+        }
+      });
+      padGrid.appendChild(padBtn);
     }
-  });
-  padGrid.appendChild(padBtn);
-}
-    
-    // Sequencer container (16-step row)
+
     const seqContainer = document.createElement("div");
     seqContainer.id = "sequencerContainer";
-    seqContainer.style.display = "flex";
-    seqContainer.style.flexDirection = "column";
-    seqContainer.style.alignItems = "center";
-    seqContainer.style.gap = "8px";
+    seqContainer.className = "ytbm-touch-seq-container";
     touchPopup.appendChild(seqContainer);
-    
-    // 16-step row
+
     const stepRow = document.createElement("div");
     stepRow.id = "stepRow";
-    stepRow.style.display = "grid";
-    stepRow.style.gridTemplateColumns = "repeat(16, 1fr)";
-    stepRow.style.gap = "4px";
+    stepRow.className = "ytbm-touch-step-row";
     seqContainer.appendChild(stepRow);
-    
+
     for (let s = 0; s < 16; s++) {
       const stepBtn = document.createElement("button");
-      stepBtn.className = "stepBtn";
+      stepBtn.className = "looper-btn stepBtn";
       stepBtn.dataset.step = s;
-      stepBtn.innerText = s + 1;
-      stepBtn.style.padding = "10px";
-      stepBtn.style.borderRadius = "4px";
-      stepBtn.style.background = "#222";
-      stepBtn.style.color = "#fff";
-      stepBtn.style.cursor = "pointer";
+      stepBtn.innerText = String(s + 1);
       stepBtn.addEventListener("click", () => { toggleStep(s); });
       stepBtn.addEventListener("touchstart", e => { e.preventDefault(); toggleStep(s); });
       stepRow.appendChild(stepBtn);
     }
-    
-    // Control row for BPM and start/stop
-    const controlRow = document.createElement("div");
-    controlRow.style.display = "flex";
-    controlRow.style.justifyContent = "space-around";
-    controlRow.style.alignItems = "center";
-    controlRow.style.width = "100%";
-    
-    const tapBpmBtn = document.createElement("button");
-tapBpmBtn.innerText = "Tap BPM";
-tapBpmBtn.style.padding = "10px";
-tapBpmBtn.style.borderRadius = "4px";
-tapBpmBtn.style.background = "#444";
-tapBpmBtn.style.color = "#fff";
-tapBpmBtn.style.cursor = "pointer";
-tapBpmBtn.addEventListener("click", () => {
-  let now = performance.now();
-  tapTimes.push(now);
-  if (tapTimes.length > 8) tapTimes.shift();
-  if (tapTimes.length >= 4) {
-    let intervals = [];
-    for (let i = 1; i < tapTimes.length; i++) {
-      intervals.push(tapTimes[i] - tapTimes[i - 1]);
-    }
-    let avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-    sequencerBPM = Math.round(60000 / avgInterval);
-    if (bpmInput) bpmInput.value = sequencerBPM;
-    console.log("New BPM:", sequencerBPM);
-    // If sequencer is running, restart it with the new BPM:
-    if (sequencerPlaying) {
-      stopAllSequencers();
-      startAllSequencers();
-    }
-  }
 
-  // Ensure the Touch Sequencer button exists in the Advanced UI.
-  // Safe no-op if already present. Called from initialize().
-  function addTouchSequencerButtonToAdvancedUI() {
-    if (!panelContainer) return;
-    if (panelContainer.querySelector('.ytbm-touch-sequencer-btn')) return;
-    const btn = document.createElement('button');
-    btn.className = 'looper-btn ytbm-touch-sequencer-btn';
-    btn.textContent = 'Touch Sequencer';
-    btn.title = 'Toggle Touch Sequencer (MIDI: Note 27)';
-    btn.addEventListener('click', () => {
-      if (touchPopup && touchPopup.style.display !== 'none') {
-        touchPopup.style.display = 'none';
-      } else {
-        buildTouchPopup();
+    const controlRow = document.createElement("div");
+    controlRow.className = "ytbm-panel-row ytbm-touch-control-row";
+
+    const tapBpmBtn = document.createElement("button");
+    tapBpmBtn.className = "looper-btn";
+    tapBpmBtn.innerText = "Tap BPM";
+    tapBpmBtn.addEventListener("click", () => {
+      let now = performance.now();
+      tapTimes.push(now);
+      if (tapTimes.length > 8) tapTimes.shift();
+      if (tapTimes.length >= 4) {
+        let intervals = [];
+        for (let i = 1; i < tapTimes.length; i++) intervals.push(tapTimes[i] - tapTimes[i - 1]);
+        let avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        const newBpm = Math.round(60000 / avgInterval);
+        applySequencerBpm(newBpm);
       }
     });
-    const contentWrap = panelContainer.querySelector('.looper-content-wrap');
-    if (contentWrap) {
-      const rows = contentWrap.querySelectorAll('.ytbm-panel-row');
-      if (rows.length) rows[rows.length - 1].appendChild(btn);
-      else contentWrap.appendChild(btn);
-    } else {
-      panelContainer.appendChild(btn);
-    }
-  }
-});
-controlRow.appendChild(tapBpmBtn);
+    controlRow.appendChild(tapBpmBtn);
 
-    
-    const bpmInput = document.createElement("input");
-bpmInput.type = "number";
-bpmInput.value = sequencerBPM;
-bpmInput.style.width = "50px";
-bpmInput.style.marginLeft = "5px";
-bpmInput.addEventListener("input", () => {
-  const newBpm = parseInt(bpmInput.value, 10) || 120;
-  if (newBpm !== sequencerBPM) {
-    sequencerBPM = newBpm;
-    console.log("Manual BPM change:", sequencerBPM);
-    // If the sequencer is running, update it immediately:
-    if (sequencerPlaying) {
-      stopAllSequencers();
-      startAllSequencers();
-    }
-  }
-});
-controlRow.appendChild(bpmInput);
-    
-    const startStopBtn = document.createElement("button");
-    startStopBtn.innerText = "Start";
-    startStopBtn.style.padding = "10px";
-    startStopBtn.style.borderRadius = "4px";
-    startStopBtn.style.background = "#444";
-    startStopBtn.style.color = "#fff";
-    startStopBtn.style.cursor = "pointer";
-    startStopBtn.addEventListener("click", () => {
-      if (sequencerPlaying) { stopSequencer(); startStopBtn.innerText = "Start"; }
-      else { startSequencer(); startStopBtn.innerText = "Stop"; }
+    sequencerBpmInput = document.createElement("input");
+    sequencerBpmInput.type = "number";
+    sequencerBpmInput.min = "40";
+    sequencerBpmInput.max = "300";
+    sequencerBpmInput.step = "0.1";
+    sequencerBpmInput.className = "ytbm-touch-bpm-input";
+    sequencerBpmInput.value = String(Math.round((clock.bpm || sequencerBPM || 120) * 10) / 10);
+    sequencerBpmInput.addEventListener("input", () => {
+      const newBpm = Number(sequencerBpmInput.value) || 120;
+      applySequencerBpm(newBpm);
     });
-    controlRow.appendChild(startStopBtn);
-    
+    controlRow.appendChild(sequencerBpmInput);
+
+    sequencerTransportButton = document.createElement("button");
+    sequencerTransportButton.className = "looper-btn";
+    sequencerTransportButton.addEventListener("click", () => {
+      if (sequencerPlaying) stopSequencer();
+      else startSequencer();
+      refreshSequencerControls();
+    });
+    controlRow.appendChild(sequencerTransportButton);
+
     seqContainer.appendChild(controlRow);
-    
+
     document.body.appendChild(touchPopup);
     makeOverlayDraggable(touchPopup, header);
     currentPad = 0;
     updateSequencerUI();
+    refreshSequencerControls();
   }
-  
+
   // Helper to make overlays draggable
   function makeOverlayDraggable(overlay, handle) {
     let offsetX = 0, offsetY = 0, dragging = false;
@@ -2471,107 +2397,126 @@ controlRow.appendChild(bpmInput);
     document.addEventListener("mouseup", () => { dragging = false; document.body.style.userSelect = ""; });
   }
   
-  // Update sequencer UI for current pad
+  // Update sequencer UI for active drum voice
   function updateSequencerUI() {
     const stepRow = document.getElementById("stepRow");
     if (!stepRow) return;
-    const steps = padSequencers[currentPad];
+    const steps = drumSequencerPatterns[activeSequencerVoice] || [];
     Array.from(stepRow.children).forEach((btn, index) => {
-      btn.style.background = steps[index] ? "#0a0" : "#222";
+      const isOn = !!steps[index];
+      btn.dataset.on = isOn ? "1" : "0";
+      btn.style.background = isOn ? "rgba(76,175,80,0.36)" : "rgba(255,255,255,0.08)";
+      btn.style.borderColor = isOn ? "rgba(76,175,80,0.62)" : "rgba(255,255,255,0.16)";
     });
+    if (touchPopup) {
+      touchPopup.querySelectorAll('.ytbm-seq-voice-btn').forEach((btn) => {
+        const active = btn.dataset.voice === activeSequencerVoice;
+        btn.dataset.state = active ? 'on' : 'off';
+      });
+    }
   }
-  
-  // Toggle a step on/off for current pad
+
+  function refreshSequencerControls() {
+    if (sequencerTransportButton) {
+      sequencerTransportButton.innerText = sequencerPlaying ? "Stop" : "Start";
+    }
+    if (sequencerBpmInput) {
+      sequencerBpmInput.value = String(Math.round((clock.bpm || sequencerBPM || 120) * 10) / 10);
+      sequencerBpmInput.disabled = !!useMidiClockLinkSync;
+    }
+    const toggle = touchPopup ? touchPopup.querySelector('.ytbm-touch-utility-row button:nth-child(3)') : null;
+    if (toggle) {
+      toggle.innerText = useMidiClockLinkSync ? "Link: MIDI Clock" : "Link: Internal";
+      toggle.dataset.state = useMidiClockLinkSync ? "on" : "off";
+    }
+    if (sequencerLinkStatusEl) {
+      sequencerLinkStatusEl.textContent = useMidiClockLinkSync ? "Following external clock" : "Manual BPM";
+    }
+  }
+
+  function applySequencerBpm(newBpm) {
+    const target = Math.max(40, Math.min(300, Number(newBpm) || clock.bpm || 120));
+    if (!Number.isFinite(target)) return;
+    sequencerBPM = Math.round(target * 10) / 10;
+    clock.setBpm(sequencerBPM);
+    refreshSequencerControls();
+  }
+
   function toggleStep(stepIndex) {
-    if (currentPad === null) return;
-    padSequencers[currentPad][stepIndex] = !padSequencers[currentPad][stepIndex];
+    const steps = drumSequencerPatterns[activeSequencerVoice];
+    if (!steps) return;
+    steps[stepIndex] = !steps[stepIndex];
     updateSequencerUI();
   }
-  
-  // Start all sequencers for all pads concurrently
+
   function startSequencer() {
     if (sequencerPlaying) return;
     sequencerPlaying = true;
-    startAllSequencers();
-    highlightCurrentStep(padSequencerSteps[currentPad]);
+    if (!clock.isRunning) {
+      const now = audioContext ? audioContext.currentTime : clock.getNow();
+      clock.start(now);
+    }
+    if (sequencerScheduler) clearInterval(sequencerScheduler);
+    sequencerScheduler = setInterval(runSequencerTick, 25);
+    runSequencerTick();
+    refreshSequencerControls();
   }
-  
+
   function stopSequencer() {
     sequencerPlaying = false;
-    stopAllSequencers();
+    if (sequencerScheduler) {
+      clearInterval(sequencerScheduler);
+      sequencerScheduler = null;
+    }
+    lastSequencerStep = -1;
     clearStepHighlights();
+    refreshSequencerControls();
   }
-  
 
-// Dummy sample playback
-function playSamplePad(padIndex) {
-  console.log(`Playing sample for pad ${padIndex}`);
-}
-
-function triggerPadCue(padIndex) {
-  // 1 – fire the one‑shot sample assigned to this pad (if any)
-  playSamplePad?.(padIndex);
-
-  // 2 – jump to the linked cue using the cross‑fade helper
-  const vid = getVideoElement();
-  const cueKey = (padIndex === 9) ? "0" : String(padIndex + 1);
-  if (vid && getCueTime(cueKey) !== undefined) {
-    selectedCueKey = cueKey;
-    clearSuperKnobHistory();
-    safeSeekVideo(null, getCueTime(cueKey));  // routes into jumpToCue()
+  function playSamplePad(padIndex) {
+    if (padIndex === 0) return playSample("kick");
+    if (padIndex === 1) return playSample("hihat");
+    if (padIndex === 2) return playSample("snare");
   }
-}
-  
-  // Highlight current step in UI
+
+  function triggerPadCue(padIndex) {
+    playSamplePad?.(padIndex);
+    const vid = getVideoElement();
+    const cueKey = (padIndex === 9) ? "0" : String(padIndex + 1);
+    if (vid && getCueTime(cueKey) !== undefined) {
+      selectedCueKey = cueKey;
+      clearSuperKnobHistory();
+      safeSeekVideo(null, getCueTime(cueKey));
+    }
+  }
+
+  function runSequencerTick() {
+    if (!sequencerPlaying || !clock.isRunning) return;
+    const beatDur = clock.beatDuration();
+    const phaseBeats = ((clock.getNow() - clock.startTime) / beatDur) % 4;
+    const step = Math.floor((((phaseBeats % 4) + 4) % 4) * 4) % 16;
+    if (step === lastSequencerStep) return;
+    lastSequencerStep = step;
+    if (drumSequencerPatterns.kick[step]) playSample("kick");
+    if (drumSequencerPatterns.hihat[step]) playSample("hihat");
+    if (drumSequencerPatterns.snare[step]) playSample("snare");
+    highlightCurrentStep(step);
+  }
+
   function highlightCurrentStep(stepIndex) {
     const stepRow = document.getElementById("stepRow");
     if (!stepRow) return;
     Array.from(stepRow.children).forEach((btn, index) => {
-      btn.style.outline = (index === stepIndex) ? "2px solid yellow" : "none";
+      btn.style.outline = (index === stepIndex) ? "2px solid rgba(255,225,120,0.95)" : "none";
     });
   }
-  
-  // Clear step highlights
+
   function clearStepHighlights() {
     const stepRow = document.getElementById("stepRow");
     if (!stepRow) return;
     Array.from(stepRow.children).forEach(btn => { btn.style.outline = "none"; });
   }
-  
-  // Arrays for pad sequencer intervals and steps
-  let padSequencerIntervals = new Array(10).fill(null);
-  let padSequencerSteps = new Array(10).fill(0);
-  
-  // Start sequencers for all pads
-  function startAllSequencers() {
-    const intervalTime = (60 / sequencerBPM) * 1000;
-    for (let padIndex = 0; padIndex < padSequencers.length; padIndex++) {
-      if (padSequencerIntervals[padIndex] !== null) continue;
-      padSequencerSteps[padIndex] = 0;
-      padSequencerIntervals[padIndex] = setInterval(() => {
-        if (padSequencers[padIndex][padSequencerSteps[padIndex]]) {
-          triggerPadCue(padIndex);
-        }
-        if (padIndex === currentPad) {
-          highlightCurrentStep(padSequencerSteps[padIndex]);
-        }
-        padSequencerSteps[padIndex] = (padSequencerSteps[padIndex] + 1) % 16;
-      }, intervalTime);
-    }
-    console.log("All pad sequencers started.");
-  }
-  
-  // Stop all pad sequencers
-  function stopAllSequencers() {
-    for (let i = 0; i < padSequencerIntervals.length; i++) {
-      if (padSequencerIntervals[i] !== null) {
-        clearInterval(padSequencerIntervals[i]);
-        padSequencerIntervals[i] = null;
-      }
-    }
-    console.log("All pad sequencers stopped.");
-  }
-  
+
   /**************************************
    * Keyboard & MIDI shortcuts for Sequencer & Touch Popup
    **************************************/
@@ -11252,6 +11197,23 @@ async function initializeMIDI() {
   }
 }
 
+function handleMidiClockTick() {
+  if (!useMidiClockLinkSync) return;
+  const now = performance.now();
+  midiClockTimestamps.push(now);
+  if (midiClockTimestamps.length > 96) midiClockTimestamps.shift();
+  if (midiClockTimestamps.length < 24) return;
+  const elapsed = midiClockTimestamps[midiClockTimestamps.length - 1] - midiClockTimestamps[0];
+  const ticks = midiClockTimestamps.length - 1;
+  if (elapsed <= 0 || ticks <= 0) return;
+  const msPerTick = elapsed / ticks;
+  const bpm = 60000 / (msPerTick * 24);
+  if (Number.isFinite(bpm) && bpm >= 40 && bpm <= 300) {
+    clock.setBpm(bpm);
+    if (!clock.isRunning) clock.start(audioContext ? audioContext.currentTime : clock.getNow());
+  }
+}
+
 function handleMIDIMessage(e) {
   // Filter out duplicate events which can happen on some controllers
   if (e.timeStamp === lastMidiTimestamp &&
@@ -11268,6 +11230,22 @@ function handleMIDIMessage(e) {
   let [st, note, velocity = 0] = e.data;
   const command = st & 0xf0;
   const channel = st & 0x0f;
+
+  if (st === 248) {
+    handleMidiClockTick();
+    return;
+  }
+  if (st === 250) {
+    if (useMidiClockLinkSync) {
+      if (!clock.isRunning) clock.start(audioContext ? audioContext.currentTime : clock.getNow());
+      if (!sequencerPlaying) startSequencer();
+    }
+    return;
+  }
+  if (st === 252) {
+    if (useMidiClockLinkSync) stopSequencer();
+    return;
+  }
 
   if (useMidiLoopers && (command === 144 || command === 128)) {
     if (command === 144 && e.data[2] > 0) {
@@ -13848,6 +13826,79 @@ function injectCustomCSS() {
     }
     .cue-marker {
       pointer-events: auto !important;
+    }
+    .ytbm-touch-popup {
+      position: fixed;
+      width: min(760px, calc(100vw - 24px));
+      top: 56px;
+      left: 56px;
+      background: rgba(18,18,18,0.82);
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 20px;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.45);
+      backdrop-filter: blur(22px);
+      color: #fff;
+      z-index: 100000;
+      padding: 16px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .ytbm-touch-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      cursor: move;
+      user-select: none;
+      padding-bottom: 4px;
+      border-bottom: 1px solid rgba(255,255,255,0.12);
+    }
+    .ytbm-touch-title {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: rgba(255,255,255,0.82);
+    }
+    .ytbm-touch-pad-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .ytbm-touch-seq-container {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .ytbm-touch-step-row {
+      display: grid;
+      grid-template-columns: repeat(16, minmax(0, 1fr));
+      gap: 6px;
+    }
+    .ytbm-touch-step-row .stepBtn {
+      padding: 0;
+      height: 36px;
+      min-width: 0;
+      font-size: 11px;
+    }
+    .ytbm-touch-bpm-input {
+      width: 86px;
+      height: 36px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      padding: 0 12px;
+      font-size: 12px;
+      outline: none;
+    }
+    .ytbm-touch-link-status {
+      font-size: 11px;
+      color: rgba(255,255,255,0.72);
+      margin-left: auto;
+      white-space: nowrap;
     }
     .looper-manual-container,
     .looper-keymap-container,
