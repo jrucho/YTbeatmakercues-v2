@@ -54,7 +54,7 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 
 ## New in 2.0.2
 * New sidechain module
-* There’s now a dedicated “Open sidechain (advanced)” button in the Advanced window so you can jump straight into the ducking controls without remembering shortcuts. (J to trigger the sidechain, cmd+J to open the pannel)
+* There’s now a dedicated “Open sidechain (advanced)” button in the Advanced window so you can jump straight into the ducking controls without remembering shortcuts. (J to trigger the sidechain, cmd+J to open the panel)
 * Kick/Drum Follow Modes: In the sidechain panel’s Advanced section you can choose whether the video ducking follows nothing, only the kick, or all drum hits; the selector lives alongside the other advanced controls.
 * Whether you trigger ducking from keyboard, MIDI, or drum follow, the sidechain always reuses the curve you’ve selected or drawn, so kick/all-drum sidechaining matches the shape you hear in the preview.
 
@@ -119,6 +119,18 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 
 - 👇 **Touch Sequencer**  
   10 pads, 16-step sequencer, tap tempo, and BPM-based triggering.
+
+
+## Ableton Link Bridge Setup (Local)
+
+The extension auto-connects to a local Link bridge when **Clock: Ableton Link** is selected.
+
+1. Run a local WebSocket bridge process that publishes Link tempo/start/stop events.
+2. In Touch Sequencer, set clock source to **Clock: Ableton Link**.
+3. Keep your Link-enabled app open on your Mac; the extension will retry and sync as soon as a local bridge endpoint is available.
+
+Auto-discovery tries localhost bridge endpoints:
+`ws://127.0.0.1:20808`, `/link`, `/ableton-link` (and `localhost` equivalents).
 
 ## Installation
 
