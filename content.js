@@ -807,6 +807,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       // Track last processed MIDI message to filter duplicates
       lastMidiTimestamp = 0,
       lastMidiData = [],
+      lastMidiInputId = '',
       currentlyDetectingMidiControl = null,
       selectedCueKey = null,
       lastSuperKnobValue = null,
@@ -975,6 +976,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       remoteVJFrames = new Map(),
       vjBroadcastBusy = false,
       vjLastBroadcastAt = 0,
+      vjTabOrder = [],
       vjControlsSyncUI = null,
       // We'll keep them to identify which button is which
       reverbButton = null,
@@ -4687,6 +4689,32 @@ function updateTabPlaybackGate() {
   tabPlaybackGateGain.gain.value = isTabPlaybackAllowed() ? 1 : 0;
 }
 
+
+function updateVJTabOrder(order) {
+  if (!Array.isArray(order)) return;
+  vjTabOrder = order.filter((id) => typeof id === 'string' && id.length);
+}
+
+function registerTabOrderSync() {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) return;
+  try {
+    chrome.runtime.sendMessage({ type: 'ytbm-register-tab', ytbmTabId }, (res) => {
+      if (chrome.runtime?.lastError) return;
+      if (res && Array.isArray(res.order)) updateVJTabOrder(res.order);
+    });
+  } catch {}
+}
+
+function requestTabOrderRefresh() {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) return;
+  try {
+    chrome.runtime.sendMessage({ type: 'ytbm-get-tab-order' }, (res) => {
+      if (chrome.runtime?.lastError) return;
+      if (res && Array.isArray(res.order)) updateVJTabOrder(res.order);
+    });
+  } catch {}
+}
+
 function initCrossTabChannel() {
   if (crossTabVJChannel || typeof BroadcastChannel === 'undefined') return;
   try {
@@ -4709,6 +4737,8 @@ function initCrossTabChannel() {
         remoteVJFrames.delete(msg.tabId);
       }
     };
+    registerTabOrderSync();
+    requestTabOrderRefresh();
   } catch {}
 }
 
@@ -4743,6 +4773,13 @@ addTrackedListener(window, 'storage', (evt) => {
     if (enabled !== vjModuleEnabled) setVJModuleEnabled(enabled);
   }
 });
+
+if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (!msg || msg.type !== 'ytbm-tab-order-update') return;
+    updateVJTabOrder(msg.order || []);
+  });
+}
 
 async function ensureAudioContext() {
   let created = false;
@@ -7731,14 +7768,22 @@ function resetStreamPinCorner(streamIndex, cornerIndex) {
 
 
 function getVJStreamSources(localVideo) {
-  const list = [localVideo].filter(Boolean);
+  const entries = [];
+  if (localVideo) entries.push({ tabId: ytbmTabId, source: localVideo, ts: Date.now() });
   if (vjControls.crossTabStreamsEnabled) {
-    const remote = Array.from(remoteVJFrames.values())
-      .filter((f) => f && f.bitmap)
-      .sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    remote.forEach((f) => list.push(f.bitmap));
+    remoteVJFrames.forEach((f, tabId) => {
+      if (f && f.bitmap) entries.push({ tabId, source: f.bitmap, ts: f.ts || 0 });
+    });
   }
-  return list.length ? list : [localVideo];
+  const orderMap = new Map((vjTabOrder || []).map((id, idx) => [id, idx]));
+  entries.sort((a, b) => {
+    const ai = orderMap.has(a.tabId) ? orderMap.get(a.tabId) : Number.MAX_SAFE_INTEGER;
+    const bi = orderMap.has(b.tabId) ? orderMap.get(b.tabId) : Number.MAX_SAFE_INTEGER;
+    if (ai !== bi) return ai - bi;
+    return (a.ts || 0) - (b.ts || 0);
+  });
+  const sources = entries.map((e) => e.source).filter(Boolean);
+  return sources.length ? sources : [localVideo];
 }
 
 async function broadcastLocalVJFrame(video) {
@@ -11937,23 +11982,27 @@ function handleMidiClockTick() {
 }
 
 function handleMIDIMessage(e) {
-  if (!canProcessRealtimeInputs()) return;
+  const inputId = e?.currentTarget?.id || e?.target?.id || 'unknown';
   // Filter out duplicate events which can happen on some controllers
   if (e.timeStamp === lastMidiTimestamp &&
+      inputId === lastMidiInputId &&
       e.data[0] === lastMidiData[0] &&
       e.data[1] === lastMidiData[1] &&
       e.data[2] === lastMidiData[2]) {
     return;
   }
   lastMidiTimestamp = e.timeStamp;
+  lastMidiInputId = inputId;
   lastMidiData = [...e.data];
-
-  if (unhideOnInput) pulseShowYTControls();
 
   let [st, note, velocity = 0] = e.data;
   const command = st & 0xf0;
   const channel = st & 0x0f;
-  const inputId = e?.currentTarget?.id || e?.target?.id || 'unknown';
+  const isNoteOffLike = command === 128 || (command === 144 && velocity === 0);
+  if (!canProcessRealtimeInputs() && !isNoteOffLike) return;
+
+  if (unhideOnInput) pulseShowYTControls();
+
   const midiClockAllowed = selectedMidiClockInputId === 'all' || inputId === selectedMidiClockInputId;
 
   if (st === 248) {
