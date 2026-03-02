@@ -2579,16 +2579,60 @@ function toggleBlindMode() {
 
   // Helper to make overlays draggable
   function makeOverlayDraggable(overlay, handle) {
-    let offsetX = 0, offsetY = 0, dragging = false;
-    handle.addEventListener("mousedown", e => {
-      dragging = true;
-      let rect = overlay.getBoundingClientRect();
-      offsetX = e.clientX - rect.left;
-      offsetY = e.clientY - rect.top;
-      document.body.style.userSelect = "none";
+    if (!overlay || !handle || overlay._ytbmDragSetup) return;
+    overlay._ytbmDragSetup = true;
+
+    const state = { dragging: false, pointerId: null, offsetX: 0, offsetY: 0 };
+
+    function clampOverlayPosition(x, y) {
+      const rect = overlay.getBoundingClientRect();
+      const maxX = Math.max(0, window.innerWidth - rect.width);
+      const maxY = Math.max(0, window.innerHeight - rect.height);
+      return {
+        x: Math.max(0, Math.min(maxX, x)),
+        y: Math.max(0, Math.min(maxY, y))
+      };
+    }
+
+    function onPointerMove(e) {
+      if (!state.dragging || e.pointerId !== state.pointerId) return;
+      const pos = clampOverlayPosition(e.clientX - state.offsetX, e.clientY - state.offsetY);
+      overlay.style.left = pos.x + 'px';
+      overlay.style.top = pos.y + 'px';
+    }
+
+    function endDrag(e) {
+      if (!state.dragging) return;
+      if (e && e.pointerId !== undefined && e.pointerId !== state.pointerId) return;
+      state.dragging = false;
+      state.pointerId = null;
+      document.body.style.userSelect = '';
+      try { handle.releasePointerCapture(e.pointerId); } catch {}
+    }
+
+    handle.addEventListener('pointerdown', (e) => {
+      const isControl = e.target && (e.target.closest('button,input,select,textarea,a,label'));
+      if (isControl) return;
+      state.dragging = true;
+      state.pointerId = e.pointerId;
+      const rect = overlay.getBoundingClientRect();
+      state.offsetX = e.clientX - rect.left;
+      state.offsetY = e.clientY - rect.top;
+      document.body.style.userSelect = 'none';
+      try { handle.setPointerCapture(e.pointerId); } catch {}
+      e.preventDefault();
     });
-    document.addEventListener("mousemove", e => { if (!dragging) return; overlay.style.left = (e.clientX - offsetX) + "px"; overlay.style.top = (e.clientY - offsetY) + "px"; });
-    document.addEventListener("mouseup", () => { dragging = false; document.body.style.userSelect = ""; });
+
+    handle.addEventListener('pointermove', onPointerMove);
+    handle.addEventListener('pointerup', endDrag);
+    handle.addEventListener('pointercancel', endDrag);
+
+    window.addEventListener('resize', () => {
+      const rect = overlay.getBoundingClientRect();
+      const pos = clampOverlayPosition(rect.left, rect.top);
+      overlay.style.left = pos.x + 'px';
+      overlay.style.top = pos.y + 'px';
+    });
   }
   
   // Update sequencer UI for active sequencer target (pad or drum)
