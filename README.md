@@ -29,6 +29,7 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 - Added **reactive FX modulation** driven by analyser bands (low/mid/high/full) for audio-responsive visuals.
 - Added **MIDI-mappable VJ effects** and text-sequence toggles for performance workflows.
 - Added **Cue → Stream Trigger Mapping** in the VJ module: assign multiple cues to each stream, route one cue to multiple streams, and choose per-stream trigger mode (**Gate** with adjustable ms or **Legato** hold) for playable video performance.
+- Cross-tab drum lock is now optional: by default, drum/sample triggering can continue across tabs for uninterrupted workflow; enable single-tab lock via `localStorage.ytbm_single_drum_tab_lock_enabled = "1"` if you want only the focused tab to output drums.
 - Improved Advanced panel organization by grouping packs-related controls (packs, MIDI device selector, drum selectors) under **Packs (Advanced)**.
 - Hardened device dropdown initialization so output/input/monitor selects always show valid default options when previously saved IDs are stale.
 

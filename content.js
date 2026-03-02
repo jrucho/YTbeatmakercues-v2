@@ -180,6 +180,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
 
   const ytbmTabId = `ytbm_${Math.random().toString(36).slice(2)}_${Date.now()}`;
   const DRUM_TAB_LOCK_KEY = 'ytbm_active_drum_tab';
+  const DRUM_TAB_LOCK_ENABLED_KEY = 'ytbm_single_drum_tab_lock_enabled';
 
   function getDrumTabLock() {
     try {
@@ -206,13 +207,26 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     return lock.id === ytbmTabId;
   }
 
+
+  function isSingleDrumTabLockEnabled() {
+    try {
+      const raw = localStorage.getItem(DRUM_TAB_LOCK_ENABLED_KEY);
+      return raw === '1' || raw === 'true';
+    } catch {
+      return false;
+    }
+  }
+
   function isDrumOutputAllowed() {
+    // Cross-tab workflow default: allow drums across tabs unless single-tab lock is explicitly enabled.
+    if (!isSingleDrumTabLockEnabled()) return true;
     const focused = document.visibilityState === 'visible' && document.hasFocus();
     if (!focused) return false;
     return claimDrumTabLock(false);
   }
 
   const refreshDrumTabLock = () => {
+    if (!isSingleDrumTabLockEnabled()) return;
     if (document.visibilityState === 'visible' && document.hasFocus()) {
       claimDrumTabLock(true);
     }
@@ -222,6 +236,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   cleanupFunctions.push(() => removeEventListener('focus', refreshDrumTabLock, true));
   cleanupFunctions.push(() => removeEventListener('visibilitychange', refreshDrumTabLock, true));
   const drumLockHeartbeat = setInterval(() => {
+    if (!isSingleDrumTabLockEnabled()) return;
     if (document.visibilityState === 'visible' && document.hasFocus()) claimDrumTabLock(true);
   }, 1200);
   cleanupFunctions.push(() => clearInterval(drumLockHeartbeat));
