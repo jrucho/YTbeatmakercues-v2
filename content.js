@@ -1808,12 +1808,10 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   let touchPopup = null;
   let currentPad = null; // current selected pad index (0–9)
   const DRUM_SEQ_VOICES = ["kick", "hihat", "snare"];
-  const drumSequencerPatterns = {
-    kick: new Array(16).fill(false),
-    hihat: new Array(16).fill(false),
-    snare: new Array(16).fill(false)
-  };
-  let activeSequencerVoice = "kick";
+  const sequencerPatterns = {};
+  for (let i = 0; i < 10; i++) sequencerPatterns[`pad-${i}`] = new Array(16).fill(false);
+  DRUM_SEQ_VOICES.forEach((voice) => { sequencerPatterns[`drum-${voice}`] = new Array(16).fill(false); });
+  let activeSequencerTarget = "pad-0";
   let sequencerBPM = 120; // default BPM
   let sequencerPlaying = false;
   let sequencerScheduler = null;
@@ -2249,7 +2247,7 @@ function toggleBlindMode() {
     eraseAllStepsBtn.innerText = "Erase Drum Steps";
     eraseAllStepsBtn.addEventListener("click", () => {
       pushUndoState();
-      DRUM_SEQ_VOICES.forEach((voice) => drumSequencerPatterns[voice].fill(false));
+      Object.values(sequencerPatterns).forEach((steps) => steps.fill(false));
       updateSequencerUI();
       console.log("All drum sequencer steps erased.");
     });
@@ -2275,7 +2273,8 @@ function toggleBlindMode() {
       btn.dataset.voice = voice;
       btn.innerText = voice[0].toUpperCase() + voice.slice(1);
       btn.addEventListener("click", () => {
-        activeSequencerVoice = voice;
+        activeSequencerTarget = `drum-${voice}`;
+        playSample(voice);
         updateSequencerUI();
       });
       drumRow.appendChild(btn);
@@ -2292,8 +2291,9 @@ function toggleBlindMode() {
       padBtn.className = "looper-btn touch-pad-btn";
       padBtn.setAttribute("data-pad-index", i);
 
-      padBtn.addEventListener("mousedown", () => {
+      const onPadPress = () => {
         currentPad = i;
+        activeSequencerTarget = `pad-${i}`;
         let cueKey = (i + 1) % 10;
         cueKey = cueKey === 0 ? "0" : String(cueKey);
         const vid = getVideoElement();
@@ -2308,7 +2308,9 @@ function toggleBlindMode() {
         } else {
           triggerPadCue(i);
         }
-      });
+      };
+      padBtn.addEventListener("mousedown", onPadPress);
+      padBtn.addEventListener("touchstart", (e) => { e.preventDefault(); onPadPress(); }, { passive: false });
       padGrid.appendChild(padBtn);
     }
 
@@ -2379,6 +2381,7 @@ function toggleBlindMode() {
     document.body.appendChild(touchPopup);
     makeOverlayDraggable(touchPopup, header);
     currentPad = 0;
+    activeSequencerTarget = "pad-0";
     updateSequencerUI();
     refreshSequencerControls();
   }
@@ -2397,11 +2400,11 @@ function toggleBlindMode() {
     document.addEventListener("mouseup", () => { dragging = false; document.body.style.userSelect = ""; });
   }
   
-  // Update sequencer UI for active drum voice
+  // Update sequencer UI for active sequencer target (pad or drum)
   function updateSequencerUI() {
     const stepRow = document.getElementById("stepRow");
     if (!stepRow) return;
-    const steps = drumSequencerPatterns[activeSequencerVoice] || [];
+    const steps = sequencerPatterns[activeSequencerTarget] || [];
     Array.from(stepRow.children).forEach((btn, index) => {
       const isOn = !!steps[index];
       btn.dataset.on = isOn ? "1" : "0";
@@ -2410,7 +2413,11 @@ function toggleBlindMode() {
     });
     if (touchPopup) {
       touchPopup.querySelectorAll('.ytbm-seq-voice-btn').forEach((btn) => {
-        const active = btn.dataset.voice === activeSequencerVoice;
+        const active = `drum-${btn.dataset.voice}` === activeSequencerTarget;
+        btn.dataset.state = active ? 'on' : 'off';
+      });
+      touchPopup.querySelectorAll('.touch-pad-btn').forEach((btn) => {
+        const active = `pad-${btn.dataset.padIndex}` === activeSequencerTarget;
         btn.dataset.state = active ? 'on' : 'off';
       });
     }
@@ -2443,7 +2450,7 @@ function toggleBlindMode() {
   }
 
   function toggleStep(stepIndex) {
-    const steps = drumSequencerPatterns[activeSequencerVoice];
+    const steps = sequencerPatterns[activeSequencerTarget];
     if (!steps) return;
     steps[stepIndex] = !steps[stepIndex];
     updateSequencerUI();
@@ -2490,6 +2497,17 @@ function toggleBlindMode() {
     }
   }
 
+  function triggerSequencerTarget(targetKey) {
+    if (targetKey.startsWith('pad-')) {
+      const idx = Number(targetKey.split('-')[1]);
+      if (Number.isFinite(idx) && idx >= 0 && idx < 10) triggerPadCue(idx);
+      return;
+    }
+    if (targetKey === 'drum-kick') playSample('kick');
+    if (targetKey === 'drum-hihat') playSample('hihat');
+    if (targetKey === 'drum-snare') playSample('snare');
+  }
+
   function runSequencerTick() {
     if (!sequencerPlaying || !clock.isRunning) return;
     const beatDur = clock.beatDuration();
@@ -2497,9 +2515,9 @@ function toggleBlindMode() {
     const step = Math.floor((((phaseBeats % 4) + 4) % 4) * 4) % 16;
     if (step === lastSequencerStep) return;
     lastSequencerStep = step;
-    if (drumSequencerPatterns.kick[step]) playSample("kick");
-    if (drumSequencerPatterns.hihat[step]) playSample("hihat");
-    if (drumSequencerPatterns.snare[step]) playSample("snare");
+    Object.entries(sequencerPatterns).forEach(([targetKey, steps]) => {
+      if (steps[step]) triggerSequencerTarget(targetKey);
+    });
     highlightCurrentStep(step);
   }
 
