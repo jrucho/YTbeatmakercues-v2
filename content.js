@@ -14392,7 +14392,12 @@ function injectCustomCSS() {
     .ytbm-touch-seq-container {
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 14px;
+    }
+    .ytbm-touch-utility-row,
+    .ytbm-touch-voice-row,
+    .ytbm-touch-control-row {
+      row-gap: 14px;
     }
     .ytbm-touch-step-row {
       display: grid;
