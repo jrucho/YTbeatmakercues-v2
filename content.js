@@ -247,9 +247,16 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   let inputDeviceSelect = null;
   let monitorInputSelect = null;
   let midiDeviceSelect = null;
+  let sequencerClockDeviceSelect = null;
+  let sequencerClockModeSelect = null;
   let monitorToggleBtn = null;
   let midiAccess = null;
   let selectedMidiInputId = localStorage.getItem('ytbm_selectedMidiInputId') || 'all';
+  let selectedMidiClockInputId = localStorage.getItem('ytbm_selectedMidiClockInputId') || 'all';
+  let sequencerClockSource = localStorage.getItem('ytbm_sequencerClockSource') || 'midi_clock';
+  if (!['internal','midi_clock','ableton_link'].includes(sequencerClockSource)) sequencerClockSource = 'midi_clock';
+  let abletonLinkSession = null;
+  let abletonLinkAvailable = false;
   let currentOutputNode = null;
   let externalOutputDest = null;
   let outputAudio = null;
@@ -1819,7 +1826,7 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   let sequencerTransportButton = null;
   let sequencerBpmInput = null;
   let sequencerLinkStatusEl = null;
-  let useMidiClockLinkSync = true;
+  let sequencerClockDragState = null;
   const midiClockTimestamps = [];
   
 // Global flag to track the toggle state.
@@ -2253,13 +2260,31 @@ function toggleBlindMode() {
     });
     utilityRow.appendChild(eraseAllStepsBtn);
 
-    const linkToggleBtn = document.createElement("button");
-    linkToggleBtn.className = "looper-btn";
-    linkToggleBtn.addEventListener("click", () => {
-      useMidiClockLinkSync = !useMidiClockLinkSync;
+    sequencerClockModeSelect = document.createElement("select");
+    sequencerClockModeSelect.className = "looper-btn";
+    sequencerClockModeSelect.innerHTML = `
+      <option value="internal">Clock: Internal</option>
+      <option value="midi_clock">Clock: MIDI</option>
+      <option value="ableton_link">Clock: Ableton Link</option>
+    `;
+    sequencerClockModeSelect.addEventListener("change", async () => {
+      sequencerClockSource = sequencerClockModeSelect.value || 'internal';
+      if (!['internal', 'midi_clock', 'ableton_link'].includes(sequencerClockSource)) sequencerClockSource = 'internal';
+      localStorage.setItem('ytbm_sequencerClockSource', sequencerClockSource);
+      if (sequencerClockSource === 'ableton_link') await ensureAbletonLinkSession();
       refreshSequencerControls();
     });
-    utilityRow.appendChild(linkToggleBtn);
+    utilityRow.appendChild(sequencerClockModeSelect);
+
+    sequencerClockDeviceSelect = document.createElement("select");
+    sequencerClockDeviceSelect.className = "looper-btn";
+    sequencerClockDeviceSelect.title = "Choose which MIDI input drives sequencer clock";
+    sequencerClockDeviceSelect.addEventListener("change", () => {
+      selectedMidiClockInputId = sequencerClockDeviceSelect.value || 'all';
+      localStorage.setItem('ytbm_selectedMidiClockInputId', selectedMidiClockInputId);
+      refreshSequencerControls();
+    });
+    utilityRow.appendChild(sequencerClockDeviceSelect);
 
     sequencerLinkStatusEl = document.createElement("span");
     sequencerLinkStatusEl.className = "ytbm-touch-link-status";
@@ -2365,6 +2390,35 @@ function toggleBlindMode() {
       const newBpm = Number(sequencerBpmInput.value) || 120;
       applySequencerBpm(newBpm);
     });
+    sequencerBpmInput.addEventListener("wheel", (e) => {
+      if (sequencerClockSource !== 'internal') return;
+      e.preventDefault();
+      const step = e.shiftKey ? 0.1 : 1;
+      const dir = e.deltaY > 0 ? -1 : 1;
+      applySequencerBpm((clock.bpm || sequencerBPM || 120) + (dir * step));
+    }, { passive: false });
+    sequencerBpmInput.addEventListener("pointerdown", (e) => {
+      if (sequencerClockSource !== 'internal') return;
+      sequencerClockDragState = {
+        id: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        startBpm: clock.bpm || sequencerBPM || 120
+      };
+      sequencerBpmInput.setPointerCapture(e.pointerId);
+    });
+    sequencerBpmInput.addEventListener("pointermove", (e) => {
+      if (!sequencerClockDragState || e.pointerId !== sequencerClockDragState.id) return;
+      const dx = e.clientX - sequencerClockDragState.startX;
+      const dy = sequencerClockDragState.startY - e.clientY;
+      const delta = (dx * 0.05) + (dy * 0.2);
+      applySequencerBpm((sequencerClockDragState.startBpm || 120) + delta);
+    });
+    sequencerBpmInput.addEventListener("pointerup", (e) => {
+      if (!sequencerClockDragState || e.pointerId !== sequencerClockDragState.id) return;
+      try { sequencerBpmInput.releasePointerCapture(e.pointerId); } catch {}
+      sequencerClockDragState = null;
+    });
     controlRow.appendChild(sequencerBpmInput);
 
     sequencerTransportButton = document.createElement("button");
@@ -2382,6 +2436,8 @@ function toggleBlindMode() {
     makeOverlayDraggable(touchPopup, header);
     currentPad = 0;
     activeSequencerTarget = "pad-0";
+    populateMidiInputSelect();
+    if (sequencerClockSource === 'ableton_link') ensureAbletonLinkSession();
     updateSequencerUI();
     refreshSequencerControls();
   }
@@ -2429,19 +2485,34 @@ function toggleBlindMode() {
     }
     if (sequencerBpmInput) {
       sequencerBpmInput.value = String(Math.round((clock.bpm || sequencerBPM || 120) * 10) / 10);
-      sequencerBpmInput.disabled = !!useMidiClockLinkSync;
+      sequencerBpmInput.disabled = sequencerClockSource !== 'internal';
+      sequencerBpmInput.title = sequencerClockSource === 'internal'
+        ? 'Scroll or drag to change BPM'
+        : 'BPM is driven by selected sync source';
     }
-    const toggle = touchPopup ? touchPopup.querySelector('.ytbm-touch-utility-row button:nth-child(3)') : null;
-    if (toggle) {
-      toggle.innerText = useMidiClockLinkSync ? "Link: MIDI Clock" : "Link: Internal";
-      toggle.dataset.state = useMidiClockLinkSync ? "on" : "off";
+    if (sequencerClockModeSelect) {
+      sequencerClockModeSelect.value = sequencerClockSource;
+    }
+    if (sequencerClockDeviceSelect) {
+      sequencerClockDeviceSelect.style.display = sequencerClockSource === 'midi_clock' ? '' : 'none';
+      sequencerClockDeviceSelect.value = selectedMidiClockInputId;
     }
     if (sequencerLinkStatusEl) {
-      sequencerLinkStatusEl.textContent = useMidiClockLinkSync ? "Following external clock" : "Manual BPM";
+      if (sequencerClockSource === 'internal') {
+        sequencerLinkStatusEl.textContent = 'Manual BPM';
+      } else if (sequencerClockSource === 'midi_clock') {
+        sequencerLinkStatusEl.textContent = `Following MIDI clock (${selectedMidiClockInputId === 'all' ? 'All Inputs' : selectedMidiClockInputId})`;
+      } else {
+        sequencerLinkStatusEl.textContent = abletonLinkAvailable ? 'Ableton Link active' : 'Ableton Link unavailable';
+      }
     }
   }
 
   function applySequencerBpm(newBpm) {
+    if (sequencerClockSource !== 'internal') {
+      refreshSequencerControls();
+      return;
+    }
     const target = Math.max(40, Math.min(300, Number(newBpm) || clock.bpm || 120));
     if (!Number.isFinite(target)) return;
     sequencerBPM = Math.round(target * 10) / 10;
@@ -2457,6 +2528,7 @@ function toggleBlindMode() {
   }
 
   function startSequencer() {
+    if (sequencerClockSource === 'ableton_link') ensureAbletonLinkSession();
     if (sequencerPlaying) return;
     sequencerPlaying = true;
     if (!clock.isRunning) {
@@ -10401,6 +10473,7 @@ function addControls() {
     selectedMidiInputId = midiDeviceSelect.value || 'all';
     localStorage.setItem('ytbm_selectedMidiInputId', selectedMidiInputId);
     attachMidiInputHandlers();
+    refreshSequencerControls();
   });
   midiInputRow.appendChild(midiDeviceSelect);
   packsModuleWrap.appendChild(midiInputRow);
@@ -11179,23 +11252,36 @@ function shouldUseMidiInput(input) {
   return selectedMidiInputId === 'all' || input.id === selectedMidiInputId;
 }
 
+
 function populateMidiInputSelect() {
-  if (!midiDeviceSelect || !midiAccess) return;
-  midiDeviceSelect.innerHTML = '';
-  midiDeviceSelect.appendChild(new Option('Auto (All MIDI Inputs)', 'all'));
+  if (!midiAccess) return;
+  const options = [{ label: 'Auto (All MIDI Inputs)', value: 'all' }];
   midiAccess.inputs.forEach(input => {
     const label = input.name || input.manufacturer || `MIDI Input ${input.id}`;
-    midiDeviceSelect.appendChild(new Option(label, input.id));
+    options.push({ label, value: input.id });
   });
-  const hasSelected = Array.from(midiDeviceSelect.options).some(opt => opt.value === selectedMidiInputId);
-  if (!hasSelected) selectedMidiInputId = 'all';
-  midiDeviceSelect.value = selectedMidiInputId;
+
+  if (midiDeviceSelect) {
+    midiDeviceSelect.innerHTML = '';
+    options.forEach(opt => midiDeviceSelect.appendChild(new Option(opt.label, opt.value)));
+    const hasSelected = Array.from(midiDeviceSelect.options).some(opt => opt.value === selectedMidiInputId);
+    if (!hasSelected) selectedMidiInputId = 'all';
+    midiDeviceSelect.value = selectedMidiInputId;
+  }
+
+  if (sequencerClockDeviceSelect) {
+    sequencerClockDeviceSelect.innerHTML = '';
+    options.forEach(opt => sequencerClockDeviceSelect.appendChild(new Option(`Clock: ${opt.label.replace('Auto (All MIDI Inputs)', 'All MIDI Inputs')}`, opt.value)));
+    const hasClockSelected = Array.from(sequencerClockDeviceSelect.options).some(opt => opt.value === selectedMidiClockInputId);
+    if (!hasClockSelected) selectedMidiClockInputId = 'all';
+    sequencerClockDeviceSelect.value = selectedMidiClockInputId;
+  }
 }
 
 function attachMidiInputHandlers() {
   if (!midiAccess) return;
   midiAccess.inputs.forEach(input => {
-    input.onmidimessage = shouldUseMidiInput(input) ? handleMIDIMessage : null;
+    input.onmidimessage = handleMIDIMessage;
   });
   populateMidiInputSelect();
 }
@@ -11204,9 +11290,11 @@ async function initializeMIDI() {
   try {
     midiAccess = await navigator.requestMIDIAccess({ sysex: false });
     attachMidiInputHandlers();
+    refreshSequencerControls();
     if (!midiAccess._ytbmStateHooked) {
       midiAccess.addEventListener('statechange', () => {
         attachMidiInputHandlers();
+        refreshSequencerControls();
       });
       midiAccess._ytbmStateHooked = true;
     }
@@ -11215,8 +11303,50 @@ async function initializeMIDI() {
   }
 }
 
+async function ensureAbletonLinkSession() {
+  if (abletonLinkSession) return true;
+  try {
+    if (!window.AbletonLink && !window.abletonlink) {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/abletonlink@0.1.3/dist/abletonlink.min.js';
+      script.async = true;
+      await new Promise((resolve, reject) => {
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+    }
+    const LinkCtor = window.AbletonLink || window.abletonlink?.AbletonLink || window.abletonlink;
+    if (!LinkCtor) {
+      abletonLinkAvailable = false;
+      return false;
+    }
+    abletonLinkSession = new LinkCtor({ bpm: clock.bpm || 120 });
+    abletonLinkAvailable = true;
+    if (typeof abletonLinkSession.start === 'function') abletonLinkSession.start();
+    if (typeof abletonLinkSession.on === 'function') {
+      abletonLinkSession.on('tempo', (tempo) => {
+        if (sequencerClockSource !== 'ableton_link') return;
+        const t = Number(tempo?.bpm ?? tempo);
+        if (Number.isFinite(t) && t >= 40 && t <= 300) clock.setBpm(t);
+      });
+      abletonLinkSession.on('start', () => {
+        if (sequencerClockSource === 'ableton_link' && !sequencerPlaying) startSequencer();
+      });
+      abletonLinkSession.on('stop', () => {
+        if (sequencerClockSource === 'ableton_link' && sequencerPlaying) stopSequencer();
+      });
+    }
+    return true;
+  } catch (err) {
+    abletonLinkAvailable = false;
+    console.warn('Ableton Link unavailable', err);
+    return false;
+  }
+}
+
 function handleMidiClockTick() {
-  if (!useMidiClockLinkSync) return;
+  if (sequencerClockSource !== 'midi_clock') return;
   const now = performance.now();
   midiClockTimestamps.push(now);
   if (midiClockTimestamps.length > 96) midiClockTimestamps.shift();
@@ -11248,22 +11378,26 @@ function handleMIDIMessage(e) {
   let [st, note, velocity = 0] = e.data;
   const command = st & 0xf0;
   const channel = st & 0x0f;
+  const inputId = e?.currentTarget?.id || e?.target?.id || 'unknown';
+  const midiClockAllowed = selectedMidiClockInputId === 'all' || inputId === selectedMidiClockInputId;
 
   if (st === 248) {
-    handleMidiClockTick();
+    if (midiClockAllowed) handleMidiClockTick();
     return;
   }
   if (st === 250) {
-    if (useMidiClockLinkSync) {
+    if (sequencerClockSource === 'midi_clock' && midiClockAllowed) {
       if (!clock.isRunning) clock.start(audioContext ? audioContext.currentTime : clock.getNow());
       if (!sequencerPlaying) startSequencer();
     }
     return;
   }
   if (st === 252) {
-    if (useMidiClockLinkSync) stopSequencer();
+    if (sequencerClockSource === 'midi_clock' && midiClockAllowed) stopSequencer();
     return;
   }
+
+  if (!shouldUseMidiInput({ id: inputId })) return;
 
   if (useMidiLoopers && (command === 144 || command === 128)) {
     if (command === 144 && e.data[2] > 0) {
