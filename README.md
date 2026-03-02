@@ -6,12 +6,6 @@
 
 # YouTube Beatmaker Cues - Chrome Extension
 
-* Presentation : https://notebooklm.google.com/notebook/d936bb29-a507-4f20-bf3c-9031f3f9e32b?artifactId=2fedca45-b4e3-4f59-8a71-a2d3fae82eef
-
-* Video - YT Beatmaker Cues Guide : https://youtu.be/XFnM8eDQjv8
-
-* Podcast style guide: https://notebooklm.google.com/notebook/d936bb29-a507-4f20-bf3c-9031f3f9e32b?artifactId=47348371-5fcc-41ca-be76-6daece44677a
-
 You can try out my new website with some of the extension’s features here, before downloading it: https://bit.ly/beatmakercues
 
 > This extension was inspired by the muscle memory workflow of the OP-Z, the versatility of Ableton Live, and the hands-on approach I developed over the years using the SP-404.
