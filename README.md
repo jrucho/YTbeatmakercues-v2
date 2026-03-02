@@ -31,9 +31,6 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 - Improved Advanced panel organization by grouping packs-related controls (packs, MIDI device selector, drum selectors) under **Packs (Advanced)**.
 - Hardened device dropdown initialization so output/input/monitor selects always show valid default options when previously saved IDs are stale.
 
-## New in 2.3
-- Fixed Touch Sequencer popup row spacing so controls keep consistent vertical alignment after closing and reopening the popup window.
-
 ## New in 2.1.2
 - Overdub loop recording is now locked to exact loop-cycle boundaries with sample-accurate recorder start/stop timing to reduce intermittent drift.
 - Improved second-layer overdub reliability: the recorder now captures and applies audio using tighter boundary handling to avoid random gaps/click-like "gasp" moments.
