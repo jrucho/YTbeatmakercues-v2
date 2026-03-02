@@ -2449,6 +2449,17 @@ function toggleBlindMode() {
     });
     controlRow.appendChild(tapBpmBtn);
 
+    const tempoBtn = document.createElement("button");
+    tempoBtn.className = "looper-btn";
+    tempoBtn.innerText = "Tempo";
+    tempoBtn.title = "Focus tempo input";
+    tempoBtn.addEventListener("click", () => {
+      if (!sequencerBpmInput) return;
+      sequencerBpmInput.focus({ preventScroll: true });
+      sequencerBpmInput.select();
+    });
+    controlRow.appendChild(tempoBtn);
+
     sequencerBpmInput = document.createElement("input");
     sequencerBpmInput.type = "number";
     sequencerBpmInput.min = "40";
@@ -2473,7 +2484,7 @@ function toggleBlindMode() {
         id: e.pointerId,
         startX: e.clientX,
         startY: e.clientY,
-        startBpm: clock.bpm || sequencerBPM || 120
+        startBpm: Math.round(clock.bpm || sequencerBPM || 120)
       };
       sequencerBpmInput.setPointerCapture(e.pointerId);
     });
@@ -2482,7 +2493,8 @@ function toggleBlindMode() {
       const dx = e.clientX - sequencerClockDragState.startX;
       const dy = sequencerClockDragState.startY - e.clientY;
       const delta = (dx * 0.05) + (dy * 0.2);
-      applySequencerBpm((sequencerClockDragState.startBpm || 120) + delta);
+      const wholeBpm = Math.round((sequencerClockDragState.startBpm || 120) + delta);
+      applySequencerBpm(wholeBpm);
     });
     sequencerBpmInput.addEventListener("pointerup", (e) => {
       if (!sequencerClockDragState || e.pointerId !== sequencerClockDragState.id) return;
