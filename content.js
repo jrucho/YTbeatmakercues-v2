@@ -14252,7 +14252,7 @@ function injectCustomCSS() {
       box-sizing: border-box;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 14px;
     }
     .ytbm-touch-header {
       display: flex;
@@ -14285,7 +14285,10 @@ function injectCustomCSS() {
       display: grid;
       grid-template-columns: repeat(16, minmax(0, 1fr));
       grid-template-rows: repeat(2, minmax(0, 1fr));
-      gap: 6px;
+      column-gap: 6px;
+      row-gap: 9px;
+      margin-top: 2px;
+      margin-bottom: 4px;
     }
     .ytbm-touch-step-row .stepBtn {
       padding: 0;
@@ -14299,6 +14302,12 @@ function injectCustomCSS() {
       gap: 6px;
       flex-wrap: wrap;
       justify-content: flex-end;
+    }
+    .ytbm-touch-utility-row,
+    .ytbm-touch-voice-row,
+    .ytbm-touch-control-row {
+      row-gap: 10px;
+      margin-bottom: 2px;
     }
     .ytbm-touch-footer-row {
       justify-content: flex-end;
