@@ -12043,7 +12043,36 @@ function handleMIDIMessage(e) {
     return;
   }
 
-  if (instrumentPreset > 0) {
+  const isMappedCueNote = Object.values(midiNotes.cues).some(v => Number(v) === Number(note));
+  const extensionMidiNotes = new Set([
+    midiNotes.kick,
+    midiNotes.hihat,
+    midiNotes.snare,
+    midiNotes.shift,
+    midiNotes.pitchDown,
+    midiNotes.pitchUp,
+    midiNotes.pitchMode,
+    midiNotes.sidechainTap,
+    midiNotes.looperA,
+    midiNotes.looperB,
+    midiNotes.looperC,
+    midiNotes.looperD,
+    midiNotes.undo,
+    midiNotes.eqToggle,
+    midiNotes.compToggle,
+    midiNotes.videoLooper,
+    midiNotes.reverbToggle,
+    midiNotes.cassetteToggle,
+    midiNotes.randomCues,
+    midiNotes.instrumentToggle,
+    midiNotes.fxPadToggle,
+    midiNotes.seekBack5,
+    midiNotes.seekForward5,
+    midiNotes.superKnob
+  ]);
+  const isExtensionMappedNote = extensionMidiNotes.has(note) || isMappedCueNote;
+
+  if (instrumentPreset > 0 && !isExtensionMappedNote) {
     if (command === 144 && e.data[2] > 0) {
       playInstrumentNote(note);
       return;
@@ -12097,6 +12126,9 @@ function handleMIDIMessage(e) {
   }
 
   if (command === 144 && velocity > 0) {
+    if (note === midiNotes.kick) { playSample('kick'); return; }
+    if (note === midiNotes.hihat) { playSample('hihat'); return; }
+    if (note === midiNotes.snare) { playSample('snare'); return; }
     if (note === midiNotes.pitchDown) startPitchDownRepeat();
     if (note === midiNotes.pitchUp) startPitchUpRepeat();
     if (note === midiNotes.looperA) {
@@ -12166,7 +12198,6 @@ function handleMIDIMessage(e) {
       return;
     }
 
-    const isMappedCueNote = Object.values(midiNotes.cues).some(v => Number(v) === Number(note));
     if (isMappedCueNote) {
       let vid = getVideoElement();
       if (!vid) return;
