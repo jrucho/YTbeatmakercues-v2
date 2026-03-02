@@ -2528,13 +2528,11 @@ function toggleBlindMode() {
     });
     controlRow.appendChild(sequencerQuantizeButton);
 
-    seqContainer.appendChild(controlRow);
-
-    const seqFooterRow = document.createElement("div");
-    seqFooterRow.className = "ytbm-panel-row ytbm-touch-footer-row";
     const stepsLabel = document.createElement("span");
-    stepsLabel.className = "ytbm-touch-link-status";
+    stepsLabel.className = "ytbm-touch-link-status ytbm-touch-steps-label";
     stepsLabel.textContent = "Steps";
+    controlRow.appendChild(stepsLabel);
+
     sequencerLengthInput = document.createElement("input");
     sequencerLengthInput.type = "number";
     sequencerLengthInput.min = "1";
@@ -2548,9 +2546,9 @@ function toggleBlindMode() {
       updateSequencerUI();
       refreshSequencerControls();
     });
-    seqFooterRow.appendChild(stepsLabel);
-    seqFooterRow.appendChild(sequencerLengthInput);
-    seqContainer.appendChild(seqFooterRow);
+    controlRow.appendChild(sequencerLengthInput);
+
+    seqContainer.appendChild(controlRow);
 
     document.body.appendChild(touchPopup);
     makeOverlayDraggable(touchPopup, header);
@@ -14313,10 +14311,9 @@ function injectCustomCSS() {
       flex-wrap: wrap;
       justify-content: flex-end;
     }
-    .ytbm-touch-footer-row {
-      justify-content: flex-end;
-      gap: 8px;
-      margin-top: 2px;
+    .ytbm-touch-steps-label {
+      margin-left: auto;
+      margin-right: 2px;
     }
     .ytbm-seq-pulse {
       box-shadow: 0 0 0 2px rgba(138,180,248,0.65), 0 0 18px rgba(138,180,248,0.45) !important;
