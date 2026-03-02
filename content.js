@@ -117,42 +117,8 @@ async function suggestCuesFromTransients() {
 }
 // --- Random Cues Button logic (normal and modified press) ---
 if (typeof placeRandomCues === "undefined") {
-  function applyRandomCuesToKeys(keys) {
-    const vid = getVideoElement();
-    if (!vid || !Number.isFinite(vid.duration) || vid.duration <= 1 || !Array.isArray(keys) || !keys.length) return;
-    const minGap = Math.max(0.15, vid.duration / 120);
-    const startPad = Math.min(1.5, vid.duration * 0.08);
-    const endPad = Math.min(1.0, vid.duration * 0.05);
-    const minT = Math.max(0, startPad);
-    const maxT = Math.max(minT + 0.1, vid.duration - endPad);
-
-    const picks = [];
-    let attempts = 0;
-    while (picks.length < keys.length && attempts < 800) {
-      attempts++;
-      const t = minT + Math.random() * Math.max(0.1, (maxT - minT));
-      if (picks.every((x) => Math.abs(x - t) >= minGap)) picks.push(t);
-    }
-    while (picks.length < keys.length) {
-      picks.push(minT + (maxT - minT) * (picks.length / (keys.length - 1 || 1)));
-    }
-
-    picks.sort((a,b)=>a-b);
-    keys.forEach((k, i) => setCueAtKey(k, picks[i]));
-
-    saveCuePointsToURL();
-    updateCueMarkers();
-    refreshCuesButton();
-    if (window.refreshMinimalState) window.refreshMinimalState();
-  }
-
-  function placeRandomCues() {
-    applyRandomCuesToKeys(["1","2","3","4","5","6","7","8","9","0"]);
-  }
-
-  function placeRandomCuesMidi() {
-    applyRandomCuesToKeys(["1","2","3","4","5","6","7","8","9","0","11","12","13","14","15","16"]);
-  }
+  function placeRandomCues() {}
+  function placeRandomCuesMidi() {}
 }
 if (typeof refreshCuesButton === "undefined") {
   function refreshCuesButton() {}
@@ -8834,6 +8800,43 @@ function getMidiCueKeyForInput(note, channel) {
     if (!(k in cuePoints)) return k;
   }
   return null;
+}
+
+function applyRandomCuesToKeys(keys) {
+  const vid = getVideoElement();
+  if (!vid || !Number.isFinite(vid.duration) || vid.duration <= 1 || !Array.isArray(keys) || !keys.length) return;
+  const minGap = Math.max(0.15, vid.duration / 120);
+  const startPad = Math.min(1.5, vid.duration * 0.08);
+  const endPad = Math.min(1.0, vid.duration * 0.05);
+  const minT = Math.max(0, startPad);
+  const maxT = Math.max(minT + 0.1, vid.duration - endPad);
+
+  const picks = [];
+  let attempts = 0;
+  while (picks.length < keys.length && attempts < 800) {
+    attempts++;
+    const t = minT + Math.random() * Math.max(0.1, (maxT - minT));
+    if (picks.every((x) => Math.abs(x - t) >= minGap)) picks.push(t);
+  }
+  while (picks.length < keys.length) {
+    picks.push(minT + (maxT - minT) * (picks.length / (keys.length - 1 || 1)));
+  }
+
+  picks.sort((a,b)=>a-b);
+  keys.forEach((k, i) => setCueAtKey(k, picks[i]));
+
+  saveCuePointsToURL();
+  updateCueMarkers();
+  refreshCuesButton();
+  if (window.refreshMinimalState) window.refreshMinimalState();
+}
+
+function placeRandomCues() {
+  applyRandomCuesToKeys(["1","2","3","4","5","6","7","8","9","0"]);
+}
+
+function placeRandomCuesMidi() {
+  applyRandomCuesToKeys(["1","2","3","4","5","6","7","8","9","0","11","12","13","14","15","16"]);
 }
 
 function setCueAtKey(key, time, meta = null) {
