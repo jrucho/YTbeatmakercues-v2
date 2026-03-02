@@ -2467,10 +2467,27 @@ function toggleBlindMode() {
     sequencerBpmInput.step = "0.1";
     sequencerBpmInput.className = "ytbm-touch-bpm-input";
     sequencerBpmInput.value = String(Math.round((clock.bpm || sequencerBPM || 120) * 10) / 10);
+    const commitSequencerTempoFromInput = () => {
+      const raw = String(sequencerBpmInput.value || '').trim();
+      if (!raw) return;
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) {
+        refreshSequencerControls();
+        return;
+      }
+      applySequencerBpm(parsed);
+    };
     sequencerBpmInput.addEventListener("input", () => {
-      const newBpm = Number(sequencerBpmInput.value) || 120;
-      applySequencerBpm(newBpm);
+      // Keep typing smooth; commit on Enter/blur/change.
     });
+    sequencerBpmInput.addEventListener("keydown", (e) => {
+      if (e.key === 'Enter') {
+        commitSequencerTempoFromInput();
+        sequencerBpmInput.blur();
+      }
+    });
+    sequencerBpmInput.addEventListener("blur", commitSequencerTempoFromInput);
+    sequencerBpmInput.addEventListener("change", commitSequencerTempoFromInput);
     sequencerBpmInput.addEventListener("wheel", (e) => {
       if (sequencerClockSource !== 'internal') return;
       e.preventDefault();
@@ -2680,7 +2697,10 @@ function toggleBlindMode() {
       btn.dataset.state = selected ? 'on' : 'off';
     });
     if (sequencerBpmInput) {
-      sequencerBpmInput.value = String(Math.round((clock.bpm || sequencerBPM || 120) * 10) / 10);
+      const isEditingTempo = document.activeElement === sequencerBpmInput;
+      if (!isEditingTempo) {
+        sequencerBpmInput.value = String(Math.round((clock.bpm || sequencerBPM || 120) * 10) / 10);
+      }
       sequencerBpmInput.disabled = sequencerClockSource !== 'internal';
       sequencerBpmInput.title = sequencerClockSource === 'internal'
         ? 'Scroll or drag to change BPM'
@@ -7830,7 +7850,7 @@ function showVJWindowToggle() {
   vjWindowContainer.style.position = 'fixed';
   vjWindowContainer.style.top = '70px';
   vjWindowContainer.style.right = '30px';
-  vjWindowContainer.style.width = 'min(560px, 44vw)';
+  vjWindowContainer.style.width = 'min(600px, 46vw)';
   vjWindowContainer.style.maxHeight = '82vh';
   vjWindowContainer.style.zIndex = '999999';
   vjWindowContainer.style.display = 'flex';
