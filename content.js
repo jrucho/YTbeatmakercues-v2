@@ -1816,11 +1816,37 @@ const superKnobSpeedMap = { 1: 0.12, 2: 0.25, 3: 0.5 };
   let currentPad = null; // current selected pad index (0–9)
   const DRUM_SEQ_VOICES = ["kick", "hihat", "snare"];
   const SEQUENCER_STEP_COUNT = 32;
-  const sequencerPatterns = {};
-  for (let i = 0; i < 10; i++) sequencerPatterns[`pad-${i}`] = new Array(SEQUENCER_STEP_COUNT).fill(false);
-  DRUM_SEQ_VOICES.forEach((voice) => { sequencerPatterns[`drum-${voice}`] = new Array(SEQUENCER_STEP_COUNT).fill(false); });
-  sequencerPatterns.sidechain = new Array(SEQUENCER_STEP_COUNT).fill(false);
+  const SEQUENCER_BANK_COUNT = 4;
+  const ALL_SEQUENCER_TARGETS = [
+    ...Array.from({ length: 10 }, (_, i) => `pad-${i}`),
+    ...DRUM_SEQ_VOICES.map((voice) => `drum-${voice}`),
+    'sidechain'
+  ];
+  function createSequencerPatternMap() {
+    const map = {};
+    ALL_SEQUENCER_TARGETS.forEach((target) => {
+      map[target] = new Array(SEQUENCER_STEP_COUNT).fill(false);
+    });
+    return map;
+  }
+  const sequencerBanks = Array.from({ length: SEQUENCER_BANK_COUNT }, () => createSequencerPatternMap());
+  const sequencerTargetBank = {};
+  const sequencerTargetLength = {};
+  ALL_SEQUENCER_TARGETS.forEach((target) => {
+    sequencerTargetBank[target] = 0;
+    sequencerTargetLength[target] = SEQUENCER_STEP_COUNT;
+  });
   let activeSequencerTarget = "pad-0";
+  let activeSequencerBank = 0;
+  let sequencerBankMode = 'global';
+  let sequencerRecordingArmed = false;
+  let sequencerRecordQuantize = true;
+  let sequencerRecordButton = null;
+  let sequencerQuantizeButton = null;
+  let sequencerBankModeButton = null;
+  let sequencerLengthInput = null;
+  let sequencerBankButtons = [];
+  let sequencerIsPlaybackTrigger = false;
   let sequencerBPM = 120; // default BPM
   let sequencerPlaying = false;
   let sequencerScheduler = null;
@@ -2251,14 +2277,41 @@ function toggleBlindMode() {
     });
     utilityRow.appendChild(modifierBtn);
 
+    sequencerBankModeButton = document.createElement("button");
+    sequencerBankModeButton.className = "looper-btn";
+    sequencerBankModeButton.addEventListener("click", () => {
+      sequencerBankMode = sequencerBankMode === 'global' ? 'per-target' : 'global';
+      refreshSequencerControls();
+      updateSequencerUI();
+    });
+    utilityRow.appendChild(sequencerBankModeButton);
+
+    const bankRow = document.createElement("div");
+    bankRow.className = "ytbm-panel-row ytbm-touch-bank-row";
+    sequencerBankButtons = [];
+    for (let i = 0; i < SEQUENCER_BANK_COUNT; i++) {
+      const b = document.createElement("button");
+      b.className = "looper-btn";
+      b.textContent = `B${i + 1}`;
+      b.addEventListener("click", () => {
+        if (sequencerBankMode === 'global') activeSequencerBank = i;
+        else sequencerTargetBank[activeSequencerTarget] = i;
+        updateSequencerUI();
+        refreshSequencerControls();
+      });
+      bankRow.appendChild(b);
+      sequencerBankButtons.push(b);
+    }
+    touchPopup.appendChild(bankRow);
+
     const eraseAllStepsBtn = document.createElement("button");
     eraseAllStepsBtn.className = "looper-btn";
-    eraseAllStepsBtn.innerText = "Erase Drum Steps";
+    eraseAllStepsBtn.innerText = "Erase Bank";
     eraseAllStepsBtn.addEventListener("click", () => {
       pushUndoState();
-      Object.values(sequencerPatterns).forEach((steps) => steps.fill(false));
+      ALL_SEQUENCER_TARGETS.forEach((target) => { sequencerBanks[activeSequencerBank][target].fill(false); });
       updateSequencerUI();
-      console.log("All drum sequencer steps erased.");
+      console.log(`Sequencer bank ${activeSequencerBank + 1} erased.`);
     });
     utilityRow.appendChild(eraseAllStepsBtn);
 
@@ -2291,6 +2344,21 @@ function toggleBlindMode() {
     sequencerLinkStatusEl = document.createElement("span");
     sequencerLinkStatusEl.className = "ytbm-touch-link-status";
     utilityRow.appendChild(sequencerLinkStatusEl);
+
+    sequencerLengthInput = document.createElement("input");
+    sequencerLengthInput.type = "number";
+    sequencerLengthInput.min = "1";
+    sequencerLengthInput.max = String(SEQUENCER_STEP_COUNT);
+    sequencerLengthInput.className = "ytbm-touch-bpm-input";
+    sequencerLengthInput.style.width = "64px";
+    sequencerLengthInput.title = "Pattern length for selected target";
+    sequencerLengthInput.addEventListener("input", () => {
+      const v = Math.max(1, Math.min(SEQUENCER_STEP_COUNT, Number(sequencerLengthInput.value) || SEQUENCER_STEP_COUNT));
+      sequencerTargetLength[activeSequencerTarget] = v;
+      updateSequencerUI();
+      refreshSequencerControls();
+    });
+    utilityRow.appendChild(sequencerLengthInput);
 
     const drumRow = document.createElement("div");
     drumRow.className = "ytbm-panel-row ytbm-touch-voice-row";
@@ -2442,6 +2510,22 @@ function toggleBlindMode() {
     });
     controlRow.appendChild(sequencerTransportButton);
 
+    sequencerRecordButton = document.createElement("button");
+    sequencerRecordButton.className = "looper-btn";
+    sequencerRecordButton.addEventListener("click", () => {
+      sequencerRecordingArmed = !sequencerRecordingArmed;
+      refreshSequencerControls();
+    });
+    controlRow.appendChild(sequencerRecordButton);
+
+    sequencerQuantizeButton = document.createElement("button");
+    sequencerQuantizeButton.className = "looper-btn";
+    sequencerQuantizeButton.addEventListener("click", () => {
+      sequencerRecordQuantize = !sequencerRecordQuantize;
+      refreshSequencerControls();
+    });
+    controlRow.appendChild(sequencerQuantizeButton);
+
     seqContainer.appendChild(controlRow);
 
     document.body.appendChild(touchPopup);
@@ -2469,15 +2553,71 @@ function toggleBlindMode() {
   }
   
   // Update sequencer UI for active sequencer target (pad or drum)
+  function getSequencerBankForTarget(targetKey) {
+    if (sequencerBankMode === 'global') return activeSequencerBank;
+    return Math.max(0, Math.min(SEQUENCER_BANK_COUNT - 1, Number(sequencerTargetBank[targetKey] || 0)));
+  }
+
+  function getSequencerPattern(targetKey) {
+    const bank = getSequencerBankForTarget(targetKey);
+    return sequencerBanks[bank][targetKey];
+  }
+
+  function getSequencerLength(targetKey) {
+    const v = Number(sequencerTargetLength[targetKey] || SEQUENCER_STEP_COUNT);
+    return Math.max(1, Math.min(SEQUENCER_STEP_COUNT, v));
+  }
+
+  function pulseSequencerTargetButton(targetKey) {
+    if (!touchPopup) return;
+    let el = null;
+    if (targetKey.startsWith('pad-')) {
+      const idx = targetKey.split('-')[1];
+      el = touchPopup.querySelector(`.touch-pad-btn[data-pad-index="${idx}"]`);
+    } else if (targetKey.startsWith('drum-')) {
+      const voice = targetKey.split('-')[1];
+      el = touchPopup.querySelector(`.ytbm-seq-voice-btn[data-voice="${voice}"]`);
+    } else if (targetKey === 'sidechain') {
+      el = touchPopup.querySelector('.ytbm-seq-voice-btn[data-voice="sidechain"]');
+    }
+    if (!el) return;
+    el.classList.add('ytbm-seq-pulse');
+    clearTimeout(el._ytbmPulseTimer);
+    el._ytbmPulseTimer = setTimeout(() => el.classList.remove('ytbm-seq-pulse'), 140);
+  }
+
+  function recordSequencerTargetHit(targetKey, atTime = clock.getNow()) {
+    if (!sequencerRecordingArmed || sequencerIsPlaybackTrigger || !clock.isRunning) return;
+    const len = getSequencerLength(targetKey);
+    const beatDur = clock.beatDuration();
+    const phaseBeats = ((atTime - clock.startTime) / beatDur) % 4;
+    let stepFloat = ((((phaseBeats % 4) + 4) % 4) * (SEQUENCER_STEP_COUNT / 4));
+    let step = sequencerRecordQuantize ? Math.round(stepFloat) : Math.floor(stepFloat);
+    step = ((step % len) + len) % len;
+    const pattern = getSequencerPattern(targetKey);
+    if (!pattern) return;
+    pattern[step] = true;
+    const stepRow = document.getElementById('stepRow');
+    if (stepRow && activeSequencerTarget === targetKey && stepRow.children[step]) {
+      const btn = stepRow.children[step];
+      btn.classList.add('ytbm-seq-rec-hit');
+      setTimeout(() => btn.classList.remove('ytbm-seq-rec-hit'), 220);
+    }
+    updateSequencerUI();
+  }
+
   function updateSequencerUI() {
     const stepRow = document.getElementById("stepRow");
     if (!stepRow) return;
-    const steps = sequencerPatterns[activeSequencerTarget] || [];
+    const steps = getSequencerPattern(activeSequencerTarget) || [];
+    const length = getSequencerLength(activeSequencerTarget);
     Array.from(stepRow.children).forEach((btn, index) => {
       const isOn = !!steps[index];
+      const inRange = index < length;
       btn.dataset.on = isOn ? "1" : "0";
       btn.style.background = isOn ? "rgba(76,175,80,0.36)" : "rgba(255,255,255,0.08)";
       btn.style.borderColor = isOn ? "rgba(76,175,80,0.62)" : "rgba(255,255,255,0.16)";
+      btn.style.opacity = inRange ? '1' : '0.35';
     });
     if (touchPopup) {
       touchPopup.querySelectorAll('.ytbm-seq-voice-btn').forEach((btn) => {
@@ -2497,6 +2637,26 @@ function toggleBlindMode() {
     if (sequencerTransportButton) {
       sequencerTransportButton.innerText = sequencerPlaying ? "Stop" : "Start";
     }
+    if (sequencerRecordButton) {
+      sequencerRecordButton.textContent = sequencerRecordingArmed ? 'Rec: On' : 'Rec: Off';
+      sequencerRecordButton.dataset.state = sequencerRecordingArmed ? 'on' : 'off';
+    }
+    if (sequencerQuantizeButton) {
+      sequencerQuantizeButton.textContent = sequencerRecordQuantize ? 'Quantize: On' : 'Quantize: Off';
+      sequencerQuantizeButton.dataset.state = sequencerRecordQuantize ? 'on' : 'off';
+    }
+    if (sequencerBankModeButton) {
+      sequencerBankModeButton.textContent = sequencerBankMode === 'global' ? 'Banks: Global' : 'Banks: Per Target';
+    }
+    if (sequencerLengthInput) {
+      sequencerLengthInput.value = String(getSequencerLength(activeSequencerTarget));
+    }
+    sequencerBankButtons.forEach((btn, idx) => {
+      const selected = sequencerBankMode === 'global'
+        ? idx === activeSequencerBank
+        : idx === getSequencerBankForTarget(activeSequencerTarget);
+      btn.dataset.state = selected ? 'on' : 'off';
+    });
     if (sequencerBpmInput) {
       sequencerBpmInput.value = String(Math.round((clock.bpm || sequencerBPM || 120) * 10) / 10);
       sequencerBpmInput.disabled = sequencerClockSource !== 'internal';
@@ -2535,7 +2695,9 @@ function toggleBlindMode() {
   }
 
   function toggleStep(stepIndex) {
-    const steps = sequencerPatterns[activeSequencerTarget];
+    const length = getSequencerLength(activeSequencerTarget);
+    if (stepIndex >= length) return;
+    const steps = getSequencerPattern(activeSequencerTarget);
     if (!steps) return;
     steps[stepIndex] = !steps[stepIndex];
     updateSequencerUI();
@@ -2573,6 +2735,9 @@ function toggleBlindMode() {
   }
 
   function triggerPadCue(padIndex) {
+    const targetKey = `pad-${padIndex}`;
+    pulseSequencerTargetButton(targetKey);
+    recordSequencerTargetHit(targetKey);
     playSamplePad?.(padIndex);
     const vid = getVideoElement();
     const cueKey = (padIndex === 9) ? "0" : String(padIndex + 1);
@@ -2584,6 +2749,7 @@ function toggleBlindMode() {
   }
 
   function triggerSequencerTarget(targetKey) {
+    pulseSequencerTargetButton(targetKey);
     if (targetKey.startsWith('pad-')) {
       const idx = Number(targetKey.split('-')[1]);
       if (Number.isFinite(idx) && idx >= 0 && idx < 10) triggerPadCue(idx);
@@ -2602,10 +2768,15 @@ function toggleBlindMode() {
     const step = Math.floor((((phaseBeats % 4) + 4) % 4) * (SEQUENCER_STEP_COUNT / 4)) % SEQUENCER_STEP_COUNT;
     if (step === lastSequencerStep) return;
     lastSequencerStep = step;
-    Object.entries(sequencerPatterns).forEach(([targetKey, steps]) => {
-      if (steps[step]) triggerSequencerTarget(targetKey);
+    sequencerIsPlaybackTrigger = true;
+    ALL_SEQUENCER_TARGETS.forEach((targetKey) => {
+      const pattern = getSequencerPattern(targetKey);
+      const len = getSequencerLength(targetKey);
+      const localStep = step % len;
+      if (pattern && pattern[localStep]) triggerSequencerTarget(targetKey);
     });
-    highlightCurrentStep(step);
+    sequencerIsPlaybackTrigger = false;
+    highlightCurrentStep(step % getSequencerLength(activeSequencerTarget));
   }
 
   function highlightCurrentStep(stepIndex) {
@@ -5556,6 +5727,8 @@ async function triggerSidechainEnvelope(reason = 'tap') {
   if (!sidechainGain || !audioContext) return;
 
   recordMidiEvent('sidechain', { reason });
+  if (typeof pulseSequencerTargetButton === 'function') pulseSequencerTargetButton('sidechain');
+  if (typeof recordSequencerTargetHit === 'function') recordSequencerTargetHit('sidechain');
 
   const now = audioContext.currentTime;
   const dur = sidechainEnvelopeDuration || 0.6;
@@ -9012,6 +9185,10 @@ document.addEventListener("keydown", e => {
 function sequencerTriggerCue(cueKey) {
   const video = getVideoElement();
   if (!video || getCueTime(cueKey) === undefined) return;
+  const idx = cueKey === '0' ? 9 : Math.max(0, Number(cueKey) - 1);
+  const targetKey = `pad-${idx}`;
+  if (typeof pulseSequencerTargetButton === 'function') pulseSequencerTargetButton(targetKey);
+  if (typeof recordSequencerTargetHit === 'function') recordSequencerTargetHit(targetKey);
   selectedCueKey = cueKey;
   clearSuperKnobHistory();
   const fadeTime = 0.003; // 3ms fade for cue click handling
@@ -9450,6 +9627,11 @@ function handleShiftTap(source = 'keyboard') {
 function playSample(n) {
   ensureAudioContext().then(() => {
     recordMidiEvent('sample', n);
+    if (n === 'kick' || n === 'hihat' || n === 'snare') {
+      const targetKey = `drum-${n}`;
+      if (typeof pulseSequencerTargetButton === 'function') pulseSequencerTargetButton(targetKey);
+      if (typeof recordSequencerTargetHit === 'function') recordSequencerTargetHit(targetKey);
+    }
     if (sampleMutes[n]) return;
     let samples = audioBuffers[n];
     if (!samples.length) return;
@@ -14050,6 +14232,13 @@ function injectCustomCSS() {
       height: 36px;
       min-width: 0;
       font-size: 11px;
+    }
+    .ytbm-seq-pulse {
+      box-shadow: 0 0 0 2px rgba(138,180,248,0.65), 0 0 18px rgba(138,180,248,0.45) !important;
+      transform: translateY(-1px);
+    }
+    .ytbm-seq-rec-hit {
+      box-shadow: 0 0 0 2px rgba(255,82,82,0.7) inset;
     }
     .ytbm-touch-bpm-input {
       width: 86px;
