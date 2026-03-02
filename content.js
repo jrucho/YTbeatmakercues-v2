@@ -975,6 +975,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       remoteVJFrames = new Map(),
       vjBroadcastBusy = false,
       vjLastBroadcastAt = 0,
+      vjControlsSyncUI = null,
       // We'll keep them to identify which button is which
       reverbButton = null,
       cassetteButton = null,
@@ -4727,6 +4728,22 @@ addTrackedListener(window, 'pagehide', () => {
   }
 });
 
+addTrackedListener(window, 'storage', (evt) => {
+  if (!evt) return;
+  if (evt.key === 'ytbm_vjControls' && typeof evt.newValue === 'string') {
+    applySharedVJControlsFromStorage(evt.newValue);
+  }
+  if (evt.key === 'ytbm_singleTabPlaybackMode') {
+    singleTabPlaybackMode = evt.newValue !== '0';
+    updateTabPlaybackGate();
+    if (typeof vjControlsSyncUI === 'function') vjControlsSyncUI();
+  }
+  if (evt.key === 'ytbm_vjEnabled') {
+    const enabled = evt.newValue === '1';
+    if (enabled !== vjModuleEnabled) setVJModuleEnabled(enabled);
+  }
+});
+
 async function ensureAudioContext() {
   let created = false;
   if (!audioContext) {
@@ -7468,6 +7485,24 @@ function loadVJControls() {
   ensureVJDefaults();
 }
 
+
+function applySharedVJControlsFromStorage(raw) {
+  try {
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object') return;
+    vjControls = {
+      ...vjControls,
+      ...data,
+      corners: Array.isArray(data.corners) && data.corners.length === 4
+        ? data.corners.map(c => ({ x: Math.min(1, Math.max(0, Number(c.x) || 0)), y: Math.min(1, Math.max(0, Number(c.y) || 0)) }))
+        : vjControls.corners
+    };
+    ensureVJDefaults();
+    if (typeof vjControlsSyncUI === 'function') vjControlsSyncUI();
+  } catch {}
+}
+
 function setVJModuleEnabled(enabled) {
   vjModuleEnabled = !!enabled;
   localStorage.setItem('ytbm_vjEnabled', vjModuleEnabled ? '1' : '0');
@@ -7707,7 +7742,7 @@ function getVJStreamSources(localVideo) {
 }
 
 async function broadcastLocalVJFrame(video) {
-  if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !video || document.hidden) return;
+  if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !video) return;
   const now = performance.now();
   if (vjBroadcastBusy || now - vjLastBroadcastAt < 120) return;
   if (typeof createImageBitmap !== 'function') return;
@@ -8420,6 +8455,8 @@ function showVJWindowToggle() {
       blendSel.value = vjControls.effectBlend[def.key] || 'source-over';
     });
   };
+
+  vjControlsSyncUI = syncVJControlsToUI;
 
   makePanelDraggable(vjWindowContainer, vjDragHandle, 'ytbm_vjWindowPos');
 
