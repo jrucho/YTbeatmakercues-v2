@@ -743,6 +743,10 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         streamFx: [],
         sharedFxRack: true,
         preserveAspectRatio: true,
+        streamCueMap: Array.from({ length: 8 }, () => []),
+        streamTriggerMode: Array.from({ length: 8 }, () => 'legato'),
+        streamGateMs: Array.from({ length: 8 }, () => 350),
+        streamSourceTab: Array.from({ length: 8 }, () => 'this-tab'),
         corners: [
           { x: 0.0, y: 0.0 },
           { x: 1.0, y: 0.0 },
@@ -967,6 +971,17 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjLastTextStep = 0,
       vjFeedbackCanvas = null,
       vjFeedbackCtx = null,
+      vjStreamCuePlayers = [],
+      vjDiscoveredTabs = new Map(),
+      vjTabListVersion = 0,
+      vjCrossTabChannel = null,
+      vjCrossTabHeartbeatTimer = null,
+      vjCrossTabPruneTimer = null,
+      vjCrossTabPeers = new Map(),
+      vjCrossTabRemoteVideos = new Map(),
+      vjCrossTabRemoteStreams = new Map(),
+      vjSourceSelectRefreshers = new Set(),
+      vjCrossTabEnabled = false,
       // We'll keep them to identify which button is which
       reverbButton = null,
       cassetteButton = null,
@@ -3441,6 +3456,7 @@ function addTrackedListener(target, type, listener, options) {
   cleanupFunctions.push(() => target.removeEventListener(type, listener, options));
 }
 function cleanupResources() {
+  stopVJRenderer();
   [mediaRecorder, videoMediaRecorder].forEach(mr => {
     if (mr && mr.state === "recording") {
       mr.stop();
@@ -7329,6 +7345,131 @@ function persistVJControls() {
   try { localStorage.setItem('ytbm_vjControls', JSON.stringify(vjControls)); } catch {}
 }
 
+function getVJCueKeys() {
+  return ['1','2','3','4','5','6','7','8','9','0'];
+}
+
+function normalizeVJStreamCueMapEntry(entry) {
+  const allowed = new Set(getVJCueKeys());
+  if (!Array.isArray(entry)) return [];
+  const out = [];
+  entry.forEach((raw) => {
+    const key = String(raw || '').trim();
+    if (allowed.has(key) && !out.includes(key)) out.push(key);
+  });
+  return out;
+}
+
+function getVJStreamCueMapFor(index) {
+  ensureVJDefaults();
+  const idx = Math.max(0, Math.min(7, Number(index) || 0));
+  return normalizeVJStreamCueMapEntry(vjControls.streamCueMap?.[idx]);
+}
+
+function getVJStreamCueTriggerMode(index) {
+  ensureVJDefaults();
+  const idx = Math.max(0, Math.min(7, Number(index) || 0));
+  const mode = String(vjControls.streamTriggerMode?.[idx] || 'legato');
+  return mode === 'gate' ? 'gate' : 'legato';
+}
+
+function getVJStreamGateMs(index) {
+  ensureVJDefaults();
+  const idx = Math.max(0, Math.min(7, Number(index) || 0));
+  const raw = Number(vjControls.streamGateMs?.[idx]);
+  return Math.max(40, Math.min(4000, Number.isFinite(raw) ? Math.round(raw) : 350));
+}
+
+function getVJStreamSourceTab(index) {
+  ensureVJDefaults();
+  const idx = Math.max(0, Math.min(7, Number(index) || 0));
+  const raw = String(vjControls.streamSourceTab?.[idx] || 'this-tab');
+  if (raw === 'this-tab') return raw;
+  if (raw.startsWith('tab:')) return raw;
+  return 'this-tab';
+}
+
+function clearVJStreamCuePlayer(index) {
+  const idx = Math.max(0, Math.min(7, Number(index) || 0));
+  const p = vjStreamCuePlayers[idx];
+  if (!p) return;
+  if (p.gateTimer) {
+    clearTimeout(p.gateTimer);
+    p.gateTimer = null;
+  }
+  if (p.video) {
+    try { p.video.pause(); } catch {}
+    try { p.video.removeAttribute('src'); p.video.load(); } catch {}
+    try { p.video.remove(); } catch {}
+  }
+  vjStreamCuePlayers[idx] = null;
+}
+
+function getOrCreateVJStreamCuePlayer(index, cueKey) {
+  const idx = Math.max(0, Math.min(7, Number(index) || 0));
+  const existing = vjStreamCuePlayers[idx];
+  if (existing && existing.cueKey === cueKey && existing.video) return existing;
+  clearVJStreamCuePlayer(idx);
+  const srcVideo = getVideoElement();
+  if (!srcVideo) return null;
+  const player = {
+    cueKey,
+    video: document.createElement('video'),
+    gateTimer: null,
+    active: false
+  };
+  player.video.muted = true;
+  player.video.playsInline = true;
+  player.video.preload = 'auto';
+  player.video.crossOrigin = 'anonymous';
+  player.video.style.position = 'fixed';
+  player.video.style.width = '1px';
+  player.video.style.height = '1px';
+  player.video.style.opacity = '0';
+  player.video.style.pointerEvents = 'none';
+  player.video.style.left = '-9999px';
+  player.video.style.top = '-9999px';
+  player.video.src = srcVideo.currentSrc || srcVideo.src || '';
+  document.body.appendChild(player.video);
+  vjStreamCuePlayers[idx] = player;
+  return player;
+}
+
+function triggerVJStreamsForCue(cueKey) {
+  if (!cueKey) return;
+  ensureVJDefaults();
+  const cue = String(cueKey);
+  const cueTime = getCueTime(cue);
+  if (!Number.isFinite(cueTime)) return;
+  const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+  for (let i = 0; i < count; i++) {
+    const source = getVJStreamSourceTab(i);
+    if (source !== 'this-tab') continue;
+    const cueMap = getVJStreamCueMapFor(i);
+    if (!cueMap.includes(cue)) continue;
+    const player = getOrCreateVJStreamCuePlayer(i, cue);
+    if (!player || !player.video) continue;
+    const mode = getVJStreamCueTriggerMode(i);
+    const gateMs = getVJStreamGateMs(i);
+    if (player.gateTimer) {
+      clearTimeout(player.gateTimer);
+      player.gateTimer = null;
+    }
+    try {
+      player.video.currentTime = cueTime;
+    } catch {}
+    player.active = true;
+    player.startedAt = performance.now();
+    player.video.play().catch(() => {});
+    if (mode === 'gate') {
+      player.gateTimer = setTimeout(() => {
+        player.active = false;
+        try { player.video.pause(); } catch {}
+      }, gateMs);
+    }
+  }
+}
+
 function ensureVJDefaults() {
   const defs = getVJEffectDefs();
   if (!vjControls.reactive || typeof vjControls.reactive !== 'object') vjControls.reactive = {};
@@ -7351,6 +7492,21 @@ function ensureVJDefaults() {
   vjControls.streamCount = Math.max(1, Math.min(8, Math.round(vjControls.streamCount || 1)));
   vjControls.streamActiveIndex = Math.max(0, Math.min(7, Math.round(vjControls.streamActiveIndex || 0)));
   while (vjControls.streamBlendMap.length < 8) vjControls.streamBlendMap.push('source-over');
+  if (!Array.isArray(vjControls.streamCueMap)) vjControls.streamCueMap = [];
+  if (!Array.isArray(vjControls.streamTriggerMode)) vjControls.streamTriggerMode = [];
+  if (!Array.isArray(vjControls.streamGateMs)) vjControls.streamGateMs = [];
+  if (!Array.isArray(vjControls.streamSourceTab)) vjControls.streamSourceTab = [];
+  while (vjControls.streamCueMap.length < 8) vjControls.streamCueMap.push([]);
+  while (vjControls.streamTriggerMode.length < 8) vjControls.streamTriggerMode.push('legato');
+  while (vjControls.streamGateMs.length < 8) vjControls.streamGateMs.push(350);
+  while (vjControls.streamSourceTab.length < 8) vjControls.streamSourceTab.push('this-tab');
+  vjControls.streamCueMap = vjControls.streamCueMap.slice(0, 8).map(normalizeVJStreamCueMapEntry);
+  vjControls.streamTriggerMode = vjControls.streamTriggerMode.slice(0, 8).map((m) => String(m) === 'gate' ? 'gate' : 'legato');
+  vjControls.streamGateMs = vjControls.streamGateMs.slice(0, 8).map((n) => Math.max(40, Math.min(4000, Number.isFinite(Number(n)) ? Math.round(Number(n)) : 350)));
+  vjControls.streamSourceTab = vjControls.streamSourceTab.slice(0, 8).map((src) => {
+    const v = String(src || 'this-tab');
+    return (v === 'this-tab' || v.startsWith('tab:')) ? v : 'this-tab';
+  });
   while (vjControls.streamFx.length < 8) vjControls.streamFx.push(createVJDefaultFxProfile());
   vjControls.streamFx = vjControls.streamFx.slice(0, 8).map((fx) => {
     const base = createVJDefaultFxProfile();
@@ -7618,13 +7774,174 @@ function resetStreamPinCorner(streamIndex, cornerIndex) {
   vjControls.streamPins[streamIndex][cornerIndex] = { x: src.x, y: src.y };
 }
 
+const vjThisTabId = `tab:${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+
+function getVJSourceOptions() {
+  const options = [{ value: 'this-tab', label: 'Source: This Tab' }];
+  const now = Date.now();
+  Array.from(vjDiscoveredTabs.entries())
+    .filter(([id, rec]) => id !== vjThisTabId && rec && now - (rec.lastSeen || 0) < 9000)
+    .sort((a, b) => String(a[1].title || a[0]).localeCompare(String(b[1].title || b[0])))
+    .forEach(([id, rec]) => options.push({ value: id, label: `Source: ${rec.title || id}` }));
+  return options;
+}
+
+function refreshVJSourceSelectors() {
+  vjSourceSelectRefreshers.forEach((fn) => {
+    try { fn(); } catch {}
+  });
+}
+
+function getVJStreamRenderVideo(index, fallbackVideo) {
+  const idx = Math.max(0, Math.min(7, Number(index) || 0));
+  const player = vjStreamCuePlayers[idx];
+  if (player && player.active && player.video) return player.video;
+  const source = getVJStreamSourceTab(idx);
+  if (source && source !== 'this-tab') {
+    ensureVJCrossTabPeer(source, false, 'vj-main');
+    const remote = vjCrossTabRemoteVideos.get(source);
+    if (remote && remote.readyState >= 2) return remote;
+  }
+  return fallbackVideo;
+}
+
+function handleVJCrossTabMessage(ev) {
+  const msg = ev?.data;
+  if (!msg || typeof msg !== 'object') return;
+  if (msg.from === vjThisTabId) return;
+  if (msg.to && msg.to !== vjThisTabId) return;
+  if (msg.type === 'heartbeat') {
+    vjDiscoveredTabs.set(msg.from, { title: msg.title || 'YTBM Tab', lastSeen: Date.now() });
+    vjTabListVersion++;
+    refreshVJSourceSelectors();
+    return;
+  }
+  if (!msg.from) return;
+  if (msg.type === 'stream-request') {
+    ensureVJCrossTabPeer(msg.from, true, msg.streamId || 'vj-main');
+    return;
+  }
+  if (msg.type === 'signal') {
+    const peer = ensureVJCrossTabPeer(msg.from, false, msg.streamId || 'vj-main');
+    if (peer && peer.pc) applyVJCrossTabSignal(peer, msg.signal);
+  }
+}
+
+function sendVJCrossTab(type, data = {}) {
+  if (!vjCrossTabChannel) return;
+  try {
+    vjCrossTabChannel.postMessage({ type, from: vjThisTabId, title: document.title || 'YTBM Tab', ...data });
+  } catch {}
+}
+
+function ensureVJCrossTabPeer(remoteTabId, isSender = false, streamId = 'vj-main') {
+  if (!remoteTabId || remoteTabId === vjThisTabId || typeof RTCPeerConnection !== 'function') return null;
+  const key = `${remoteTabId}|${streamId}`;
+  let peer = vjCrossTabPeers.get(key);
+  if (peer) return peer;
+  const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  peer = { key, remoteTabId, streamId, pc, sender: !!isSender };
+  vjCrossTabPeers.set(key, peer);
+  pc.onicecandidate = (evt) => {
+    if (evt.candidate) sendVJCrossTab('signal', { to: remoteTabId, streamId, signal: { candidate: evt.candidate } });
+  };
+  pc.ontrack = (evt) => {
+    const ms = evt.streams && evt.streams[0];
+    if (!ms) return;
+    vjCrossTabRemoteStreams.set(remoteTabId, ms);
+    let video = vjCrossTabRemoteVideos.get(remoteTabId);
+    if (!video) {
+      video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      video.autoplay = true;
+      video.style.position = 'fixed';
+      video.style.left = '-9999px';
+      video.style.top = '-9999px';
+      video.style.width = '1px';
+      video.style.height = '1px';
+      video.style.opacity = '0';
+      document.body.appendChild(video);
+      vjCrossTabRemoteVideos.set(remoteTabId, video);
+    }
+    video.srcObject = ms;
+    video.play().catch(() => {});
+  };
+  if (isSender) {
+    const localVid = getVideoElement();
+    const stream = (localVid && localVid.captureStream) ? localVid.captureStream(30) : null;
+    if (stream) stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+    pc.createOffer().then((offer) => pc.setLocalDescription(offer).then(() => offer)).then((offer) => {
+      sendVJCrossTab('signal', { to: remoteTabId, streamId, signal: { sdp: offer } });
+    }).catch(() => {});
+  } else {
+    sendVJCrossTab('stream-request', { to: remoteTabId, streamId });
+  }
+  return peer;
+}
+
+function applyVJCrossTabSignal(peer, signal) {
+  if (!peer || !peer.pc || !signal) return;
+  const pc = peer.pc;
+  if (signal.sdp) {
+    pc.setRemoteDescription(new RTCSessionDescription(signal.sdp)).then(async () => {
+      if (signal.sdp.type === 'offer') {
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sendVJCrossTab('signal', { to: peer.remoteTabId, streamId: peer.streamId, signal: { sdp: answer } });
+      }
+    }).catch(() => {});
+    return;
+  }
+  if (signal.candidate) pc.addIceCandidate(new RTCIceCandidate(signal.candidate)).catch(() => {});
+}
+
+function ensureVJCrossTabRouting() {
+  if (vjCrossTabEnabled) return;
+  if (typeof BroadcastChannel !== 'function') return;
+  vjCrossTabEnabled = true;
+  vjCrossTabChannel = new BroadcastChannel('ytbm_vj_cross_tab');
+  vjCrossTabChannel.addEventListener('message', handleVJCrossTabMessage);
+  sendVJCrossTab('heartbeat');
+  vjCrossTabHeartbeatTimer = setInterval(() => sendVJCrossTab('heartbeat'), 2000);
+  vjCrossTabPruneTimer = setInterval(() => {
+    const now = Date.now();
+    Array.from(vjDiscoveredTabs.entries()).forEach(([id, rec]) => {
+      if (id !== vjThisTabId && now - (rec?.lastSeen || 0) > 10000) vjDiscoveredTabs.delete(id);
+    });
+    refreshVJSourceSelectors();
+  }, 3000);
+}
+
+function cleanupVJCrossTabRouting() {
+  if (vjCrossTabHeartbeatTimer) { clearInterval(vjCrossTabHeartbeatTimer); vjCrossTabHeartbeatTimer = null; }
+  if (vjCrossTabPruneTimer) { clearInterval(vjCrossTabPruneTimer); vjCrossTabPruneTimer = null; }
+  if (vjCrossTabChannel) {
+    try { vjCrossTabChannel.removeEventListener('message', handleVJCrossTabMessage); } catch {}
+    try { vjCrossTabChannel.close(); } catch {}
+    vjCrossTabChannel = null;
+  }
+  vjCrossTabPeers.forEach((peer) => {
+    try { peer.pc.ontrack = null; peer.pc.onicecandidate = null; peer.pc.close(); } catch {}
+  });
+  vjCrossTabPeers.clear();
+  vjCrossTabRemoteVideos.forEach((video) => {
+    try { video.pause(); } catch {}
+    try { video.srcObject = null; video.remove(); } catch {}
+  });
+  vjCrossTabRemoteVideos.clear();
+  vjCrossTabRemoteStreams.clear();
+  vjCrossTabEnabled = false;
+}
+
 function drawStreamMosaic(ctx, video, width, height, tMs) {
   const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
   for (let i = 0; i < count; i++) {
     const blend = vjControls.streamBlendMap?.[i] || 'source-over';
     const quad = (vjControls.streamPins && vjControls.streamPins[i]) ? vjControls.streamPins[i] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
     const fxIndex = vjControls.sharedFxRack ? 0 : i;
-    applyVJEffectsToSource(video, width, height, tMs, fxIndex);
+    const streamVideo = getVJStreamRenderVideo(i, video);
+    applyVJEffectsToSource(streamVideo, width, height, tMs, fxIndex);
     ctx.save();
     ctx.globalCompositeOperation = blend;
     drawMappedQuad(ctx, vjSourceCanvas, quad, width, height, 8);
@@ -7826,6 +8143,7 @@ function drawVJFrame(tMs = performance.now()) {
 function startVJRenderer() {
   if (!vjModuleEnabled) return;
   ensureVJDefaults();
+  ensureVJCrossTabRouting();
   ensureVJAnalyser();
   if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
   if (!vjAnimationFrame) vjAnimationFrame = requestAnimationFrame(drawVJFrame);
@@ -7840,6 +8158,8 @@ function startVJRenderer() {
 }
 
 function stopVJRenderer() {
+  for (let i = 0; i < 8; i++) clearVJStreamCuePlayer(i);
+  cleanupVJCrossTabRouting();
   if (vjAnimationFrame) {
     cancelAnimationFrame(vjAnimationFrame);
     vjAnimationFrame = null;
@@ -7971,6 +8291,11 @@ function showVJWindowToggle() {
     vjControls.streamPins = Array.from({ length: 8 }, () => ([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]));
     vjControls.streamBlendMap = Array.from({ length: 8 }, () => 'source-over');
     vjControls.streamFx = Array.from({ length: 8 }, () => createVJDefaultFxProfile());
+    vjControls.streamCueMap = Array.from({ length: 8 }, () => []);
+    vjControls.streamTriggerMode = Array.from({ length: 8 }, () => 'legato');
+    vjControls.streamGateMs = Array.from({ length: 8 }, () => 350);
+    vjControls.streamSourceTab = Array.from({ length: 8 }, () => 'this-tab');
+    for (let i = 0; i < 8; i++) clearVJStreamCuePlayer(i);
     persistVJControls();
     syncVJControlsToUI();
   });
@@ -8135,6 +8460,99 @@ function showVJWindowToggle() {
   streamConfigRow.appendChild(resetActivePinsBtn);
   vjContentWrap.appendChild(streamConfigRow);
 
+  const streamSourceSel = document.createElement('select');
+  streamSourceSel.className = 'looper-btn';
+  const streamTriggerSel = document.createElement('select');
+  streamTriggerSel.className = 'looper-btn';
+  streamTriggerSel.add(new Option('Trigger: Legato', 'legato'));
+  streamTriggerSel.add(new Option('Trigger: Gate', 'gate'));
+  const streamGateMsInp = document.createElement('input');
+  streamGateMsInp.className = 'looper-btn';
+  streamGateMsInp.type = 'number';
+  streamGateMsInp.min = '40';
+  streamGateMsInp.max = '4000';
+  streamGateMsInp.step = '10';
+
+  const sourceRow = document.createElement('div');
+  sourceRow.style.display = 'grid';
+  sourceRow.style.gridTemplateColumns = '1fr 1fr 1fr';
+  sourceRow.style.gap = '6px';
+  sourceRow.appendChild(streamSourceSel);
+  sourceRow.appendChild(streamTriggerSel);
+  sourceRow.appendChild(streamGateMsInp);
+  vjContentWrap.appendChild(sourceRow);
+
+  const cueMapRow = document.createElement('div');
+  cueMapRow.style.display = 'grid';
+  cueMapRow.style.gridTemplateColumns = 'repeat(10, minmax(28px, 1fr))';
+  cueMapRow.style.gap = '4px';
+  const cueMapChecks = [];
+  getVJCueKeys().forEach((k) => {
+    const wrap = document.createElement('label');
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.justifyContent = 'center';
+    wrap.style.gap = '2px';
+    wrap.style.fontSize = '11px';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.dataset.cueKey = k;
+    const txt = document.createElement('span');
+    txt.textContent = k;
+    wrap.appendChild(cb);
+    wrap.appendChild(txt);
+    cueMapRow.appendChild(wrap);
+    cueMapChecks.push(cb);
+  });
+  vjContentWrap.appendChild(cueMapRow);
+
+  const clearCueMapBtn = document.createElement('button');
+  clearCueMapBtn.className = 'looper-btn';
+  clearCueMapBtn.textContent = 'Clear Cue Map';
+  vjContentWrap.appendChild(clearCueMapBtn);
+
+  const refreshSourceSelect = () => {
+    const selected = getVJStreamSourceTab(getActiveStreamIndex());
+    const options = getVJSourceOptions();
+    streamSourceSel.innerHTML = '';
+    options.forEach((opt) => streamSourceSel.add(new Option(opt.label, opt.value)));
+    const has = Array.from(streamSourceSel.options).some((o) => o.value === selected);
+    streamSourceSel.value = has ? selected : 'this-tab';
+  };
+  vjSourceSelectRefreshers.add(refreshSourceSelect);
+
+  streamSourceSel.addEventListener('change', () => {
+    const idx = getActiveStreamIndex();
+    vjControls.streamSourceTab[idx] = streamSourceSel.value || 'this-tab';
+    if (vjControls.streamSourceTab[idx] !== 'this-tab') ensureVJCrossTabPeer(vjControls.streamSourceTab[idx], false, 'vj-main');
+    persistVJControls();
+  });
+  streamTriggerSel.addEventListener('change', () => {
+    const idx = getActiveStreamIndex();
+    vjControls.streamTriggerMode[idx] = streamTriggerSel.value === 'gate' ? 'gate' : 'legato';
+    persistVJControls();
+  });
+  streamGateMsInp.addEventListener('change', () => {
+    const idx = getActiveStreamIndex();
+    vjControls.streamGateMs[idx] = Math.max(40, Math.min(4000, Number(streamGateMsInp.value) || 350));
+    streamGateMsInp.value = String(vjControls.streamGateMs[idx]);
+    persistVJControls();
+  });
+  cueMapChecks.forEach((cb) => {
+    cb.addEventListener('change', () => {
+      const idx = getActiveStreamIndex();
+      const next = cueMapChecks.filter((x) => x.checked).map((x) => x.dataset.cueKey);
+      vjControls.streamCueMap[idx] = normalizeVJStreamCueMapEntry(next);
+      persistVJControls();
+    });
+  });
+  clearCueMapBtn.addEventListener('click', () => {
+    const idx = getActiveStreamIndex();
+    vjControls.streamCueMap[idx] = [];
+    cueMapChecks.forEach((cb) => { cb.checked = false; });
+    persistVJControls();
+  });
+
   streamCountSel.addEventListener('change', () => {
     vjControls.streamCount = Math.max(1, Math.min(8, Number(streamCountSel.value) || 1));
     if ((vjControls.streamActiveIndex || 0) >= vjControls.streamCount) vjControls.streamActiveIndex = vjControls.streamCount - 1;
@@ -8254,6 +8672,11 @@ function showVJWindowToggle() {
     refreshActiveStreamSel();
     activeStreamSel.value = String(Math.max(0, Math.min((vjControls.streamCount || 1) - 1, vjControls.streamActiveIndex || 0)));
     syncActiveBlend();
+    refreshSourceSelect();
+    streamTriggerSel.value = getVJStreamCueTriggerMode(getActiveStreamIndex());
+    streamGateMsInp.value = String(getVJStreamGateMs(getActiveStreamIndex()));
+    const activeCueMap = new Set(getVJStreamCueMapFor(getActiveStreamIndex()));
+    cueMapChecks.forEach((cb) => { cb.checked = activeCueMap.has(cb.dataset.cueKey); });
     syncTextBtn();
     textInp.value = vjControls.textPhrase || '';
     mirrorChk.checked = !!getActiveStreamFx().mirror;
@@ -9329,6 +9752,7 @@ function sequencerTriggerCue(cueKey) {
   }, fadeTime * 1000);
 
   recordMidiEvent('cue', cueKey);
+  triggerVJStreamsForCue(cueKey);
   
   console.log(`Sequencer triggered cue ${cueKey} at time ${getCueTime(cueKey)}`);
 }
@@ -9559,6 +9983,7 @@ function onKeyDown(e) {
         videoGain.gain.setValueAtTime(0, t);
         videoGain.gain.linearRampToValueAtTime(1, t + fadeTime);
       }, fadeTime * 1000);
+      triggerVJStreamsForCue(e.key);
     }
   }
   
@@ -9744,8 +10169,26 @@ function handleShiftTap(source = 'keyboard') {
   }
 }
 
+function shouldPlayDrumsOnThisTab() {
+  const strict = localStorage.getItem('ytbm_single_drum_tab_lock_enabled') === '1';
+  if (!strict) return true;
+  const lockKey = 'ytbm_single_drum_tab_lock_owner';
+  const now = Date.now();
+  const ttlMs = 15000;
+  const owner = localStorage.getItem(lockKey);
+  const ownerAt = Number(localStorage.getItem(`${lockKey}_at`) || 0);
+  const alive = owner && ownerAt && (now - ownerAt) < ttlMs;
+  if (!alive || owner === vjThisTabId) {
+    localStorage.setItem(lockKey, vjThisTabId);
+    localStorage.setItem(`${lockKey}_at`, String(now));
+    return true;
+  }
+  return false;
+}
+
 function playSample(n) {
   ensureAudioContext().then(() => {
+    if (!shouldPlayDrumsOnThisTab()) return;
     recordMidiEvent('sample', n);
     if (n === 'kick' || n === 'hihat' || n === 'snare') {
       const targetKey = `drum-${n}`;
@@ -9776,6 +10219,7 @@ function playSample(n) {
 }
 function playUserSample(us) {
   ensureAudioContext().then(() => {
+    if (!shouldPlayDrumsOnThisTab()) return;
     if (!us.buffer) return;
     const idx = userSamples.indexOf(us);
     if (idx !== -1) recordMidiEvent('userSample', idx);

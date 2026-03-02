@@ -26,6 +26,9 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 - Added a new **VJ Module** for live visuals: open a dedicated panel, route up to 8 streams, and process them through a canvas-based effect pipeline in realtime.
 - Added **4-corner pin mapping** per stream so each source can be perspective-mapped and composed as a live mosaic.
 - Added a **VJ monitor output** popup with fullscreen shortcut support so visuals can be sent to a separate screen/projector.
+- Added **cue→stream mapping** with per-stream trigger behavior (**gate** with adjustable ms or **legato**), including multi-cue/multi-stream mapping.
+- Added **experimental cross-tab VJ source routing** (BroadcastChannel + WebRTC) so each VJ stream can use This Tab or another discovered YTBM tab.
+- Added **optional strict single-tab drum lock** (off by default) via `ytbm_single_drum_tab_lock_enabled = "1"`; cross-tab drum workflows remain allowed by default.
 - Added **reactive FX modulation** driven by analyser bands (low/mid/high/full) for audio-responsive visuals.
 - Added **MIDI-mappable VJ effects** and text-sequence toggles for performance workflows.
 - Improved Advanced panel organization by grouping packs-related controls (packs, MIDI device selector, drum selectors) under **Packs (Advanced)**.
