@@ -8776,7 +8776,7 @@ function getMidiCueKeyForInput(note, channel) {
   if (!isExtended || channel === 0) {
     for (let i = 0; i < storageOrder.length; i++) {
       const storageKey = storageOrder[i];
-      if (Number(midiNotes.cues[storageKey]) === Number(note)) return String(i + 1);
+      if (Number(midiNotes.cues[storageKey]) === Number(note)) return storageKey;
     }
   }
 
@@ -8786,10 +8786,10 @@ function getMidiCueKeyForInput(note, channel) {
     if (!cue || !cue.midi) return false;
     if (!isExtended) {
       // Normal mode: same note on any channel should trigger the same cue.
-      return cue.midi.note === note;
+      return Number(cue.midi.note) === Number(note);
     }
     // Extended mode: each channel+note pair is unique.
-    return cue.midi.note === note && cue.midi.channel === channel;
+    return Number(cue.midi.note) === Number(note) && Number(cue.midi.channel) === Number(channel);
   });
   if (existing) return existing;
 

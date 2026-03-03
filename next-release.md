@@ -1,3 +1,15 @@
+# Release 2.3.3
+
+## Summary
+Release **2.3.3** fixes MIDI cue-note routing so mapped notes (including note 45) reliably trigger their assigned cue slots.
+
+## Clean changelog
+- Fixed MIDI cue lookup to return the actual mapped cue storage key instead of derived index values.
+- Fixed MIDI cue metadata comparisons to use numeric normalization for note/channel matching, improving compatibility with saved mappings.
+- Updated extension version to **2.3.3** in `manifest.json`.
+
+---
+
 # Release 2.3.2
 
 ## Summary
