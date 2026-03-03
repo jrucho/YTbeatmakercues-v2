@@ -65,55 +65,12 @@ if (typeof addTouchSequencerButtonToAdvancedUI === "undefined") {
 }
 // ----------------------------------------------
 // --- Suggest Cues from Transients Helper ---
+// Global shim: real implementation is bound inside the main IIFE where
+// audioContext/videoGain/ensureAudioContext exist.
 async function suggestCuesFromTransients() {
-  await ensureAudioContext();
-  const vid = getVideoElement();
-  if (!vid || !audioContext || !videoGain) return;
-
-  const analyser = audioContext.createAnalyser();
-  analyser.fftSize = 2048;
-  const buf = new Uint8Array(analyser.fftSize);
-  videoGain.connect(analyser);
-
-  const SLICE_MS = 8000;
-  const energies = [];
-  const t0 = performance.now();
-  const startTime = vid.currentTime;
-  const sampleRate = 60; // 60 samples per second
-
-  while (performance.now() - t0 < SLICE_MS) {
-    analyser.getByteTimeDomainData(buf);
-    let rms = 0;
-    for (let i = 0; i < buf.length; i++) {
-      const v = buf[i] - 128;
-      rms += v * v;
-    }
-    energies.push({ t: vid.currentTime, e: Math.sqrt(rms / buf.length) });
-    await new Promise(r => setTimeout(r, 1000 / sampleRate));
+  if (typeof window !== "undefined" && typeof window.ytbmSuggestCuesFromTransients === "function") {
+    return window.ytbmSuggestCuesFromTransients();
   }
-
-  videoGain.disconnect(analyser);
-
-  // Detect local maxima (simple peak detection)
-  const peaks = [];
-  for (let i = 1; i < energies.length - 1; i++) {
-    if (energies[i].e > energies[i - 1].e && energies[i].e > energies[i + 1].e) {
-      peaks.push(energies[i]);
-    }
-  }
-
-  // Sort by energy and take top 10
-  peaks.sort((a, b) => b.e - a.e);
-  const topPeaks = peaks.slice(0, 10).sort((a, b) => a.t - b.t);
-
-  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
-  topPeaks.forEach((p, i) => {
-    setCueAtKey(keys[i], p.t);
-  });
-
-  saveCuePointsToURL();
-  updateCueMarkers();
-  refreshCuesButton();
 }
 // --- Random Cues Button logic (normal and modified press) ---
 if (typeof placeRandomCues === "undefined") {
@@ -8829,6 +8786,58 @@ function applyRandomCuesToKeys(keys) {
   updateCueMarkers();
   refreshCuesButton();
   if (window.refreshMinimalState) window.refreshMinimalState();
+}
+
+async function suggestCuesFromTransientsInternal() {
+  await ensureAudioContext();
+  const vid = getVideoElement();
+  if (!vid || !audioContext || !videoGain) return;
+
+  const analyser = audioContext.createAnalyser();
+  analyser.fftSize = 2048;
+  const buf = new Uint8Array(analyser.fftSize);
+  videoGain.connect(analyser);
+
+  const SLICE_MS = 8000;
+  const energies = [];
+  const t0 = performance.now();
+  const sampleRate = 60;
+
+  while (performance.now() - t0 < SLICE_MS) {
+    analyser.getByteTimeDomainData(buf);
+    let rms = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = buf[i] - 128;
+      rms += v * v;
+    }
+    energies.push({ t: vid.currentTime, e: Math.sqrt(rms / buf.length) });
+    await new Promise(r => setTimeout(r, 1000 / sampleRate));
+  }
+
+  videoGain.disconnect(analyser);
+
+  const peaks = [];
+  for (let i = 1; i < energies.length - 1; i++) {
+    if (energies[i].e > energies[i - 1].e && energies[i].e > energies[i + 1].e) {
+      peaks.push(energies[i]);
+    }
+  }
+
+  peaks.sort((a, b) => b.e - a.e);
+  const topPeaks = peaks.slice(0, 10).sort((a, b) => a.t - b.t);
+
+  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+  topPeaks.forEach((p, i) => {
+    setCueAtKey(keys[i], p.t);
+  });
+
+  saveCuePointsToURL();
+  updateCueMarkers();
+  refreshCuesButton();
+}
+window.ytbmSuggestCuesFromTransients = suggestCuesFromTransientsInternal;
+if (typeof suggestCuesFromTransients === 'function') {
+  suggestCuesFromTransients = suggestCuesFromTransientsInternal;
 }
 
 function placeRandomCues() {
