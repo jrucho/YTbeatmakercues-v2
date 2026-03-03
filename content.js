@@ -66,6 +66,8 @@ if (typeof addTouchSequencerButtonToAdvancedUI === "undefined") {
 // ----------------------------------------------
 // --- Suggest Cues from Transients Helper ---
 async function suggestCuesFromTransients() {
+  // Early bootstrap guard: real implementation is defined in the main module scope.
+  if (typeof ensureAudioContext !== "function") return;
   await ensureAudioContext();
   const vid = getVideoElement();
   if (!vid || !audioContext || !videoGain) return;
@@ -8716,6 +8718,54 @@ function saveUserSampleDataURL(type, dataURL) {
  * Cue Points
  **************************************/
 
+async function suggestCuesFromTransients() {
+  await ensureAudioContext();
+  const vid = getVideoElement();
+  if (!vid || !audioContext || !videoGain) return;
+
+  const analyser = audioContext.createAnalyser();
+  analyser.fftSize = 2048;
+  const buf = new Uint8Array(analyser.fftSize);
+  videoGain.connect(analyser);
+
+  const SLICE_MS = 8000;
+  const energies = [];
+  const t0 = performance.now();
+  const sampleRate = 60;
+
+  while (performance.now() - t0 < SLICE_MS) {
+    analyser.getByteTimeDomainData(buf);
+    let rms = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const v = buf[i] - 128;
+      rms += v * v;
+    }
+    energies.push({ t: vid.currentTime, e: Math.sqrt(rms / buf.length) });
+    await new Promise(r => setTimeout(r, 1000 / sampleRate));
+  }
+
+  videoGain.disconnect(analyser);
+
+  const peaks = [];
+  for (let i = 1; i < energies.length - 1; i++) {
+    if (energies[i].e > energies[i - 1].e && energies[i].e > energies[i + 1].e) {
+      peaks.push(energies[i]);
+    }
+  }
+
+  peaks.sort((a, b) => b.e - a.e);
+  const topPeaks = peaks.slice(0, 10).sort((a, b) => a.t - b.t);
+
+  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+  topPeaks.forEach((p, i) => {
+    setCueAtKey(keys[i], p.t);
+  });
+
+  saveCuePointsToURL();
+  updateCueMarkers();
+  refreshCuesButton();
+}
+
 function getCueModeLimit() {
   if (cueInputMode === 'keyboard') return 10;
   if (extendedMidiCueMode) return 256;
@@ -9874,16 +9924,12 @@ function onKeyDown(e) {
     }
   }
   
-  // Random-cues shortcut: default = transient suggestion, Shift = legacy random placement.
+  // For other keys, e.g. randomizing cues:
   if (k === extensionKeys.randomCues.toLowerCase()) {
     e.preventDefault();
     e.stopPropagation();
-    if (e.shiftKey) {
-      cueInputMode = 'keyboard';
-      randomizeCuesInOneClick();
-    } else {
-      suggestCuesFromTransients();
-    }
+    cueInputMode = 'keyboard';
+    randomizeCuesInOneClick();
     return;
   }
   // Reverb/cassette
@@ -11299,9 +11345,9 @@ function addControls() {
   randomCuesButton.className = "looper-btn ytbm-advanced-btn";
   randomCuesButton.innerText = "Suggest Cues";
   randomCuesButton.style.flex = '1 1 calc(50% - 4px)';
-  randomCuesButton.title = "Suggest cues from transients (Shift/Cmd/Ctrl = legacy random)";
+  randomCuesButton.title = "Suggest cues from transients (Cmd/Ctrl = random)";
   randomCuesButton.addEventListener("click", (e) => {
-    if (e.shiftKey || e.metaKey || e.ctrlKey) {
+    if (e.metaKey || e.ctrlKey) {
       pushUndoState();
       cueInputMode = 'keyboard';
       randomizeCuesInOneClick();
@@ -12217,9 +12263,8 @@ function handleMIDIMessage(e) {
     if (note === midiNotes.sidechainTap) { triggerSidechainEnvelope('midi'); return; }
     if (note === midiNotes.pitchMode) { togglePitchMode(); return; }
     if (note === midiNotes.randomCues) {
-      // Default MIDI behavior: transient suggestion. Hold Shift (MIDI modifier) for legacy random placement.
-      if (isModPressed) placeRandomCuesMidi();
-      else suggestCuesFromTransients();
+      if (isModPressed) suggestCuesFromTransients();
+      else placeRandomCuesMidi();
       return;
     }
     if (note === midiNotes.pitchDown) startPitchDownRepeat();

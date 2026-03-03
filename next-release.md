@@ -1,3 +1,18 @@
+# Release 2.3.4
+
+## Summary
+Release **2.3.4** fixes a transient-suggestion runtime error and restores Random Cues behavior to the prior workflow.
+
+## Clean changelog
+- Fixed `Uncaught (in promise) ReferenceError: ensureAudioContext is not defined` when running transient cue suggestion by defining the helper in the same scope as audio internals.
+- Restored previous Random Cues behavior for MIDI mapping: mapped Random Cues note triggers legacy random MIDI cues, and Shift-modifier triggers transient suggestion.
+- Restored previous keyboard assigned Random Cues shortcut behavior to legacy random placement.
+- Restored Advanced **Suggest Cues** button modifier behavior to `Cmd/Ctrl = random` with transient suggestion as default click.
+- Kept the mapped MIDI cue-key lookup fix so cue 10 (`"0"` storage key) resolves correctly.
+- Updated extension version to **2.3.4** in `manifest.json`.
+
+---
+
 # Release 2.3.3
 
 ## Summary
