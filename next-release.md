@@ -1,3 +1,15 @@
+# Release 2.3.3
+
+## Summary
+Release **2.3.3** aligns MIDI random-cue behavior with the UI and hardens mapped cue-slot resolution.
+
+## Clean changelog
+- Fixed MIDI Random Cues trigger behavior to match button behavior: default action now suggests cues from transients, while holding MIDI Shift randomizes cue placement.
+- Fixed MIDI cue lookup to return canonical storage keys so mapped notes reliably follow configured cue slots, including key `0` (displayed as cue 10).
+- Updated extension version to **2.3.3** in `manifest.json`.
+
+---
+
 # Release 2.3.2
 
 ## Summary

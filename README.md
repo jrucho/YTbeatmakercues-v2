@@ -16,6 +16,10 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.3.3
+- Fixed MIDI random-cues behavior to match the UI button flow: press the mapped MIDI Random Cues note to **suggest transients**, and hold MIDI Shift while pressing it to place **random** cues.
+- Fixed MIDI cue key resolution so mapped notes always target the canonical cue storage slot (including cue key `0`, displayed as cue 10).
+
 ## New in 2.3.2
 - Fixed Super Knob runtime errors caused by missing handler wiring in MIDI CC paths. 
 - Fixed non-finite cue-time writes that could later trigger media currentTime errors. 

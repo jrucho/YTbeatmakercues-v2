@@ -8776,7 +8776,7 @@ function getMidiCueKeyForInput(note, channel) {
   if (!isExtended || channel === 0) {
     for (let i = 0; i < storageOrder.length; i++) {
       const storageKey = storageOrder[i];
-      if (Number(midiNotes.cues[storageKey]) === Number(note)) return String(i + 1);
+      if (Number(midiNotes.cues[storageKey]) === Number(note)) return storageKey;
     }
   }
 
@@ -12211,8 +12211,8 @@ function handleMIDIMessage(e) {
     if (note === midiNotes.sidechainTap) { triggerSidechainEnvelope('midi'); return; }
     if (note === midiNotes.pitchMode) { togglePitchMode(); return; }
     if (note === midiNotes.randomCues) {
-      if (isModPressed) suggestCuesFromTransients();
-      else placeRandomCuesMidi();
+      if (isModPressed) placeRandomCuesMidi();
+      else suggestCuesFromTransients();
       return;
     }
     if (note === midiNotes.pitchDown) startPitchDownRepeat();
@@ -15125,12 +15125,12 @@ if (typeof midiNotes !== "undefined" && midiNotes.randomCues !== undefined) {
     window.handleMidiNote = function(note, velocity, opts) {
       // Check for randomCues note
       if (note === midiNotes.randomCues) {
-        // If modifier is pressed (Shift note or isModPressed), suggest cues
+        // Match button behavior: default suggests transients; Shift modifier randomizes cue slots.
         if ((typeof isModPressed !== "undefined" && isModPressed) ||
             (opts && opts.shift)) {
-          suggestCuesFromTransients();
+          placeRandomCuesMidi();
         } else {
-          placeRandomCues();
+          suggestCuesFromTransients();
         }
         return;
       }
