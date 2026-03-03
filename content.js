@@ -8776,7 +8776,9 @@ function getMidiCueKeyForInput(note, channel) {
   if (!isExtended || channel === 0) {
     for (let i = 0; i < storageOrder.length; i++) {
       const storageKey = storageOrder[i];
-      if (Number(midiNotes.cues[storageKey]) === Number(note)) return String(i + 1);
+      // Return the actual cue storage key ("0" is cue 10), not the loop index.
+      // Returning i+1 breaks cue 10 lookups because it resolves to "10" instead of "0".
+      if (Number(midiNotes.cues[storageKey]) === Number(note)) return storageKey;
     }
   }
 
