@@ -9342,18 +9342,29 @@ function getAbsoluteSuperKnobDelta(val) {
   return { delta: diff, nextValue: val };
 }
 
+function decodeBinaryOffsetDelta(val) {
+  if (val === 64) return 0;
+  return val > 64 ? (val - 64) : -(64 - val);
+}
+
+function decodeTwoComplementDelta(val) {
+  if (val <= 63) return val;
+  if (val === 64) return 0;
+  return val - 128;
+}
+
 function computeRelativeSuperKnobDelta(val, preview = false) {
   const encoding = (superKnobRelativeEncoding === "binaryOffset" || superKnobRelativeEncoding === "twoComplement")
     ? superKnobRelativeEncoding
     : "auto";
+  const offsetDelta = decodeBinaryOffsetDelta(val);
+  const twoCompDelta = decodeTwoComplementDelta(val);
   let delta;
   if (encoding === "binaryOffset") {
-    delta = val - 64;
+    delta = offsetDelta;
   } else if (encoding === "twoComplement") {
-    delta = ((val + 64) % 128) - 64;
+    delta = twoCompDelta;
   } else {
-    const offsetDelta = val - 64;
-    const twoCompDelta = ((val + 64) % 128) - 64;
     delta = Math.abs(offsetDelta) <= Math.abs(twoCompDelta) ? offsetDelta : twoCompDelta;
   }
   const limited = Math.max(-SUPER_KNOB_RELATIVE_MAX_DELTA, Math.min(SUPER_KNOB_RELATIVE_MAX_DELTA, delta));
@@ -9379,7 +9390,7 @@ function updateSuperKnobDetection(val) {
   const currExtreme = val <= 3 || val >= 124;
 
   if (val >= 60 && val <= 68) {
-    if (!rawPrev || Math.abs(val - rawPrev) <= 3) {
+    if (typeof rawPrev !== "number" || Math.abs(val - rawPrev) <= 3) {
       superKnobBinaryHits += 1;
     }
   }
@@ -9451,7 +9462,8 @@ function applySuperKnob(rawVal) {
   if (!Number.isFinite(midiValue)) return;
   const delta = computeSuperKnobDelta(midiValue);
   if (!Number.isFinite(delta) || delta === 0) return;
-  const scaledDelta = delta * superKnobStep;
+  const shiftMultiplier = isModPressed ? 3 : 1;
+  const scaledDelta = delta * superKnobStep * shiftMultiplier;
   if (!Number.isFinite(scaledDelta)) return;
   adjustSelectedCue(scaledDelta);
   lastSuperKnobDirection = Math.sign(delta) || lastSuperKnobDirection;
