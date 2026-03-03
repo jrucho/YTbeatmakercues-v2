@@ -1,3 +1,18 @@
+# Release 2.3.3
+
+## Summary
+Release **2.3.3** updates Random Cues behavior so mapped MIDI/button triggers favor transient-based cue suggestion by default, with legacy random placement moved behind Shift modifiers.
+
+## Clean changelog
+- Changed mapped MIDI Random Cues note behavior: press = **Suggest cues from transients**, hold MIDI Shift = **legacy random cue placement** (16 MIDI cue slots).
+- Changed Advanced **Suggest Cues** button behavior: click = **Suggest cues from transients**; Shift/Cmd/Ctrl-click = **legacy random cue placement**.
+- Changed assigned keyboard Random Cues shortcut behavior: press = **Suggest cues from transients**; Shift+shortcut = **legacy random cue placement**.
+- Updated the Advanced button tooltip to reflect the new modifier behavior.
+- Fixed MIDI mapped cue-key lookup to return the true storage key (including cue 10 as key `"0"`) for consistent mapped cue triggering.
+- Updated extension version to **2.3.3** in `manifest.json`.
+
+---
+
 # Release 2.3.2
 
 ## Summary

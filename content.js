@@ -9874,12 +9874,16 @@ function onKeyDown(e) {
     }
   }
   
-  // For other keys, e.g. randomizing cues:
+  // Random-cues shortcut: default = transient suggestion, Shift = legacy random placement.
   if (k === extensionKeys.randomCues.toLowerCase()) {
     e.preventDefault();
     e.stopPropagation();
-    cueInputMode = 'keyboard';
-    randomizeCuesInOneClick();
+    if (e.shiftKey) {
+      cueInputMode = 'keyboard';
+      randomizeCuesInOneClick();
+    } else {
+      suggestCuesFromTransients();
+    }
     return;
   }
   // Reverb/cassette
@@ -11295,9 +11299,9 @@ function addControls() {
   randomCuesButton.className = "looper-btn ytbm-advanced-btn";
   randomCuesButton.innerText = "Suggest Cues";
   randomCuesButton.style.flex = '1 1 calc(50% - 4px)';
-  randomCuesButton.title = "Suggest cues from transients (Cmd/Ctrl = random)";
+  randomCuesButton.title = "Suggest cues from transients (Shift/Cmd/Ctrl = legacy random)";
   randomCuesButton.addEventListener("click", (e) => {
-    if (e.metaKey || e.ctrlKey) {
+    if (e.shiftKey || e.metaKey || e.ctrlKey) {
       pushUndoState();
       cueInputMode = 'keyboard';
       randomizeCuesInOneClick();
@@ -12213,8 +12217,9 @@ function handleMIDIMessage(e) {
     if (note === midiNotes.sidechainTap) { triggerSidechainEnvelope('midi'); return; }
     if (note === midiNotes.pitchMode) { togglePitchMode(); return; }
     if (note === midiNotes.randomCues) {
-      if (isModPressed) suggestCuesFromTransients();
-      else placeRandomCuesMidi();
+      // Default MIDI behavior: transient suggestion. Hold Shift (MIDI modifier) for legacy random placement.
+      if (isModPressed) placeRandomCuesMidi();
+      else suggestCuesFromTransients();
       return;
     }
     if (note === midiNotes.pitchDown) startPitchDownRepeat();
