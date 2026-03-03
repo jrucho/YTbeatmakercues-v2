@@ -8789,9 +8789,22 @@ function applyRandomCuesToKeys(keys) {
 }
 
 async function suggestCuesFromTransientsInternal() {
-  await ensureAudioContext();
+  const targetKeys = (cueInputMode === 'midi')
+    ? ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "11", "12", "13", "14", "15", "16"]
+    : ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+
+  try {
+    await ensureAudioContext();
+  } catch (_) {
+    applyRandomCuesToKeys(targetKeys);
+    return;
+  }
+
   const vid = getVideoElement();
-  if (!vid || !audioContext || !videoGain) return;
+  if (!vid || !audioContext || !videoGain) {
+    applyRandomCuesToKeys(targetKeys);
+    return;
+  }
 
   const analyser = audioContext.createAnalyser();
   analyser.fftSize = 2048;
@@ -8826,11 +8839,15 @@ async function suggestCuesFromTransientsInternal() {
     }
 
     peaks.sort((a, b) => b.e - a.e);
-    const topPeaks = peaks.slice(0, 10).sort((a, b) => a.t - b.t);
+    const topPeaks = peaks.slice(0, targetKeys.length).sort((a, b) => a.t - b.t);
 
-    const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+    if (!topPeaks.length) {
+      applyRandomCuesToKeys(targetKeys);
+      return;
+    }
+
     topPeaks.forEach((p, i) => {
-      setCueAtKey(keys[i], p.t);
+      if (i < targetKeys.length) setCueAtKey(targetKeys[i], p.t);
     });
 
     saveCuePointsToURL();
@@ -8846,6 +8863,7 @@ async function suggestCuesFromTransientsInternal() {
     }
   }
 }
+
 window.ytbmSuggestCuesFromTransients = suggestCuesFromTransientsInternal;
 if (typeof suggestCuesFromTransients === 'function') {
   suggestCuesFromTransients = suggestCuesFromTransientsInternal;
