@@ -1,3 +1,19 @@
+# Release 2.3.2
+
+## Summary
+Release **2.3.2** focuses on Super Knob reliability and cue-time safety fixes for MIDI workflows.
+
+## Clean changelog
+- Fixed Super Knob runtime errors caused by missing handler wiring in MIDI CC paths.
+- Fixed non-finite cue-time writes that could later trigger media `currentTime` errors.
+- Reworked Super Knob movement to a stable wrapped 0–127 delta path for predictable behavior across controllers.
+- Restored Shift-as-clutch behavior for Super Knob: while held, movement is consumed without moving cues so hardware knobs can be re-centered.
+- Improved endless/infinite encoder behavior to avoid sudden jumps from beginning to end while scrubbing cues.
+- Hardened Super Knob value checks to ignore invalid numeric input safely.
+- Updated extension version to **2.3.2** in `manifest.json`.
+
+---
+
 # Release 2.3.1
 
 ## Summary
