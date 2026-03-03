@@ -12249,7 +12249,7 @@ function handleMIDIMessage(e) {
     if (note === midiNotes.sidechainTap) { triggerSidechainEnvelope('midi'); return; }
     if (note === midiNotes.pitchMode) { togglePitchMode(); return; }
     if (note === midiNotes.randomCues) {
-      if (isModPressed) placeRandomCuesMidi();
+      if (isModPressed) placeRandomCues();
       else suggestCuesFromTransients();
       return;
     }
@@ -15166,7 +15166,7 @@ if (typeof midiNotes !== "undefined" && midiNotes.randomCues !== undefined) {
         // Match button behavior: default suggests transients; Shift modifier randomizes cue slots.
         if ((typeof isModPressed !== "undefined" && isModPressed) ||
             (opts && opts.shift)) {
-          placeRandomCuesMidi();
+          placeRandomCues();
         } else {
           suggestCuesFromTransients();
         }
