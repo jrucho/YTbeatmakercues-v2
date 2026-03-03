@@ -9441,6 +9441,35 @@ function computeSuperKnobDelta(val) {
   return delta;
 }
 
+function convertRelativeMidiToNormalized(val) {
+  const midiValue = Math.max(0, Math.min(127, Number(val)));
+  if (!Number.isFinite(midiValue)) return null;
+  const delta = computeRelativeSuperKnobDelta(midiValue);
+  const baseValue = (typeof lastSuperKnobValue === 'number' && Number.isFinite(lastSuperKnobValue))
+    ? lastSuperKnobValue
+    : 64;
+  const nextValue = Math.max(0, Math.min(127, baseValue + delta));
+  lastSuperKnobValue = nextValue;
+  superKnobLastRawValue = midiValue;
+  return nextValue / 127;
+}
+
+function applySuperKnob(rawVal) {
+  const midiValue = Math.max(0, Math.min(127, Number(rawVal)));
+  if (!Number.isFinite(midiValue)) return;
+  const delta = computeSuperKnobDelta(midiValue);
+  if (delta === 0) return;
+  const scaledDelta = delta * superKnobStep;
+  adjustSelectedCue(scaledDelta);
+  lastSuperKnobDirection = Math.sign(delta) || lastSuperKnobDirection;
+}
+
+function applySuperKnobAbsolute(val) {
+  if (typeof val !== 'number' || !Number.isFinite(val)) return;
+  const rawVal = val <= 1 ? Math.round(Math.max(0, Math.min(1, val)) * 127) : val;
+  applySuperKnob(rawVal);
+}
+
 function refreshCuesButton() {
   if (!cuesButton) return;
   let c = Object.keys(cuePoints).length;
