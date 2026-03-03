@@ -8840,8 +8840,10 @@ function placeRandomCuesMidi() {
 }
 
 function setCueAtKey(key, time, meta = null) {
+  const safeTime = Number(time);
+  if (!Number.isFinite(safeTime)) return;
   cuePoints[key] = {
-    time,
+    time: safeTime,
     ...(meta ? { midi: meta } : {})
   };
 }
@@ -9254,10 +9256,13 @@ function addCueAtCurrentVideoTime() {
 function adjustSelectedCue(dt) {
   if (!selectedCueKey) return;
   const vid = getVideoElement();
-  if (!vid || getCueTime(selectedCueKey) === undefined) return;
-  const dur = vid.duration || Infinity;
-  let t = getCueTime(selectedCueKey) + dt;
+  const currentCueTime = getCueTime(selectedCueKey);
+  if (!vid || currentCueTime === undefined || !Number.isFinite(currentCueTime) || !Number.isFinite(dt)) return;
+  const dur = Number.isFinite(vid.duration) ? vid.duration : Infinity;
+  let t = currentCueTime + dt;
+  if (!Number.isFinite(t)) return;
   t = Math.max(0, Math.min(dur, t));
+  if (!Number.isFinite(t)) return;
   setCueAtKey(selectedCueKey, t);
   scheduleSaveCuePoints();
   updateCueMarkers();
@@ -9441,33 +9446,15 @@ function computeSuperKnobDelta(val) {
   return delta;
 }
 
-function convertRelativeMidiToNormalized(val) {
-  const midiValue = Math.max(0, Math.min(127, Number(val)));
-  if (!Number.isFinite(midiValue)) return null;
-  const delta = computeRelativeSuperKnobDelta(midiValue);
-  const baseValue = (typeof lastSuperKnobValue === 'number' && Number.isFinite(lastSuperKnobValue))
-    ? lastSuperKnobValue
-    : 64;
-  const nextValue = Math.max(0, Math.min(127, baseValue + delta));
-  lastSuperKnobValue = nextValue;
-  superKnobLastRawValue = midiValue;
-  return nextValue / 127;
-}
-
 function applySuperKnob(rawVal) {
   const midiValue = Math.max(0, Math.min(127, Number(rawVal)));
   if (!Number.isFinite(midiValue)) return;
   const delta = computeSuperKnobDelta(midiValue);
-  if (delta === 0) return;
+  if (!Number.isFinite(delta) || delta === 0) return;
   const scaledDelta = delta * superKnobStep;
+  if (!Number.isFinite(scaledDelta)) return;
   adjustSelectedCue(scaledDelta);
   lastSuperKnobDirection = Math.sign(delta) || lastSuperKnobDirection;
-}
-
-function applySuperKnobAbsolute(val) {
-  if (typeof val !== 'number' || !Number.isFinite(val)) return;
-  const rawVal = val <= 1 ? Math.round(Math.max(0, Math.min(1, val)) * 127) : val;
-  applySuperKnob(rawVal);
 }
 
 function refreshCuesButton() {
@@ -12177,14 +12164,7 @@ function handleMIDIMessage(e) {
 
   if (command === 176) {
     if (note === midiNotes.superKnob) {
-      if (superKnobMode === 'absolute') {
-        applySuperKnobAbsolute(velocity / 127);
-      } else if (superKnobMode === 'relative') {
-        const next = convertRelativeMidiToNormalized(velocity);
-        if (next !== null) applySuperKnobAbsolute(next);
-      } else {
-        applySuperKnob(velocity / 127);
-      }
+      applySuperKnob(velocity);
       return;
     }
     if (note === midiNotes.fxPadX) {
