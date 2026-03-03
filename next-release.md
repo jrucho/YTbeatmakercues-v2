@@ -1,3 +1,15 @@
+# Release 2.3.3
+
+## Summary
+Release **2.3.3** fixes MIDI random-cue behavior so the mapped Random Cues MIDI control now always generates cues from detected transients.
+
+## Clean changelog
+- Changed the mapped **Random Cues** MIDI action to run **Suggest Cues from Transients** directly instead of falling back to pure random cue placement.
+- Kept cue assignment in MIDI workflows consistent with explicit mappings across channels from the prior fix.
+- Updated extension version to **2.3.3** in `manifest.json`.
+
+---
+
 # Release 2.3.2
 
 ## Summary

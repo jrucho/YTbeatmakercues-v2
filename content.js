@@ -8771,13 +8771,12 @@ function getMidiCueKeyForInput(note, channel) {
   const storageOrder = getMidiMappedCueStorageOrder();
   const isExtended = !!extendedMidiCueMode;
 
-  // In normal MIDI mode, all channels/banks share the same mapped cue slots (1..10).
-  // In extended mode, only MIDI channel 1 keeps these base slots; other channels map to unique cues.
-  if (!isExtended || channel === 0) {
-    for (let i = 0; i < storageOrder.length; i++) {
-      const storageKey = storageOrder[i];
-      if (Number(midiNotes.cues[storageKey]) === Number(note)) return String(i + 1);
-    }
+  // Always honor explicit MIDI cue mappings first.
+  // This keeps mapped cue notes (e.g. cue 6 = note 45) consistent across channels,
+  // even when extended MIDI cue mode is enabled.
+  for (let i = 0; i < storageOrder.length; i++) {
+    const storageKey = storageOrder[i];
+    if (Number(midiNotes.cues[storageKey]) === Number(note)) return String(i + 1);
   }
 
   const keys = sortCueKeysForDisplay(Object.keys(cuePoints));
@@ -12211,8 +12210,7 @@ function handleMIDIMessage(e) {
     if (note === midiNotes.sidechainTap) { triggerSidechainEnvelope('midi'); return; }
     if (note === midiNotes.pitchMode) { togglePitchMode(); return; }
     if (note === midiNotes.randomCues) {
-      if (isModPressed) suggestCuesFromTransients();
-      else placeRandomCuesMidi();
+      suggestCuesFromTransients();
       return;
     }
     if (note === midiNotes.pitchDown) startPitchDownRepeat();
@@ -15125,13 +15123,7 @@ if (typeof midiNotes !== "undefined" && midiNotes.randomCues !== undefined) {
     window.handleMidiNote = function(note, velocity, opts) {
       // Check for randomCues note
       if (note === midiNotes.randomCues) {
-        // If modifier is pressed (Shift note or isModPressed), suggest cues
-        if ((typeof isModPressed !== "undefined" && isModPressed) ||
-            (opts && opts.shift)) {
-          suggestCuesFromTransients();
-        } else {
-          placeRandomCues();
-        }
+        suggestCuesFromTransients();
         return;
       }
       return origMidiHandler(note, velocity, opts);
