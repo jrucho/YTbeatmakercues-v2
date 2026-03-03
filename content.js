@@ -9460,10 +9460,23 @@ function computeSuperKnobDelta(val) {
 function applySuperKnob(rawVal) {
   const midiValue = Math.max(0, Math.min(127, Number(rawVal)));
   if (!Number.isFinite(midiValue)) return;
-  const delta = computeSuperKnobDelta(midiValue);
+
+  // Force stable 0..127 "absolute" handling for all knobs (including endless encoders).
+  // We always use wrapped absolute delta and update baseline every tick.
+  const infoAbs = getAbsoluteSuperKnobDelta(midiValue);
+  const delta = infoAbs.delta;
+  lastSuperKnobValue = infoAbs.nextValue;
+  superKnobLastRawValue = midiValue;
+
+  // Shift works as a clutch: consume knob movement without moving cue,
+  // so users can re-center/reposition the hardware control before resuming.
+  if (isModPressed) {
+    lastSuperKnobDirection = 0;
+    return;
+  }
+
   if (!Number.isFinite(delta) || delta === 0) return;
-  const shiftMultiplier = isModPressed ? 3 : 1;
-  const scaledDelta = delta * superKnobStep * shiftMultiplier;
+  const scaledDelta = delta * superKnobStep;
   if (!Number.isFinite(scaledDelta)) return;
   adjustSelectedCue(scaledDelta);
   lastSuperKnobDirection = Math.sign(delta) || lastSuperKnobDirection;
