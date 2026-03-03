@@ -16,6 +16,14 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.3.2
+- Fixed Super Knob runtime errors caused by missing handler wiring in MIDI CC paths. 
+- Fixed non-finite cue-time writes that could later trigger media currentTime errors. 
+- Reworked Super Knob movement to a stable wrapped 0–127 delta path for predictable behavior across controllers. 
+- Restored Shift-as-clutch behavior for Super Knob (hold Shift to reposition knob without moving cue). 
+- Improved endless/infinite encoder behavior to avoid sudden start/end jumps while scrubbing cues. 
+- Hardened Super Knob numeric validation. 
+
 ## New in 2.3.1
 - Added cross-tab VJ frame sharing through BroadcastChannel with per-tab.
 - Added VJ UI toggles for:
