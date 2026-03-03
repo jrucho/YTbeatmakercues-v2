@@ -8796,44 +8796,55 @@ async function suggestCuesFromTransientsInternal() {
   const analyser = audioContext.createAnalyser();
   analyser.fftSize = 2048;
   const buf = new Uint8Array(analyser.fftSize);
-  videoGain.connect(analyser);
+  let analyserConnected = false;
 
-  const SLICE_MS = 8000;
-  const energies = [];
-  const t0 = performance.now();
-  const sampleRate = 60;
+  try {
+    videoGain.connect(analyser);
+    analyserConnected = true;
 
-  while (performance.now() - t0 < SLICE_MS) {
-    analyser.getByteTimeDomainData(buf);
-    let rms = 0;
-    for (let i = 0; i < buf.length; i++) {
-      const v = buf[i] - 128;
-      rms += v * v;
+    const SLICE_MS = 8000;
+    const energies = [];
+    const t0 = performance.now();
+    const sampleRate = 60;
+
+    while (performance.now() - t0 < SLICE_MS) {
+      analyser.getByteTimeDomainData(buf);
+      let rms = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const v = buf[i] - 128;
+        rms += v * v;
+      }
+      energies.push({ t: vid.currentTime, e: Math.sqrt(rms / buf.length) });
+      await new Promise(r => setTimeout(r, 1000 / sampleRate));
     }
-    energies.push({ t: vid.currentTime, e: Math.sqrt(rms / buf.length) });
-    await new Promise(r => setTimeout(r, 1000 / sampleRate));
-  }
 
-  videoGain.disconnect(analyser);
+    const peaks = [];
+    for (let i = 1; i < energies.length - 1; i++) {
+      if (energies[i].e > energies[i - 1].e && energies[i].e > energies[i + 1].e) {
+        peaks.push(energies[i]);
+      }
+    }
 
-  const peaks = [];
-  for (let i = 1; i < energies.length - 1; i++) {
-    if (energies[i].e > energies[i - 1].e && energies[i].e > energies[i + 1].e) {
-      peaks.push(energies[i]);
+    peaks.sort((a, b) => b.e - a.e);
+    const topPeaks = peaks.slice(0, 10).sort((a, b) => a.t - b.t);
+
+    const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+    topPeaks.forEach((p, i) => {
+      setCueAtKey(keys[i], p.t);
+    });
+
+    saveCuePointsToURL();
+    updateCueMarkers();
+    refreshCuesButton();
+  } finally {
+    if (analyserConnected) {
+      try {
+        videoGain.disconnect(analyser);
+      } catch (_) {
+        // Ignore disconnect race/no-connection errors from parallel graph mutations.
+      }
     }
   }
-
-  peaks.sort((a, b) => b.e - a.e);
-  const topPeaks = peaks.slice(0, 10).sort((a, b) => a.t - b.t);
-
-  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
-  topPeaks.forEach((p, i) => {
-    setCueAtKey(keys[i], p.t);
-  });
-
-  saveCuePointsToURL();
-  updateCueMarkers();
-  refreshCuesButton();
 }
 window.ytbmSuggestCuesFromTransients = suggestCuesFromTransientsInternal;
 if (typeof suggestCuesFromTransients === 'function') {
