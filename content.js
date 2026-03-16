@@ -968,6 +968,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjTextIndex = 0,
       tabPlaybackGateGain = null,
       singleTabPlaybackMode = localStorage.getItem('ytbm_singleTabPlaybackMode') === '1',
+      cueAllTabsMode = localStorage.getItem('ytbm_cueAllTabsMode') === '1',
       ytbmTabId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`,
       vjLastTextStep = 0,
       vjFeedbackCanvas = null,
@@ -4716,6 +4717,13 @@ function requestTabOrderRefresh() {
   } catch {}
 }
 
+function broadcastCueTriggerToTabs(cueKey) {
+  if (!cueAllTabsMode || !crossTabVJChannel || !cueKey) return;
+  try {
+    crossTabVJChannel.postMessage({ type: 'cue-trigger', tabId: ytbmTabId, cueKey: String(cueKey), ts: Date.now() });
+  } catch {}
+}
+
 function initCrossTabChannel() {
   if (crossTabVJChannel || typeof BroadcastChannel === 'undefined') return;
   try {
@@ -4736,6 +4744,10 @@ function initCrossTabChannel() {
           try { prev.bitmap.close(); } catch {}
         }
         remoteVJFrames.delete(msg.tabId);
+      }
+      if (msg.type === 'cue-trigger' && cueAllTabsMode) {
+        const cueKey = String(msg.cueKey || '');
+        if (cueKey) sequencerTriggerCue(cueKey, { source: 'remote' });
       }
     };
     registerTabOrderSync();
@@ -4767,6 +4779,10 @@ addTrackedListener(window, 'storage', (evt) => {
   if (evt.key === 'ytbm_singleTabPlaybackMode') {
     singleTabPlaybackMode = evt.newValue === '1';
     updateTabPlaybackGate();
+    if (typeof vjControlsSyncUI === 'function') vjControlsSyncUI();
+  }
+  if (evt.key === 'ytbm_cueAllTabsMode') {
+    cueAllTabsMode = evt.newValue === '1';
     if (typeof vjControlsSyncUI === 'function') vjControlsSyncUI();
   }
   if (evt.key === 'ytbm_vjEnabled') {
@@ -8189,6 +8205,7 @@ function showVJWindowToggle() {
     syncRatioBtn();
     crossTabChk.checked = !!vjControls.crossTabStreamsEnabled;
     tabAudioChk.checked = !!singleTabPlaybackMode;
+    cueAllTabsChk.checked = !!cueAllTabsMode;
     persistVJControls();
   });
   topRow.appendChild(ratioBtn);
@@ -8202,6 +8219,7 @@ function showVJWindowToggle() {
     syncRatioBtn();
     crossTabChk.checked = !!vjControls.crossTabStreamsEnabled;
     tabAudioChk.checked = !!singleTabPlaybackMode;
+    cueAllTabsChk.checked = !!cueAllTabsMode;
     persistVJControls();
   });
   topRow.appendChild(ratioResetBtn);
@@ -8316,6 +8334,23 @@ function showVJWindowToggle() {
   tabAudioRow.appendChild(tabAudioChk);
   tabAudioRow.appendChild(tabAudioLbl);
   vjContentWrap.appendChild(tabAudioRow);
+
+  const cueAllTabsRow = document.createElement('div');
+  cueAllTabsRow.style.display = 'flex';
+  cueAllTabsRow.style.alignItems = 'center';
+  cueAllTabsRow.style.gap = '8px';
+  const cueAllTabsChk = document.createElement('input');
+  cueAllTabsChk.type = 'checkbox';
+  cueAllTabsChk.checked = !!cueAllTabsMode;
+  cueAllTabsChk.addEventListener('change', () => {
+    cueAllTabsMode = !!cueAllTabsChk.checked;
+    localStorage.setItem('ytbm_cueAllTabsMode', cueAllTabsMode ? '1' : '0');
+  });
+  const cueAllTabsLbl = document.createElement('span');
+  cueAllTabsLbl.textContent = 'Cues on all tabs (drums stay local tab)';
+  cueAllTabsRow.appendChild(cueAllTabsChk);
+  cueAllTabsRow.appendChild(cueAllTabsLbl);
+  vjContentWrap.appendChild(cueAllTabsRow);
 
   const streamBlendModes = ['source-over','screen','multiply','overlay','lighten','difference'];
   const streamConfigRow = document.createElement('div');
@@ -9624,7 +9659,8 @@ document.addEventListener("keydown", e => {
   console.log("Key:", e.key, "Code:", e.code, "KeyCode:", e.keyCode);
 });
 
-function sequencerTriggerCue(cueKey) {
+function sequencerTriggerCue(cueKey, opts = {}) {
+  const source = opts?.source || 'local';
   const video = getVideoElement();
   if (!video || getCueTime(cueKey) === undefined) return;
   const idx = cueKey === '0' ? 9 : Math.max(0, Number(cueKey) - 1);
@@ -9651,6 +9687,7 @@ function sequencerTriggerCue(cueKey) {
   }, fadeTime * 1000);
 
   recordMidiEvent('cue', cueKey);
+  if (source === 'local') broadcastCueTriggerToTabs(cueKey);
   
   console.log(`Sequencer triggered cue ${cueKey} at time ${getCueTime(cueKey)}`);
 }

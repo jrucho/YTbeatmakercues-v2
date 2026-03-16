@@ -20,6 +20,7 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
 - Fixed MIDI Mapping **Detect** for note and cue mappings so clicking Detect now captures the next note-on correctly.
 - Added **Detect** buttons for VJ MIDI note mappings so VJ FX can be mapped directly from controller input.
 - Improved cross-tab VJ frame broadcast cadence to avoid the previous forced low-rate throttle, keeping multi-stream tabs closer to source framerate.
+- Added a VJ-panel switch to broadcast cue triggers across tabs while keeping drum hits local to the currently active tab.
 
 ## New in 2.3.3
 - Fixed MIDI cue-note routing so mapped notes (including note 45) reliably trigger their assigned cue slots. 
