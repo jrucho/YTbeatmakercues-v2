@@ -789,6 +789,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       progressBarRect = null,
       // MIDI
       currentlyDetectingMidi = null,
+      currentlyDetectingVJMidi = null,
       isModPressed = false,
       isShiftKeyDown = false,
       isAltKeyDown = false,
@@ -975,6 +976,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       remoteVJFrames = new Map(),
       vjBroadcastBusy = false,
       vjLastBroadcastAt = 0,
+      vjBroadcastMinIntervalMs = 0,
       vjTabOrder = [],
       vjControlsSyncUI = null,
       // We'll keep them to identify which button is which
@@ -7788,7 +7790,7 @@ function getVJStreamSources(localVideo) {
 async function broadcastLocalVJFrame(video) {
   if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !video) return;
   const now = performance.now();
-  if (vjBroadcastBusy || now - vjLastBroadcastAt < 120) return;
+  if (vjBroadcastBusy || now - vjLastBroadcastAt < vjBroadcastMinIntervalMs) return;
   if (typeof createImageBitmap !== 'function') return;
   vjBroadcastBusy = true;
   vjLastBroadcastAt = now;
@@ -8397,7 +8399,7 @@ function showVJWindowToggle() {
   defs.forEach((d) => {
     const row = document.createElement('div');
     row.style.display = 'grid';
-    row.style.gridTemplateColumns = '78px minmax(120px,1fr) 44px 64px 48px 78px';
+    row.style.gridTemplateColumns = '78px minmax(120px,1fr) 44px 64px 48px 60px 78px';
     row.style.gap = '6px';
     row.style.alignItems = 'center';
     row.style.position = 'relative';
@@ -8444,10 +8446,20 @@ function showVJWindowToggle() {
     midiInp.style.boxSizing = 'border-box';
     midiInp.value = String(vjControls.midiNotes[d.key]);
     midiInp.title = 'MIDI note mapping';
+    midiInp.dataset.vjmidiname = d.key;
     midiInp.addEventListener('change', () => {
       vjControls.midiNotes[d.key] = Math.max(0, Math.min(127, Number(midiInp.value) || 0));
       midiInp.value = String(vjControls.midiNotes[d.key]);
       persistVJControls();
+    });
+
+    const midiDetectBtn = document.createElement('button');
+    midiDetectBtn.className = 'detect-midi-btn';
+    midiDetectBtn.textContent = 'Detect';
+    midiDetectBtn.title = `Detect MIDI note for ${d.label}`;
+    midiDetectBtn.addEventListener('click', () => {
+      currentlyDetectingVJMidi = d.key;
+      alert(`Now press a MIDI key for VJ "${d.label}"...`);
     });
 
     const blendSel = document.createElement('select');
@@ -8458,9 +8470,9 @@ function showVJWindowToggle() {
     blendSel.value = vjControls.effectBlend[d.key] || 'source-over';
     blendSel.addEventListener('change', () => { vjControls.effectBlend[d.key] = blendSel.value; persistVJControls(); });
 
-    row.appendChild(l); row.appendChild(inp); row.appendChild(val); row.appendChild(reactSel); row.appendChild(midiInp); row.appendChild(blendSel);
+    row.appendChild(l); row.appendChild(inp); row.appendChild(val); row.appendChild(reactSel); row.appendChild(midiInp); row.appendChild(midiDetectBtn); row.appendChild(blendSel);
     vjContentWrap.appendChild(row);
-    effectBindings.push({ def: d, inp, val, reactSel, midiInp, blendSel });
+    effectBindings.push({ def: d, inp, val, reactSel, midiInp, midiDetectBtn, blendSel });
   });
 
   const mirrorRow = document.createElement('div');
@@ -12164,6 +12176,26 @@ function handleMIDIMessage(e) {
     return;
   }
 
+  if (currentlyDetectingMidi && command === 144 && velocity > 0) {
+    if (Object.prototype.hasOwnProperty.call(midiNotes.cues, currentlyDetectingMidi)) {
+      midiNotes.cues[currentlyDetectingMidi] = note;
+    } else {
+      midiNotes[currentlyDetectingMidi] = note;
+    }
+    updateMidiMapInput(currentlyDetectingMidi, note);
+    currentlyDetectingMidi = null;
+    return;
+  }
+
+  if (currentlyDetectingVJMidi && command === 144 && velocity > 0) {
+    ensureVJDefaults();
+    vjControls.midiNotes[currentlyDetectingVJMidi] = note;
+    updateVJMidiMapInput(currentlyDetectingVJMidi, note);
+    currentlyDetectingVJMidi = null;
+    persistVJControls();
+    return;
+  }
+
   if (note === midiNotes.shift) {
     if (command === 144 && velocity > 0) {
       if (!isModPressed) {
@@ -12974,6 +13006,12 @@ function updateMidiMapInput(name, val) {
   } else {
     inp.value = val;
   }
+}
+
+function updateVJMidiMapInput(name, val) {
+  if (!vjWindowContainer) return;
+  const midiInput = vjWindowContainer.querySelector(`input[data-vjmidiname="${name}"]`);
+  if (midiInput) midiInput.value = String(val);
 }
 
 /* ======================================================
