@@ -16,6 +16,12 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.3.4
+- Fixed MIDI Mapping **Detect** for note and cue mappings so clicking Detect now captures the next note-on correctly.
+- Added **Detect** buttons for VJ MIDI note mappings so VJ FX can be mapped directly from controller input.
+- Improved cross-tab VJ frame broadcast cadence to avoid the previous forced low-rate throttle, keeping multi-stream tabs closer to source framerate.
+- Added a VJ-panel switch to broadcast cue triggers across tabs while keeping drum hits local to the currently active tab.
+
 ## New in 2.3.3
 - Fixed MIDI cue-note routing so mapped notes (including note 45) reliably trigger their assigned cue slots. 
 - Fixed MIDI cue lookup to return the actual mapped cue storage key rather than a derived index, preventing incorrect cue targeting. 

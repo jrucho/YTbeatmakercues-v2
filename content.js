@@ -789,6 +789,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       progressBarRect = null,
       // MIDI
       currentlyDetectingMidi = null,
+      currentlyDetectingVJMidi = null,
       isModPressed = false,
       isShiftKeyDown = false,
       isAltKeyDown = false,
@@ -967,6 +968,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjTextIndex = 0,
       tabPlaybackGateGain = null,
       singleTabPlaybackMode = localStorage.getItem('ytbm_singleTabPlaybackMode') === '1',
+      cueAllTabsMode = localStorage.getItem('ytbm_cueAllTabsMode') === '1',
       ytbmTabId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`,
       vjLastTextStep = 0,
       vjFeedbackCanvas = null,
@@ -975,6 +977,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       remoteVJFrames = new Map(),
       vjBroadcastBusy = false,
       vjLastBroadcastAt = 0,
+      vjBroadcastMinIntervalMs = 0,
       vjTabOrder = [],
       vjControlsSyncUI = null,
       // We'll keep them to identify which button is which
@@ -4714,6 +4717,13 @@ function requestTabOrderRefresh() {
   } catch {}
 }
 
+function broadcastCueTriggerToTabs(cueKey) {
+  if (!cueAllTabsMode || !crossTabVJChannel || !cueKey) return;
+  try {
+    crossTabVJChannel.postMessage({ type: 'cue-trigger', tabId: ytbmTabId, cueKey: String(cueKey), ts: Date.now() });
+  } catch {}
+}
+
 function initCrossTabChannel() {
   if (crossTabVJChannel || typeof BroadcastChannel === 'undefined') return;
   try {
@@ -4734,6 +4744,10 @@ function initCrossTabChannel() {
           try { prev.bitmap.close(); } catch {}
         }
         remoteVJFrames.delete(msg.tabId);
+      }
+      if (msg.type === 'cue-trigger' && cueAllTabsMode) {
+        const cueKey = String(msg.cueKey || '');
+        if (cueKey) sequencerTriggerCue(cueKey, { source: 'remote' });
       }
     };
     registerTabOrderSync();
@@ -4765,6 +4779,10 @@ addTrackedListener(window, 'storage', (evt) => {
   if (evt.key === 'ytbm_singleTabPlaybackMode') {
     singleTabPlaybackMode = evt.newValue === '1';
     updateTabPlaybackGate();
+    if (typeof vjControlsSyncUI === 'function') vjControlsSyncUI();
+  }
+  if (evt.key === 'ytbm_cueAllTabsMode') {
+    cueAllTabsMode = evt.newValue === '1';
     if (typeof vjControlsSyncUI === 'function') vjControlsSyncUI();
   }
   if (evt.key === 'ytbm_vjEnabled') {
@@ -7788,7 +7806,7 @@ function getVJStreamSources(localVideo) {
 async function broadcastLocalVJFrame(video) {
   if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !video) return;
   const now = performance.now();
-  if (vjBroadcastBusy || now - vjLastBroadcastAt < 120) return;
+  if (vjBroadcastBusy || now - vjLastBroadcastAt < vjBroadcastMinIntervalMs) return;
   if (typeof createImageBitmap !== 'function') return;
   vjBroadcastBusy = true;
   vjLastBroadcastAt = now;
@@ -8187,6 +8205,7 @@ function showVJWindowToggle() {
     syncRatioBtn();
     crossTabChk.checked = !!vjControls.crossTabStreamsEnabled;
     tabAudioChk.checked = !!singleTabPlaybackMode;
+    cueAllTabsChk.checked = !!cueAllTabsMode;
     persistVJControls();
   });
   topRow.appendChild(ratioBtn);
@@ -8200,6 +8219,7 @@ function showVJWindowToggle() {
     syncRatioBtn();
     crossTabChk.checked = !!vjControls.crossTabStreamsEnabled;
     tabAudioChk.checked = !!singleTabPlaybackMode;
+    cueAllTabsChk.checked = !!cueAllTabsMode;
     persistVJControls();
   });
   topRow.appendChild(ratioResetBtn);
@@ -8315,6 +8335,23 @@ function showVJWindowToggle() {
   tabAudioRow.appendChild(tabAudioLbl);
   vjContentWrap.appendChild(tabAudioRow);
 
+  const cueAllTabsRow = document.createElement('div');
+  cueAllTabsRow.style.display = 'flex';
+  cueAllTabsRow.style.alignItems = 'center';
+  cueAllTabsRow.style.gap = '8px';
+  const cueAllTabsChk = document.createElement('input');
+  cueAllTabsChk.type = 'checkbox';
+  cueAllTabsChk.checked = !!cueAllTabsMode;
+  cueAllTabsChk.addEventListener('change', () => {
+    cueAllTabsMode = !!cueAllTabsChk.checked;
+    localStorage.setItem('ytbm_cueAllTabsMode', cueAllTabsMode ? '1' : '0');
+  });
+  const cueAllTabsLbl = document.createElement('span');
+  cueAllTabsLbl.textContent = 'Cues on all tabs (drums stay local tab)';
+  cueAllTabsRow.appendChild(cueAllTabsChk);
+  cueAllTabsRow.appendChild(cueAllTabsLbl);
+  vjContentWrap.appendChild(cueAllTabsRow);
+
   const streamBlendModes = ['source-over','screen','multiply','overlay','lighten','difference'];
   const streamConfigRow = document.createElement('div');
   streamConfigRow.style.display = 'grid';
@@ -8397,7 +8434,7 @@ function showVJWindowToggle() {
   defs.forEach((d) => {
     const row = document.createElement('div');
     row.style.display = 'grid';
-    row.style.gridTemplateColumns = '78px minmax(120px,1fr) 44px 64px 48px 78px';
+    row.style.gridTemplateColumns = '78px minmax(120px,1fr) 44px 64px 48px 60px 78px';
     row.style.gap = '6px';
     row.style.alignItems = 'center';
     row.style.position = 'relative';
@@ -8444,10 +8481,20 @@ function showVJWindowToggle() {
     midiInp.style.boxSizing = 'border-box';
     midiInp.value = String(vjControls.midiNotes[d.key]);
     midiInp.title = 'MIDI note mapping';
+    midiInp.dataset.vjmidiname = d.key;
     midiInp.addEventListener('change', () => {
       vjControls.midiNotes[d.key] = Math.max(0, Math.min(127, Number(midiInp.value) || 0));
       midiInp.value = String(vjControls.midiNotes[d.key]);
       persistVJControls();
+    });
+
+    const midiDetectBtn = document.createElement('button');
+    midiDetectBtn.className = 'detect-midi-btn';
+    midiDetectBtn.textContent = 'Detect';
+    midiDetectBtn.title = `Detect MIDI note for ${d.label}`;
+    midiDetectBtn.addEventListener('click', () => {
+      currentlyDetectingVJMidi = d.key;
+      alert(`Now press a MIDI key for VJ "${d.label}"...`);
     });
 
     const blendSel = document.createElement('select');
@@ -8458,9 +8505,9 @@ function showVJWindowToggle() {
     blendSel.value = vjControls.effectBlend[d.key] || 'source-over';
     blendSel.addEventListener('change', () => { vjControls.effectBlend[d.key] = blendSel.value; persistVJControls(); });
 
-    row.appendChild(l); row.appendChild(inp); row.appendChild(val); row.appendChild(reactSel); row.appendChild(midiInp); row.appendChild(blendSel);
+    row.appendChild(l); row.appendChild(inp); row.appendChild(val); row.appendChild(reactSel); row.appendChild(midiInp); row.appendChild(midiDetectBtn); row.appendChild(blendSel);
     vjContentWrap.appendChild(row);
-    effectBindings.push({ def: d, inp, val, reactSel, midiInp, blendSel });
+    effectBindings.push({ def: d, inp, val, reactSel, midiInp, midiDetectBtn, blendSel });
   });
 
   const mirrorRow = document.createElement('div');
@@ -9612,7 +9659,8 @@ document.addEventListener("keydown", e => {
   console.log("Key:", e.key, "Code:", e.code, "KeyCode:", e.keyCode);
 });
 
-function sequencerTriggerCue(cueKey) {
+function sequencerTriggerCue(cueKey, opts = {}) {
+  const source = opts?.source || 'local';
   const video = getVideoElement();
   if (!video || getCueTime(cueKey) === undefined) return;
   const idx = cueKey === '0' ? 9 : Math.max(0, Number(cueKey) - 1);
@@ -9639,6 +9687,7 @@ function sequencerTriggerCue(cueKey) {
   }, fadeTime * 1000);
 
   recordMidiEvent('cue', cueKey);
+  if (source === 'local') broadcastCueTriggerToTabs(cueKey);
   
   console.log(`Sequencer triggered cue ${cueKey} at time ${getCueTime(cueKey)}`);
 }
@@ -12164,6 +12213,26 @@ function handleMIDIMessage(e) {
     return;
   }
 
+  if (currentlyDetectingMidi && command === 144 && velocity > 0) {
+    if (Object.prototype.hasOwnProperty.call(midiNotes.cues, currentlyDetectingMidi)) {
+      midiNotes.cues[currentlyDetectingMidi] = note;
+    } else {
+      midiNotes[currentlyDetectingMidi] = note;
+    }
+    updateMidiMapInput(currentlyDetectingMidi, note);
+    currentlyDetectingMidi = null;
+    return;
+  }
+
+  if (currentlyDetectingVJMidi && command === 144 && velocity > 0) {
+    ensureVJDefaults();
+    vjControls.midiNotes[currentlyDetectingVJMidi] = note;
+    updateVJMidiMapInput(currentlyDetectingVJMidi, note);
+    currentlyDetectingVJMidi = null;
+    persistVJControls();
+    return;
+  }
+
   if (note === midiNotes.shift) {
     if (command === 144 && velocity > 0) {
       if (!isModPressed) {
@@ -12974,6 +13043,12 @@ function updateMidiMapInput(name, val) {
   } else {
     inp.value = val;
   }
+}
+
+function updateVJMidiMapInput(name, val) {
+  if (!vjWindowContainer) return;
+  const midiInput = vjWindowContainer.querySelector(`input[data-vjmidiname="${name}"]`);
+  if (midiInput) midiInput.value = String(val);
 }
 
 /* ======================================================
