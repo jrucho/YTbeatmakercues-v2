@@ -10048,13 +10048,17 @@ function onKeyDown(e) {
 
   let vid = getVideoElement();
   if ((e.ctrlKey || e.metaKey) && k >= "0" && k <= "9") {
-    // Prevent YouTube's default behavior (jumping in the video)
+    // Prevent native site behavior (jumping in the timeline)
     e.preventDefault();
     e.stopPropagation();
 
+    if (!vid) return;
+    const currentTime = Number(vid.currentTime);
+    if (!Number.isFinite(currentTime)) return;
+
     pushUndoState();
     cueInputMode = 'keyboard';
-    setCueAtKey(e.key, vid.currentTime);
+    setCueAtKey(e.key, currentTime);
     saveCuePointsToURL();
     updateCueMarkers();
     refreshCuesButton();
