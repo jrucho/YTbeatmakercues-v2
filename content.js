@@ -4798,6 +4798,24 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
   });
 }
 
+
+function ensurePrimaryMediaSourceConnected(mediaEl) {
+  if (!audioContext || !videoGain || !mediaEl) return;
+  if (mediaEl._audioConnected) return;
+  try {
+    if (!mediaEl._mediaSource) {
+      if (isSoundCloudHost() && !mediaEl.crossOrigin) {
+        mediaEl.crossOrigin = 'anonymous';
+      }
+      mediaEl._mediaSource = audioContext.createMediaElementSource(mediaEl);
+    }
+    mediaEl._mediaSource.connect(videoGain);
+    mediaEl._audioConnected = true;
+  } catch (err) {
+    console.warn('YTBM media connect failed', err?.message || err);
+  }
+}
+
 async function ensureAudioContext() {
   let created = false;
   if (!audioContext) {
@@ -4812,13 +4830,7 @@ async function ensureAudioContext() {
     await loadDefaultSamples();
     await loadUserSamplesFromStorage();
     let vid = getVideoElement();
-    if (vid && !vid._audioConnected) {
-      if (!vid._mediaSource) {
-        vid._mediaSource = audioContext.createMediaElementSource(vid);
-        vid._mediaSource.connect(videoGain);
-      }
-      vid._audioConnected = true;
-    }
+    ensurePrimaryMediaSourceConnected(vid);
     created = true;
   }
   if (!tabPlaybackGateGain) {
@@ -4937,13 +4949,7 @@ async function jumpToCue(targetTime) {
 let videoCheckInterval = setInterval(() => {
   if (audioContext) {
     let vid = getVideoElement();
-    if (vid && !vid._audioConnected) {
-      if (!vid._mediaSource) {
-        vid._mediaSource = audioContext.createMediaElementSource(vid);
-        vid._mediaSource.connect(videoGain);
-      }
-      vid._audioConnected = true;
-    }
+    ensurePrimaryMediaSourceConnected(vid);
   }
 }, 2000);
 cleanupFunctions.push(() => clearInterval(videoCheckInterval));
@@ -6457,7 +6463,29 @@ function isSoundCloudHost() {
   return host.includes('soundcloud.com');
 }
 
+function getActiveSoundCloudMediaElement() {
+  const mediaNodes = Array.from(document.querySelectorAll('audio, video'));
+  if (!mediaNodes.length) return null;
+  const score = (el) => {
+    let s = 0;
+    if (!el.paused) s += 100;
+    if ((Number(el.currentTime) || 0) > 0) s += 40;
+    if (el.readyState >= 2) s += 20;
+    if (Number.isFinite(el.duration) && el.duration > 0) s += 15;
+    if (el.currentSrc || el.src) s += 10;
+    if (el.closest('.playControls, .playbackSoundBadge, .fullHero, .sound, .playbackTimeline')) s += 8;
+    return s;
+  };
+  mediaNodes.sort((a, b) => score(b) - score(a));
+  return mediaNodes[0] || null;
+}
+
 function getVideoElement() {
+  // SoundCloud can host multiple media nodes (normal + mini player), so pick active one.
+  if (isSoundCloudHost()) {
+    const active = getActiveSoundCloudMediaElement();
+    if (active) return active;
+  }
   // First look for a video; if none, try for an audio.
   let media = document.querySelector("video") || document.querySelector("audio");
   if (!media && enableReelsSupport) {
@@ -10051,6 +10079,7 @@ function onKeyDown(e) {
     // Prevent native site behavior (jumping in the timeline)
     e.preventDefault();
     e.stopPropagation();
+    e.stopImmediatePropagation();
 
     if (!vid) return;
     const currentTime = Number(vid.currentTime);
@@ -10111,6 +10140,43 @@ function onKeyUp(e) {
 }
 addTrackedListener(document, "keydown", onKeyDown, true);
 addTrackedListener(document, "keyup", onKeyUp, true);
+
+if (isSoundCloudHost()) {
+  addTrackedListener(window, "keydown", (e) => {
+    if (isTypingInTextField(e)) return;
+    const k = (e.key || '').toLowerCase();
+    const isDigit = /^[0-9]$/.test(e.key || '');
+    const extSet = new Set([
+      extensionKeys.looperA,
+      extensionKeys.looperB,
+      extensionKeys.looperC,
+      extensionKeys.looperD,
+      extensionKeys.videoLooper,
+      extensionKeys.randomCues,
+      extensionKeys.reverb,
+      extensionKeys.cassette,
+      extensionKeys.compressor,
+      extensionKeys.eq,
+      extensionKeys.instrumentToggle,
+      extensionKeys.fxPad,
+      extensionKeys.sidechainTap
+    ].map(v => String(v || '').toLowerCase()));
+    if ((isDigit || extSet.has(k)) && !e.__ytbmSoundcloudHandled) {
+      e.__ytbmSoundcloudHandled = true;
+      onKeyDown(e);
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+    }
+  }, true);
+
+  addTrackedListener(document, 'play', (ev) => {
+    const t = ev.target;
+    if (!(t instanceof HTMLMediaElement)) return;
+    if (!audioContext) return;
+    ensurePrimaryMediaSourceConnected(t);
+  }, true);
+}
 
 function handleShiftTap(source = 'keyboard') {
   const vid = getVideoElement();
