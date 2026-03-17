@@ -4842,7 +4842,7 @@ async function ensureAudioContext() {
   if (audioContext.state === "suspended") {
     await audioContext.resume().catch(err => console.error("AudioContext resume failed:", err.message));
   }
-  if (!deckA) { initTwoDeck(); }
+  if (!deckA && !isSoundCloudHost()) { initTwoDeck(); }
   if (!currentOutputNode) currentOutputNode = audioContext.destination;
   await applySavedOutputDevice();
   if (created) {
@@ -4903,6 +4903,13 @@ function initTwoDeck() {
 }
 
 async function jumpToCue(targetTime) {
+  if (isSoundCloudHost()) {
+    const vid = getVideoElement();
+    if (vid && Number.isFinite(Number(targetTime))) {
+      try { vid.currentTime = Number(targetTime); } catch {}
+      return;
+    }
+  }
   const activeVid  = (activeDeck === "A") ? deckA : deckB;
   const silentVid  = (activeDeck === "A") ? deckB : deckA;
   const activeGain = (activeDeck === "A") ? gainA : gainB;
@@ -9307,19 +9314,27 @@ function onDocumentMouseUp(e) {
 }
 
 function handleProgressBarDoubleClickForNewCue() {
-  const bar = document.querySelector(".ytp-progress-bar");
-  if (!bar) return;
-  addTrackedListener(bar, "dblclick", e => {
-    if (e.metaKey) {
+  const bindBar = () => {
+    const bar = getProgressBarElement();
+    if (!bar || bar.dataset.ytbmCueDblclickBound === '1') return;
+    bar.dataset.ytbmCueDblclickBound = '1';
+    addTrackedListener(bar, "dblclick", e => {
+      const allowWithoutMeta = isSoundCloudHost();
+      if (!allowWithoutMeta && !e.metaKey) return;
       e.stopPropagation();
       e.preventDefault();
       let vid = getVideoElement();
-      if (!vid) return;
-      let rx = e.clientX - bar.getBoundingClientRect().left;
-      let pc = Math.max(0, Math.min(1, rx / bar.getBoundingClientRect().width));
+      if (!vid || !Number.isFinite(vid.duration) || vid.duration <= 0) return;
+      const rect = bar.getBoundingClientRect();
+      let rx = e.clientX - rect.left;
+      let pc = Math.max(0, Math.min(1, rx / rect.width));
       addCueAtTime(pc * vid.duration);
-    }
-  });
+    });
+  };
+  bindBar();
+  if (isSoundCloudHost()) {
+    setTimeout(bindBar, 1200);
+  }
 }
 
 function addCueAtTime(t) {
