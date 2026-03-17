@@ -4498,7 +4498,7 @@ function onMinimalPointerUp(e) {
 
   function buildMinimalUIBar() {
   minimalUIContainer = document.createElement("div");
-  minimalUIContainer.className = "ytbm-minimal-bar ytbm-glass";
+  minimalUIContainer.className = "ytbm-minimal-bar ytbm-glass" + (isSoundCloudHost() ? " ytbm-minimal-soundcloud" : "");
   minimalUIContainer.style.display = "none";
   mountMinimalUIContainer();
   setupMinimalUIDrag();
@@ -6452,6 +6452,11 @@ function seekVideoBySeconds(deltaSeconds) {
 // Define global variable for Reels support:
 var enableReelsSupport = true;
 
+function isSoundCloudHost() {
+  const host = window.location.hostname || '';
+  return host.includes('soundcloud.com');
+}
+
 function getVideoElement() {
   // First look for a video; if none, try for an audio.
   let media = document.querySelector("video") || document.querySelector("audio");
@@ -6464,9 +6469,25 @@ function getVideoElement() {
   return media;
 }
 
+function getSoundCloudProgressBarElement() {
+  const timeline = document.querySelector('.playbackTimeline__progressWrapper, .playControls__timeline, .playbackTimeline');
+  if (timeline) {
+    timeline.classList.add('ytbm-sc-timeline');
+    if (getComputedStyle(timeline).position === 'static') {
+      timeline.style.position = 'relative';
+    }
+    return timeline;
+  }
+  return null;
+}
+
 // Updated progress bar lookup function
 function getProgressBarElement() {
   let progressBar = document.querySelector('.ytp-progress-bar');
+
+  if (!progressBar && isSoundCloudHost()) {
+    progressBar = getSoundCloudProgressBarElement();
+  }
   
   if (!progressBar && enableReelsSupport) {
     progressBar = document.querySelector('ytd-reel-video-renderer .ytp-progress-bar') ||
@@ -6477,7 +6498,7 @@ function getProgressBarElement() {
     const media = getVideoElement();
     if (media) {
       progressBar = document.createElement("div");
-      progressBar.className = "ytp-progress-bar";
+      progressBar.className = "ytp-progress-bar ytbm-fallback-progress";
       progressBar.style.position = "relative";
       
       // For audio elements, set width based on duration; for video, use media.clientWidth.
@@ -9072,7 +9093,10 @@ function loadCuePointsFromURLParam() {
 
 function getCurrentVideoID() {
   try {
-    let url = new URL(window.location.href);
+    const url = new URL(window.location.href);
+    if (isSoundCloudHost()) {
+      return url.pathname || "";
+    }
     return url.searchParams.get("v") || "";
   } catch (e) {
     return "";
@@ -9082,8 +9106,10 @@ function getCurrentVideoID() {
 function saveCuePointsToURL() {
   let u = new URL(window.location.href);
   let s = Object.keys(cuePoints).map((k) => { const t = getCueTime(k); return t === undefined ? null : (k + ":" + t.toFixed(3)); }).filter(Boolean).join(",");
-  u.searchParams.set("cue_points", s);
-  window.history.replaceState(null, "", u);
+  if (!isSoundCloudHost()) {
+    u.searchParams.set("cue_points", s);
+    window.history.replaceState(null, "", u);
+  }
 
   let vidID = getCurrentVideoID();
   if (vidID) {
@@ -9161,22 +9187,22 @@ function updateCueMarkers() {
 
     // Style your marker as you wish
     marker.style.width = "1px";
-    marker.style.height = "15px";
-    marker.style.top = "-10px";
-    marker.style.backgroundColor = "black";
+    marker.style.height = isSoundCloudHost() ? "100%" : "15px";
+    marker.style.top = isSoundCloudHost() ? "0" : "-10px";
+    marker.style.backgroundColor = isSoundCloudHost() ? "#ff5500" : "black";
     marker.style.cursor = "pointer";
     marker.style.zIndex = "2147483647";
 
     // Optionally add a red circle on top:
     const topcap = document.createElement("div");
     topcap.style.position = "absolute";
-    topcap.style.top = "-5px";
+    topcap.style.top = isSoundCloudHost() ? "-3px" : "-5px";
     topcap.style.left = "-3px";
     topcap.style.width = "7px";
     topcap.style.height = "7px";
     topcap.style.borderRadius = "50%";
-    topcap.style.backgroundColor = "red";
-    marker.appendChild(topcap);
+    topcap.style.backgroundColor = isSoundCloudHost() ? "#ff5500" : "red";
+    if (!isSoundCloudHost()) marker.appendChild(topcap);
 
     marker.addEventListener("dblclick", e => {
       e.preventDefault();
@@ -10022,13 +10048,17 @@ function onKeyDown(e) {
 
   let vid = getVideoElement();
   if ((e.ctrlKey || e.metaKey) && k >= "0" && k <= "9") {
-    // Prevent YouTube's default behavior (jumping in the video)
+    // Prevent native site behavior (jumping in the timeline)
     e.preventDefault();
     e.stopPropagation();
 
+    if (!vid) return;
+    const currentTime = Number(vid.currentTime);
+    if (!Number.isFinite(currentTime)) return;
+
     pushUndoState();
     cueInputMode = 'keyboard';
-    setCueAtKey(e.key, vid.currentTime);
+    setCueAtKey(e.key, currentTime);
     saveCuePointsToURL();
     updateCueMarkers();
     refreshCuesButton();
@@ -14554,6 +14584,23 @@ function injectCustomCSS() {
     }
     .ytbm-minimal-bar.ytbm-minimal-dragging {
       cursor: move;
+    }
+
+    .ytbm-minimal-bar.ytbm-minimal-soundcloud {
+      background: rgba(16,16,16,0.88);
+      border-color: rgba(255,85,0,0.4);
+      box-shadow: 0 14px 40px rgba(0,0,0,0.5);
+    }
+    .ytbm-sc-timeline #ytbm-cue-overlay {
+      height: 100% !important;
+      top: 0 !important;
+    }
+    .ytbm-sc-timeline .cue-marker {
+      width: 2px !important;
+      top: 0 !important;
+      height: 100% !important;
+      background: #ff5500 !important;
+      box-shadow: 0 0 0 1px rgba(255,85,0,0.25);
     }
     .ytbm-minimal-bar .looper-btn {
       padding: 0 10px;
