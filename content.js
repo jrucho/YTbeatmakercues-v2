@@ -7862,15 +7862,16 @@ function renderVJDebugReadout(localVideo = null) {
     }
     const stat = vjFrameStats.get(entry.tabId);
     const ageMs = stat?.lastWall ? Math.max(0, now - stat.lastWall) : Math.max(0, now - (entry.ts || now));
-    const fps = stat?.fps ? stat.fps.toFixed(1) : '0.0';
+    const fpsValue = stat?.fps ? Math.max(0, Math.min(99, Math.round(stat.fps))) : 0;
+    const fps = String(fpsValue);
     const sourceLabel = entry.kind === 'local'
       ? 'Local'
       : `Remote ${Math.max(1, (vjTabOrder || []).indexOf(entry.tabId) + 1)}`;
     const freshness = ageMs < 140 ? '#7dff9f' : ageMs < 350 ? '#ffd166' : '#ff7b7b';
     rows.push(
-      `<div style="display:flex;justify-content:space-between;gap:6px;white-space:nowrap;">` +
+      `<div style="display:flex;justify-content:space-between;gap:5px;white-space:nowrap;">` +
       `<span>S${i + 1} ${sourceLabel}</span>` +
-      `<span style="color:${freshness}">${fps}fps ${ageMs}ms</span>` +
+      `<span style="color:${freshness}">${fps}fps</span>` +
       `</div>`
     );
   }
@@ -8489,19 +8490,17 @@ function showVJWindowToggle() {
   vjPreviewCtx = vjPreviewCanvas.getContext('2d', { alpha: false });
 
   vjDebugReadout = document.createElement('div');
-  vjDebugReadout.style.position = 'absolute';
-  vjDebugReadout.style.top = '8px';
-  vjDebugReadout.style.right = '8px';
-  vjDebugReadout.style.padding = '4px 6px';
-  vjDebugReadout.style.border = '1px solid rgba(255,255,255,0.1)';
+  vjDebugReadout.style.marginTop = '4px';
+  vjDebugReadout.style.padding = '2px 4px';
+  vjDebugReadout.style.border = '1px solid rgba(255,255,255,0.08)';
   vjDebugReadout.style.borderRadius = '4px';
-  vjDebugReadout.style.background = 'rgba(0,0,0,0.5)';
-  vjDebugReadout.style.font = '10px/1.3 monospace';
+  vjDebugReadout.style.background = 'rgba(0,0,0,0.22)';
+  vjDebugReadout.style.font = '9px/1.2 monospace';
   vjDebugReadout.style.color = '#f3f3f3';
   vjDebugReadout.style.whiteSpace = 'nowrap';
-  vjDebugReadout.style.pointerEvents = 'none';
-  vjDebugReadout.style.zIndex = '22';
-  vjDebugReadout.textContent = 'Stream debug: waiting for frames…';
+  vjDebugReadout.style.overflowX = 'auto';
+  vjDebugReadout.style.opacity = '0.88';
+  vjDebugReadout.textContent = 'Streams: waiting…';
   previewSticky.appendChild(vjDebugReadout);
 
   const textRow = document.createElement('div');
