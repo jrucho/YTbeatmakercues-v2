@@ -971,6 +971,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjDebugReadout = null,
       vjFrameStats = new Map(),
       vjLastDebugRenderAt = 0,
+      vjLastBroadcastFrameTimestamp = null,
       vjAnalyser = null,
       vjBandData = new Uint8Array(256),
       vjBandLevels = { low: 0, mid: 0, high: 0, full: 0 },
@@ -987,7 +988,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       remoteVJFrames = new Map(),
       vjBroadcastBusy = false,
       vjLastBroadcastAt = 0,
-      vjBroadcastMinIntervalMs = 0,
+      vjBroadcastMinIntervalMs = 1000 / 60,
       vjTabOrder = [],
       vjControlsSyncUI = null,
       // We'll keep them to identify which button is which
@@ -7827,13 +7828,19 @@ function noteVJFrameStat(tabId, direction = 'incoming') {
   if (!tabId) return;
   const nowPerf = performance.now();
   const nowWall = Date.now();
-  const prev = vjFrameStats.get(tabId) || { fps: 0, lastPerf: 0, lastWall: 0, direction };
-  const delta = prev.lastPerf > 0 ? (nowPerf - prev.lastPerf) : 0;
-  const instFps = delta > 0 ? (1000 / delta) : 0;
-  const fps = instFps > 0 ? (prev.fps > 0 ? (prev.fps * 0.82 + instFps * 0.18) : instFps) : prev.fps;
+  const prev = vjFrameStats.get(tabId) || { fps: 0, samples: [], lastWall: 0, direction };
+  const samples = Array.isArray(prev.samples) ? prev.samples.slice(-29) : [];
+  samples.push(nowPerf);
+  while (samples.length > 1 && nowPerf - samples[0] > 1500) samples.shift();
+  let fps = prev.fps || 0;
+  if (samples.length > 1) {
+    const span = samples[samples.length - 1] - samples[0];
+    if (span > 0) fps = ((samples.length - 1) * 1000) / span;
+  }
+  fps = Math.max(0, Math.min(60, fps));
   vjFrameStats.set(tabId, {
     fps,
-    lastPerf: nowPerf,
+    samples,
     lastWall: nowWall,
     direction
   });
@@ -7861,9 +7868,9 @@ function renderVJDebugReadout(localVideo = null) {
       : `Remote ${Math.max(1, (vjTabOrder || []).indexOf(entry.tabId) + 1)}`;
     const freshness = ageMs < 140 ? '#7dff9f' : ageMs < 350 ? '#ffd166' : '#ff7b7b';
     rows.push(
-      `<div style="display:flex;justify-content:space-between;gap:8px;white-space:nowrap;">` +
-      `<span>Stream ${i + 1}: ${sourceLabel}</span>` +
-      `<span style="color:${freshness}">${fps} fps · ${ageMs} ms</span>` +
+      `<div style="display:flex;justify-content:space-between;gap:6px;white-space:nowrap;">` +
+      `<span>S${i + 1} ${sourceLabel}</span>` +
+      `<span style="color:${freshness}">${fps}fps ${ageMs}ms</span>` +
       `</div>`
     );
   }
@@ -7896,12 +7903,18 @@ function ensureVJMonitorStream() {
 async function postCrossTabVJFrame(frameSource) {
   if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !frameSource) return;
   const now = performance.now();
+  const frameTimestamp = Number.isFinite(Number(frameSource?.timestamp)) ? Number(frameSource.timestamp) : null;
+  if (frameTimestamp !== null && vjLastBroadcastFrameTimestamp === frameTimestamp) {
+    try { frameSource.close?.(); } catch {}
+    return;
+  }
   if (vjBroadcastBusy || now - vjLastBroadcastAt < vjBroadcastMinIntervalMs) {
     try { frameSource.close?.(); } catch {}
     return;
   }
   vjBroadcastBusy = true;
   vjLastBroadcastAt = now;
+  if (frameTimestamp !== null) vjLastBroadcastFrameTimestamp = frameTimestamp;
   try {
     crossTabVJChannel.postMessage({ type: 'vj-frame', tabId: ytbmTabId, ts: Date.now(), frame: frameSource }, [frameSource]);
     noteVJFrameStat(ytbmTabId, 'outgoing');
@@ -7939,6 +7952,7 @@ function stopVJBroadcastPump() {
   vjBroadcastCaptureStream = null;
   vjVideoFrameCallbackId = null;
   vjBroadcastSourceVideo = null;
+  vjLastBroadcastFrameTimestamp = null;
   vjBroadcastBusy = false;
 }
 
@@ -8475,14 +8489,18 @@ function showVJWindowToggle() {
   vjPreviewCtx = vjPreviewCanvas.getContext('2d', { alpha: false });
 
   vjDebugReadout = document.createElement('div');
-  vjDebugReadout.style.marginTop = '6px';
-  vjDebugReadout.style.padding = '8px 10px';
-  vjDebugReadout.style.border = '1px solid rgba(255,255,255,0.14)';
-  vjDebugReadout.style.borderRadius = '6px';
-  vjDebugReadout.style.background = 'rgba(0,0,0,0.45)';
-  vjDebugReadout.style.font = '12px/1.4 monospace';
+  vjDebugReadout.style.position = 'absolute';
+  vjDebugReadout.style.top = '8px';
+  vjDebugReadout.style.right = '8px';
+  vjDebugReadout.style.padding = '4px 6px';
+  vjDebugReadout.style.border = '1px solid rgba(255,255,255,0.1)';
+  vjDebugReadout.style.borderRadius = '4px';
+  vjDebugReadout.style.background = 'rgba(0,0,0,0.5)';
+  vjDebugReadout.style.font = '10px/1.3 monospace';
   vjDebugReadout.style.color = '#f3f3f3';
-  vjDebugReadout.style.whiteSpace = 'normal';
+  vjDebugReadout.style.whiteSpace = 'nowrap';
+  vjDebugReadout.style.pointerEvents = 'none';
+  vjDebugReadout.style.zIndex = '22';
   vjDebugReadout.textContent = 'Stream debug: waiting for frames…';
   previewSticky.appendChild(vjDebugReadout);
 
