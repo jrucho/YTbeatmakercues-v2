@@ -958,9 +958,12 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjSourceCtx = null,
       vjAnimationFrame = null,
       vjRenderInterval = null,
+      vjVideoFrameCallbackId = null,
+      vjBroadcastSourceVideo = null,
       vjMonitorWindow = null,
       vjMonitorVideo = null,
       vjMonitorStream = null,
+      vjMonitorCaptureTrack = null,
       vjAnalyser = null,
       vjBandData = new Uint8Array(256),
       vjBandLevels = { low: 0, mid: 0, high: 0, full: 0 },
@@ -7803,6 +7806,53 @@ function getVJStreamSources(localVideo) {
   return sources.length ? sources : [localVideo];
 }
 
+function ensureVJMonitorStream() {
+  if (vjMonitorStream || !vjOutputCanvas || typeof vjOutputCanvas.captureStream !== 'function') return vjMonitorStream;
+  try {
+    vjMonitorStream = vjOutputCanvas.captureStream(0);
+    const [track] = vjMonitorStream?.getVideoTracks?.() || [];
+    vjMonitorCaptureTrack = track || null;
+  } catch {
+    vjMonitorStream = null;
+    vjMonitorCaptureTrack = null;
+  }
+  return vjMonitorStream;
+}
+
+function stopVJBroadcastPump() {
+  if (vjBroadcastSourceVideo && vjVideoFrameCallbackId !== null && typeof vjBroadcastSourceVideo.cancelVideoFrameCallback === 'function') {
+    try { vjBroadcastSourceVideo.cancelVideoFrameCallback(vjVideoFrameCallbackId); } catch {}
+  }
+  vjVideoFrameCallbackId = null;
+  vjBroadcastSourceVideo = null;
+}
+
+function startVJBroadcastPump(video) {
+  if (!video || typeof video.requestVideoFrameCallback !== 'function') return;
+  if (vjBroadcastSourceVideo === video && vjVideoFrameCallbackId !== null) return;
+  stopVJBroadcastPump();
+  vjBroadcastSourceVideo = video;
+  const step = async () => {
+    if (!vjModuleEnabled || !vjControls.crossTabStreamsEnabled || vjBroadcastSourceVideo !== video) {
+      stopVJBroadcastPump();
+      return;
+    }
+    await broadcastLocalVJFrame(video);
+    if (vjBroadcastSourceVideo === video && typeof video.requestVideoFrameCallback === 'function') {
+      try {
+        vjVideoFrameCallbackId = video.requestVideoFrameCallback(step);
+      } catch {
+        stopVJBroadcastPump();
+      }
+    }
+  };
+  try {
+    vjVideoFrameCallbackId = video.requestVideoFrameCallback(step);
+  } catch {
+    stopVJBroadcastPump();
+  }
+}
+
 async function broadcastLocalVJFrame(video) {
   if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !video) return;
   const now = performance.now();
@@ -7997,6 +8047,7 @@ function renderVJFrameCore(tMs = performance.now()) {
   if (!ensureVJCanvases() || !vjOutputCtx) return;
   const vid = getVideoElement();
   if (!vid) return;
+  startVJBroadcastPump(vid);
   updateVJBandLevels();
   const w = vjOutputCanvas.width, h = vjOutputCanvas.height;
 
@@ -8018,6 +8069,9 @@ function renderVJFrameCore(tMs = performance.now()) {
     vjMonitorVideo.srcObject = vjMonitorStream;
     vjMonitorVideo.play().catch(() => {});
   }
+  if (vjMonitorCaptureTrack && typeof vjMonitorCaptureTrack.requestFrame === 'function') {
+    try { vjMonitorCaptureTrack.requestFrame(); } catch {}
+  }
 }
 
 function drawVJFrame(tMs = performance.now()) {
@@ -8029,7 +8083,7 @@ function startVJRenderer() {
   if (!vjModuleEnabled) return;
   ensureVJDefaults();
   ensureVJAnalyser();
-  if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
+  ensureVJMonitorStream();
   if (!vjAnimationFrame) vjAnimationFrame = requestAnimationFrame(drawVJFrame);
   // Fallback render pump keeps monitor stream alive when RAF is throttled
   // (e.g. popup fullscreen/occluded main tab situations).
@@ -8037,11 +8091,12 @@ function startVJRenderer() {
     vjRenderInterval = setInterval(() => {
       if (!vjModuleEnabled) return;
       renderVJFrameCore(performance.now());
-    }, 1000 / 30);
+    }, 1000 / 60);
   }
 }
 
 function stopVJRenderer() {
+  stopVJBroadcastPump();
   if (vjAnimationFrame) {
     cancelAnimationFrame(vjAnimationFrame);
     vjAnimationFrame = null;
@@ -8075,7 +8130,7 @@ function setupVJMonitorWindow() {
       if (!doc.fullscreenElement) target.requestFullscreen?.(); else doc.exitFullscreen?.();
     }
   });
-  if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
+  ensureVJMonitorStream();
   if (vjMonitorVideo && vjMonitorStream) {
     vjMonitorVideo.srcObject = vjMonitorStream;
     vjMonitorVideo.play().catch(() => {});
@@ -8652,9 +8707,7 @@ function getVideoCaptureStreamForLooper(videoElement) {
   if (vjModuleEnabled) {
     startVJRenderer();
     ensureVJCanvases();
-    if (!vjMonitorStream && vjOutputCanvas && typeof vjOutputCanvas.captureStream === 'function') {
-      vjMonitorStream = vjOutputCanvas.captureStream(30);
-    }
+    ensureVJMonitorStream();
     const hasTrack = vjMonitorStream && vjMonitorStream.getVideoTracks && vjMonitorStream.getVideoTracks().length;
     if (hasTrack) return vjMonitorStream;
   }
@@ -15181,7 +15234,7 @@ document.addEventListener('visibilitychange', () => {
   if (!vjModuleEnabled) return;
   if (document.hidden) {
     if (!vjRenderInterval) {
-      vjRenderInterval = setInterval(() => renderVJFrameCore(performance.now()), 1000 / 30);
+      vjRenderInterval = setInterval(() => renderVJFrameCore(performance.now()), 1000 / 60);
     }
   } else if (vjRenderInterval && vjAnimationFrame) {
     // keep one interval only if renderer is active; no-op (interval already used as fallback).
