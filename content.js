@@ -175,6 +175,41 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     return true;
   }
 
+  function describeAudioError(err) {
+    if (!err) return 'unknown error';
+    return [err.name, err.message].filter(Boolean).join(': ') || String(err);
+  }
+
+  async function createRoutedOutputAudio(deviceId) {
+    if (!audioContext) return false;
+    const canUseElementSink = typeof HTMLMediaElement !== 'undefined' &&
+      typeof HTMLMediaElement.prototype.setSinkId === 'function';
+    if (!canUseElementSink) return false;
+
+    const routedAudio = new Audio();
+    routedAudio.autoplay = true;
+    routedAudio.muted = false;
+    routedAudio.volume = 1;
+    routedAudio.playsInline = true;
+    routedAudio.preload = 'auto';
+    routedAudio.style.display = 'none';
+    document.body.appendChild(routedAudio);
+
+    const routedDest = audioContext.createMediaStreamDestination();
+    routedAudio.srcObject = routedDest.stream;
+    await routedAudio.setSinkId(deviceId);
+    try {
+      await routedAudio.play();
+    } catch {
+      // Playback may still start after the next user gesture; keep the routed element alive.
+    }
+
+    externalOutputDest = routedDest;
+    outputAudio = routedAudio;
+    currentOutputNode = routedDest;
+    return true;
+  }
+
   async function setOutputDevice(deviceId) {
     if (!audioContext) return;
     localStorage.setItem('ytbm_outputDeviceId', deviceId);
@@ -185,7 +220,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       externalOutputDest = null;
     }
     if (outputAudio) {
-      outputAudio.pause();
+      try { outputAudio.pause(); } catch {}
       outputAudio.srcObject = null;
       outputAudio.remove();
       outputAudio = null;
@@ -193,34 +228,27 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
 
     currentOutputNode = audioContext.destination;
     let success = true;
-
     const canUseCtxSink = typeof audioContext.setSinkId === 'function';
+    const wantsCustomDevice = !!deviceId && deviceId !== 'default';
 
-    if (deviceId && deviceId !== 'default') {
+    if (wantsCustomDevice) {
+      let routedViaContext = false;
       if (canUseCtxSink) {
         try {
           await audioContext.setSinkId(deviceId);
+          routedViaContext = true;
         } catch (err) {
-          console.warn('Failed to set AudioContext sinkId', err);
-          success = false;
+          // Safari / extension isolated worlds can throw DOMException here even though
+          // element-based routing still works. Treat that as an expected fallback.
+          console.info('AudioContext sink routing unavailable; falling back to routed audio element.', describeAudioError(err));
         }
       }
-      if (!canUseCtxSink || !success) {
-        success = true;
+
+      if (!routedViaContext) {
         try {
-          outputAudio = new Audio();
-          outputAudio.autoplay = true;
-          outputAudio.playsInline = true;
-          outputAudio.preload = 'auto';
-          outputAudio.style.display = 'none';
-          document.body.appendChild(outputAudio);
-          externalOutputDest = audioContext.createMediaStreamDestination();
-          outputAudio.srcObject = externalOutputDest.stream;
-          if (outputAudio.setSinkId) await outputAudio.setSinkId(deviceId);
-          await outputAudio.play().catch(() => {});
-          currentOutputNode = externalOutputDest;
+          success = await createRoutedOutputAudio(deviceId);
         } catch (err) {
-          console.warn('Failed to apply output device', err);
+          console.warn('Failed to apply output device fallback', describeAudioError(err));
           success = false;
           currentOutputNode = audioContext.destination;
         }
@@ -228,9 +256,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     } else if (canUseCtxSink) {
       try {
         await audioContext.setSinkId('');
-      } catch (err) {
-        console.warn('Failed to reset AudioContext sinkId', err);
-      }
+      } catch {}
     }
 
     if (!success && outputDeviceSelect) {
@@ -958,6 +984,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjSourceCtx = null,
       vjAnimationFrame = null,
       vjRenderInterval = null,
+      vjVideoFrameCallbackHandle = null,
+      vjBoundVideoFrameSource = null,
       vjMonitorWindow = null,
       vjMonitorVideo = null,
       vjMonitorStream = null,
@@ -977,7 +1005,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       remoteVJFrames = new Map(),
       vjBroadcastBusy = false,
       vjLastBroadcastAt = 0,
-      vjBroadcastMinIntervalMs = 0,
+      vjBroadcastMinIntervalMs = 1000 / 20,
+      vjRemoteFrameMaxAgeMs = 700,
       vjTabOrder = [],
       vjControlsSyncUI = null,
       // We'll keep them to identify which button is which
@@ -4678,7 +4707,12 @@ function onMinimalPointerUp(e) {
  * Deferred AudioContext & Node Setup
  **************************************/
 
+function shouldKeepBackgroundTabsHot() {
+  return !!vjControls?.crossTabStreamsEnabled || cueAllTabsMode;
+}
+
 function isTabPlaybackAllowed() {
+  if (shouldKeepBackgroundTabsHot()) return true;
   return !singleTabPlaybackMode || !document.hidden;
 }
 
@@ -7784,12 +7818,21 @@ function resetStreamPinCorner(streamIndex, cornerIndex) {
 }
 
 
+function updateVJBroadcastBudget() {
+  const keepHot = shouldKeepBackgroundTabsHot();
+  const targetFps = document.hidden ? (keepHot ? 24 : 12) : (keepHot ? 30 : 20);
+  vjBroadcastMinIntervalMs = 1000 / targetFps;
+}
+
 function getVJStreamSources(localVideo) {
   const entries = [];
+  const staleBefore = Date.now() - vjRemoteFrameMaxAgeMs;
   if (localVideo) entries.push({ tabId: ytbmTabId, source: localVideo, ts: Date.now() });
   if (vjControls.crossTabStreamsEnabled) {
     remoteVJFrames.forEach((f, tabId) => {
-      if (f && f.bitmap) entries.push({ tabId, source: f.bitmap, ts: f.ts || 0 });
+      if (!f || !f.bitmap) return;
+      if ((f.ts || 0) < staleBefore) return;
+      entries.push({ tabId, source: f.bitmap, ts: f.ts || 0 });
     });
   }
   const orderMap = new Map((vjTabOrder || []).map((id, idx) => [id, idx]));
@@ -7806,12 +7849,22 @@ function getVJStreamSources(localVideo) {
 async function broadcastLocalVJFrame(video) {
   if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !video) return;
   const now = performance.now();
+  updateVJBroadcastBudget();
   if (vjBroadcastBusy || now - vjLastBroadcastAt < vjBroadcastMinIntervalMs) return;
   if (typeof createImageBitmap !== 'function') return;
   vjBroadcastBusy = true;
   vjLastBroadcastAt = now;
   try {
-    const bitmap = await createImageBitmap(video);
+    const srcW = Math.max(1, Number(video.videoWidth) || 0);
+    const srcH = Math.max(1, Number(video.videoHeight) || 0);
+    const maxW = 640;
+    const maxH = 360;
+    const scale = srcW && srcH ? Math.min(1, maxW / srcW, maxH / srcH) : 1;
+    const resizeWidth = srcW ? Math.max(2, Math.round(srcW * scale)) : undefined;
+    const resizeHeight = srcH ? Math.max(2, Math.round(srcH * scale)) : undefined;
+    const bitmap = (resizeWidth && resizeHeight)
+      ? await createImageBitmap(video, { resizeWidth, resizeHeight, resizeQuality: 'low' })
+      : await createImageBitmap(video);
     crossTabVJChannel.postMessage({ type: 'vj-frame', tabId: ytbmTabId, ts: Date.now(), frame: bitmap }, [bitmap]);
   } catch {}
   vjBroadcastBusy = false;
@@ -8020,9 +8073,35 @@ function renderVJFrameCore(tMs = performance.now()) {
   }
 }
 
+function cancelVJVideoFrameCallback() {
+  if (!vjBoundVideoFrameSource || vjVideoFrameCallbackHandle == null ||
+      typeof vjBoundVideoFrameSource.cancelVideoFrameCallback !== 'function') return;
+  try {
+    vjBoundVideoFrameSource.cancelVideoFrameCallback(vjVideoFrameCallbackHandle);
+  } catch {}
+  vjVideoFrameCallbackHandle = null;
+}
+
+function queueVJVideoFrameCallback() {
+  const vid = getVideoElement();
+  if (!vjModuleEnabled || !vid || typeof vid.requestVideoFrameCallback !== 'function') return;
+  if (vjBoundVideoFrameSource !== vid) {
+    cancelVJVideoFrameCallback();
+    vjBoundVideoFrameSource = vid;
+  }
+  if (vjVideoFrameCallbackHandle != null) return;
+  vjVideoFrameCallbackHandle = vid.requestVideoFrameCallback((now) => {
+    vjVideoFrameCallbackHandle = null;
+    if (!vjModuleEnabled) return;
+    renderVJFrameCore(now);
+    queueVJVideoFrameCallback();
+  });
+}
+
 function drawVJFrame(tMs = performance.now()) {
   vjAnimationFrame = requestAnimationFrame(drawVJFrame);
   renderVJFrameCore(tMs);
+  queueVJVideoFrameCallback();
 }
 
 function startVJRenderer() {
@@ -8031,17 +8110,21 @@ function startVJRenderer() {
   ensureVJAnalyser();
   if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
   if (!vjAnimationFrame) vjAnimationFrame = requestAnimationFrame(drawVJFrame);
+  queueVJVideoFrameCallback();
   // Fallback render pump keeps monitor stream alive when RAF is throttled
   // (e.g. popup fullscreen/occluded main tab situations).
   if (!vjRenderInterval) {
     vjRenderInterval = setInterval(() => {
       if (!vjModuleEnabled) return;
       renderVJFrameCore(performance.now());
-    }, 1000 / 30);
+      queueVJVideoFrameCallback();
+    }, document.hidden ? (shouldKeepBackgroundTabsHot() ? 1000 / 30 : 1000 / 24) : 1000 / 30);
   }
 }
 
 function stopVJRenderer() {
+  cancelVJVideoFrameCallback();
+  vjBoundVideoFrameSource = null;
   if (vjAnimationFrame) {
     cancelAnimationFrame(vjAnimationFrame);
     vjAnimationFrame = null;
@@ -15070,14 +15153,13 @@ async function initialize() {
     document.addEventListener('click', function primeAudio() {
       if (isAudioPrimed) return;
       isAudioPrimed = true;
-
-      if (!audioContext) {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        setupAudioNodes();
-      }
-      if (audioContext.state === 'suspended') {
-        audioContext.resume();
-      }
+      ensureAudioContext().then(() => {
+        if (audioContext?.state === 'suspended') {
+          return audioContext.resume();
+        }
+      }).catch(err => {
+        console.warn('Audio priming failed', describeAudioError(err));
+      });
       console.log("Audio primed on first click.");
     }, { once: true });
     
@@ -15179,12 +15261,17 @@ window.runLooperDeterministicSimulation = runLooperDeterministicSimulation;
 // Keep VJ stream pumping when tab visibility changes (fullscreen monitor scenarios).
 document.addEventListener('visibilitychange', () => {
   if (!vjModuleEnabled) return;
+  if (vjRenderInterval) {
+    clearInterval(vjRenderInterval);
+    vjRenderInterval = null;
+  }
   if (document.hidden) {
-    if (!vjRenderInterval) {
-      vjRenderInterval = setInterval(() => renderVJFrameCore(performance.now()), 1000 / 30);
-    }
-  } else if (vjRenderInterval && vjAnimationFrame) {
-    // keep one interval only if renderer is active; no-op (interval already used as fallback).
+    vjRenderInterval = setInterval(() => {
+      renderVJFrameCore(performance.now());
+      queueVJVideoFrameCallback();
+    }, shouldKeepBackgroundTabsHot() ? 1000 / 30 : 1000 / 24);
+  } else {
+    startVJRenderer();
   }
 });
 
