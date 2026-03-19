@@ -175,6 +175,41 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     return true;
   }
 
+  function describeAudioError(err) {
+    if (!err) return 'unknown error';
+    return [err.name, err.message].filter(Boolean).join(': ') || String(err);
+  }
+
+  async function createRoutedOutputAudio(deviceId) {
+    if (!audioContext) return false;
+    const canUseElementSink = typeof HTMLMediaElement !== 'undefined' &&
+      typeof HTMLMediaElement.prototype.setSinkId === 'function';
+    if (!canUseElementSink) return false;
+
+    const routedAudio = new Audio();
+    routedAudio.autoplay = true;
+    routedAudio.muted = false;
+    routedAudio.volume = 1;
+    routedAudio.playsInline = true;
+    routedAudio.preload = 'auto';
+    routedAudio.style.display = 'none';
+    document.body.appendChild(routedAudio);
+
+    const routedDest = audioContext.createMediaStreamDestination();
+    routedAudio.srcObject = routedDest.stream;
+    await routedAudio.setSinkId(deviceId);
+    try {
+      await routedAudio.play();
+    } catch {
+      // Playback may still start after the next user gesture; keep the routed element alive.
+    }
+
+    externalOutputDest = routedDest;
+    outputAudio = routedAudio;
+    currentOutputNode = routedDest;
+    return true;
+  }
+
   async function setOutputDevice(deviceId) {
     if (!audioContext) return;
     localStorage.setItem('ytbm_outputDeviceId', deviceId);
@@ -185,7 +220,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       externalOutputDest = null;
     }
     if (outputAudio) {
-      outputAudio.pause();
+      try { outputAudio.pause(); } catch {}
       outputAudio.srcObject = null;
       outputAudio.remove();
       outputAudio = null;
@@ -193,34 +228,27 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
 
     currentOutputNode = audioContext.destination;
     let success = true;
-
     const canUseCtxSink = typeof audioContext.setSinkId === 'function';
+    const wantsCustomDevice = !!deviceId && deviceId !== 'default';
 
-    if (deviceId && deviceId !== 'default') {
+    if (wantsCustomDevice) {
+      let routedViaContext = false;
       if (canUseCtxSink) {
         try {
           await audioContext.setSinkId(deviceId);
+          routedViaContext = true;
         } catch (err) {
-          console.warn('Failed to set AudioContext sinkId', err);
-          success = false;
+          // Safari / extension isolated worlds can throw DOMException here even though
+          // element-based routing still works. Treat that as an expected fallback.
+          console.info('AudioContext sink routing unavailable; falling back to routed audio element.', describeAudioError(err));
         }
       }
-      if (!canUseCtxSink || !success) {
-        success = true;
+
+      if (!routedViaContext) {
         try {
-          outputAudio = new Audio();
-          outputAudio.autoplay = true;
-          outputAudio.playsInline = true;
-          outputAudio.preload = 'auto';
-          outputAudio.style.display = 'none';
-          document.body.appendChild(outputAudio);
-          externalOutputDest = audioContext.createMediaStreamDestination();
-          outputAudio.srcObject = externalOutputDest.stream;
-          if (outputAudio.setSinkId) await outputAudio.setSinkId(deviceId);
-          await outputAudio.play().catch(() => {});
-          currentOutputNode = externalOutputDest;
+          success = await createRoutedOutputAudio(deviceId);
         } catch (err) {
-          console.warn('Failed to apply output device', err);
+          console.warn('Failed to apply output device fallback', describeAudioError(err));
           success = false;
           currentOutputNode = audioContext.destination;
         }
@@ -228,9 +256,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     } else if (canUseCtxSink) {
       try {
         await audioContext.setSinkId('');
-      } catch (err) {
-        console.warn('Failed to reset AudioContext sinkId', err);
-      }
+      } catch {}
     }
 
     if (!success && outputDeviceSelect) {
@@ -958,6 +984,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjSourceCtx = null,
       vjAnimationFrame = null,
       vjRenderInterval = null,
+      vjVideoFrameCallbackHandle = null,
+      vjBoundVideoFrameSource = null,
       vjMonitorWindow = null,
       vjMonitorVideo = null,
       vjMonitorStream = null,
@@ -8020,9 +8048,35 @@ function renderVJFrameCore(tMs = performance.now()) {
   }
 }
 
+function cancelVJVideoFrameCallback() {
+  if (!vjBoundVideoFrameSource || vjVideoFrameCallbackHandle == null ||
+      typeof vjBoundVideoFrameSource.cancelVideoFrameCallback !== 'function') return;
+  try {
+    vjBoundVideoFrameSource.cancelVideoFrameCallback(vjVideoFrameCallbackHandle);
+  } catch {}
+  vjVideoFrameCallbackHandle = null;
+}
+
+function queueVJVideoFrameCallback() {
+  const vid = getVideoElement();
+  if (!vjModuleEnabled || !vid || typeof vid.requestVideoFrameCallback !== 'function') return;
+  if (vjBoundVideoFrameSource !== vid) {
+    cancelVJVideoFrameCallback();
+    vjBoundVideoFrameSource = vid;
+  }
+  if (vjVideoFrameCallbackHandle != null) return;
+  vjVideoFrameCallbackHandle = vid.requestVideoFrameCallback((now) => {
+    vjVideoFrameCallbackHandle = null;
+    if (!vjModuleEnabled) return;
+    renderVJFrameCore(now);
+    queueVJVideoFrameCallback();
+  });
+}
+
 function drawVJFrame(tMs = performance.now()) {
   vjAnimationFrame = requestAnimationFrame(drawVJFrame);
   renderVJFrameCore(tMs);
+  queueVJVideoFrameCallback();
 }
 
 function startVJRenderer() {
@@ -8031,17 +8085,21 @@ function startVJRenderer() {
   ensureVJAnalyser();
   if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
   if (!vjAnimationFrame) vjAnimationFrame = requestAnimationFrame(drawVJFrame);
+  queueVJVideoFrameCallback();
   // Fallback render pump keeps monitor stream alive when RAF is throttled
   // (e.g. popup fullscreen/occluded main tab situations).
   if (!vjRenderInterval) {
     vjRenderInterval = setInterval(() => {
       if (!vjModuleEnabled) return;
       renderVJFrameCore(performance.now());
-    }, 1000 / 30);
+      queueVJVideoFrameCallback();
+    }, document.hidden ? 1000 / 24 : 1000 / 30);
   }
 }
 
 function stopVJRenderer() {
+  cancelVJVideoFrameCallback();
+  vjBoundVideoFrameSource = null;
   if (vjAnimationFrame) {
     cancelAnimationFrame(vjAnimationFrame);
     vjAnimationFrame = null;
@@ -15070,14 +15128,13 @@ async function initialize() {
     document.addEventListener('click', function primeAudio() {
       if (isAudioPrimed) return;
       isAudioPrimed = true;
-
-      if (!audioContext) {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        setupAudioNodes();
-      }
-      if (audioContext.state === 'suspended') {
-        audioContext.resume();
-      }
+      ensureAudioContext().then(() => {
+        if (audioContext?.state === 'suspended') {
+          return audioContext.resume();
+        }
+      }).catch(err => {
+        console.warn('Audio priming failed', describeAudioError(err));
+      });
       console.log("Audio primed on first click.");
     }, { once: true });
     
@@ -15179,12 +15236,17 @@ window.runLooperDeterministicSimulation = runLooperDeterministicSimulation;
 // Keep VJ stream pumping when tab visibility changes (fullscreen monitor scenarios).
 document.addEventListener('visibilitychange', () => {
   if (!vjModuleEnabled) return;
+  if (vjRenderInterval) {
+    clearInterval(vjRenderInterval);
+    vjRenderInterval = null;
+  }
   if (document.hidden) {
-    if (!vjRenderInterval) {
-      vjRenderInterval = setInterval(() => renderVJFrameCore(performance.now()), 1000 / 30);
-    }
-  } else if (vjRenderInterval && vjAnimationFrame) {
-    // keep one interval only if renderer is active; no-op (interval already used as fallback).
+    vjRenderInterval = setInterval(() => {
+      renderVJFrameCore(performance.now());
+      queueVJVideoFrameCallback();
+    }, 1000 / 24);
+  } else {
+    startVJRenderer();
   }
 });
 
