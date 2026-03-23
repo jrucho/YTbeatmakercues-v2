@@ -958,9 +958,20 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjSourceCtx = null,
       vjAnimationFrame = null,
       vjRenderInterval = null,
+      vjVideoFrameCallbackId = null,
+      vjBroadcastPumpToken = 0,
+      vjBroadcastSourceVideo = null,
+      vjBroadcastCaptureStream = null,
+      vjBroadcastCaptureTrack = null,
+      vjBroadcastReader = null,
       vjMonitorWindow = null,
       vjMonitorVideo = null,
       vjMonitorStream = null,
+      vjMonitorCaptureTrack = null,
+      vjDebugReadout = null,
+      vjFrameStats = new Map(),
+      vjLastDebugRenderAt = 0,
+      vjLastBroadcastFrameTimestamp = null,
       vjAnalyser = null,
       vjBandData = new Uint8Array(256),
       vjBandLevels = { low: 0, mid: 0, high: 0, full: 0 },
@@ -977,7 +988,9 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       remoteVJFrames = new Map(),
       vjBroadcastBusy = false,
       vjLastBroadcastAt = 0,
-      vjBroadcastMinIntervalMs = 0,
+      vjLastBroadcastSuccessAt = 0,
+      vjTargetFps = [30, 60].includes(Number(localStorage.getItem('ytbm_vjTargetFps'))) ? Number(localStorage.getItem('ytbm_vjTargetFps')) : 60,
+      vjBroadcastMinIntervalMs = 1000 / ([30, 60].includes(Number(localStorage.getItem('ytbm_vjTargetFps'))) ? Number(localStorage.getItem('ytbm_vjTargetFps')) : 60),
       vjTabOrder = [],
       vjControlsSyncUI = null,
       // We'll keep them to identify which button is which
@@ -4733,17 +4746,21 @@ function initCrossTabChannel() {
       if (!msg || msg.tabId === ytbmTabId) return;
       if (msg.type === 'vj-frame' && msg.frame && vjControls.crossTabStreamsEnabled) {
         const prev = remoteVJFrames.get(msg.tabId);
-        if (prev?.bitmap?.close) {
-          try { prev.bitmap.close(); } catch {}
+        const prevFrame = prev?.frame || prev?.bitmap;
+        if (prevFrame?.close) {
+          try { prevFrame.close(); } catch {}
         }
-        remoteVJFrames.set(msg.tabId, { bitmap: msg.frame, ts: Number(msg.ts) || Date.now() });
+        remoteVJFrames.set(msg.tabId, { frame: msg.frame, ts: Number(msg.ts) || Date.now() });
+        noteVJFrameStat(msg.tabId, 'incoming');
       }
       if (msg.type === 'vj-frame-clear') {
         const prev = remoteVJFrames.get(msg.tabId);
-        if (prev?.bitmap?.close) {
-          try { prev.bitmap.close(); } catch {}
+        const prevFrame = prev?.frame || prev?.bitmap;
+        if (prevFrame?.close) {
+          try { prevFrame.close(); } catch {}
         }
         remoteVJFrames.delete(msg.tabId);
+        vjFrameStats.delete(msg.tabId);
       }
       if (msg.type === 'cue-trigger' && cueAllTabsMode) {
         const cueKey = String(msg.cueKey || '');
@@ -7784,12 +7801,13 @@ function resetStreamPinCorner(streamIndex, cornerIndex) {
 }
 
 
-function getVJStreamSources(localVideo) {
+function getVJStreamEntries(localVideo) {
   const entries = [];
-  if (localVideo) entries.push({ tabId: ytbmTabId, source: localVideo, ts: Date.now() });
+  if (localVideo) entries.push({ tabId: ytbmTabId, source: localVideo, ts: Date.now(), kind: 'local' });
   if (vjControls.crossTabStreamsEnabled) {
     remoteVJFrames.forEach((f, tabId) => {
-      if (f && f.bitmap) entries.push({ tabId, source: f.bitmap, ts: f.ts || 0 });
+      const frame = f?.frame || f?.bitmap;
+      if (frame) entries.push({ tabId, source: frame, ts: f.ts || 0, kind: 'remote' });
     });
   }
   const orderMap = new Map((vjTabOrder || []).map((id, idx) => [id, idx]));
@@ -7799,22 +7817,260 @@ function getVJStreamSources(localVideo) {
     if (ai !== bi) return ai - bi;
     return (a.ts || 0) - (b.ts || 0);
   });
+  return entries;
+}
+
+function getVJStreamSources(localVideo) {
+  const entries = getVJStreamEntries(localVideo);
   const sources = entries.map((e) => e.source).filter(Boolean);
   return sources.length ? sources : [localVideo];
 }
 
-async function broadcastLocalVJFrame(video) {
-  if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !video) return;
+function noteVJFrameStat(tabId, direction = 'incoming') {
+  if (!tabId) return;
+  const nowPerf = performance.now();
+  const nowWall = Date.now();
+  const prev = vjFrameStats.get(tabId) || { fps: 0, samples: [], lastWall: 0, direction };
+  const samples = Array.isArray(prev.samples) ? prev.samples.slice(-29) : [];
+  samples.push(nowPerf);
+  while (samples.length > 1 && nowPerf - samples[0] > 1500) samples.shift();
+  let fps = prev.fps || 0;
+  if (samples.length > 1) {
+    const span = samples[samples.length - 1] - samples[0];
+    if (span > 0) fps = ((samples.length - 1) * 1000) / span;
+  }
+  fps = Math.max(0, Math.min(60, fps));
+  vjFrameStats.set(tabId, {
+    fps,
+    samples,
+    lastWall: nowWall,
+    direction
+  });
+}
+
+function renderVJDebugReadout(localVideo = null) {
+  if (!vjDebugReadout) return;
+  const now = Date.now();
+  if (now - vjLastDebugRenderAt < 180) return;
+  vjLastDebugRenderAt = now;
+  const entries = getVJStreamEntries(localVideo);
+  const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
+  const rows = [];
+  for (let i = 0; i < count; i++) {
+    const entry = entries[i % Math.max(1, entries.length)] || null;
+    if (!entry) {
+      rows.push(`<div style="opacity:0.55">Stream ${i + 1}: waiting…</div>`);
+      continue;
+    }
+    const stat = vjFrameStats.get(entry.tabId);
+    const ageMs = stat?.lastWall ? Math.max(0, now - stat.lastWall) : Math.max(0, now - (entry.ts || now));
+    const fpsValue = stat?.fps ? Math.max(0, Math.min(99, Math.round(stat.fps))) : 0;
+    const fps = String(fpsValue);
+    const sourceLabel = entry.kind === 'local'
+      ? 'Local'
+      : `Remote ${Math.max(1, (vjTabOrder || []).indexOf(entry.tabId) + 1)}`;
+    const freshness = ageMs < 140 ? '#7dff9f' : ageMs < 350 ? '#ffd166' : '#ff7b7b';
+    rows.push(
+      `<div style="display:flex;justify-content:space-between;gap:5px;white-space:nowrap;">` +
+      `<span>S${i + 1} ${sourceLabel}</span>` +
+      `<span style="color:${freshness}">${fps}fps</span>` +
+      `</div>`
+    );
+  }
+  vjDebugReadout.innerHTML = rows.join('');
+}
+
+function canCreateVJBitmapFromVideo(video) {
+  if (!video) return false;
+  if (typeof HTMLVideoElement !== 'undefined' && video instanceof HTMLVideoElement) {
+    if ((video.videoWidth || 0) < 2 || (video.videoHeight || 0) < 2) return false;
+    if ((video.readyState || 0) < 2) return false;
+    if (video.seeking) return false;
+  }
+  return true;
+}
+
+function ensureVJMonitorStream() {
+  if (vjMonitorStream || !vjOutputCanvas || typeof vjOutputCanvas.captureStream !== 'function') return vjMonitorStream;
+  try {
+    vjMonitorStream = vjOutputCanvas.captureStream(0);
+    const [track] = vjMonitorStream?.getVideoTracks?.() || [];
+    vjMonitorCaptureTrack = track || null;
+  } catch {
+    vjMonitorStream = null;
+    vjMonitorCaptureTrack = null;
+  }
+  return vjMonitorStream;
+}
+
+function getVJTargetIntervalMs() {
+  const fps = [30, 60].includes(Number(vjTargetFps)) ? Number(vjTargetFps) : 60;
+  return 1000 / fps;
+}
+
+function applyVJTargetFps(newFps, restartRenderer = true) {
+  vjTargetFps = [30, 60].includes(Number(newFps)) ? Number(newFps) : 60;
+  vjBroadcastMinIntervalMs = getVJTargetIntervalMs();
+  try { localStorage.setItem('ytbm_vjTargetFps', String(vjTargetFps)); } catch {}
+  if (restartRenderer && vjModuleEnabled) {
+    stopVJRenderer();
+    startVJRenderer();
+  }
+}
+
+function ensureVJBroadcastHealthy(video) {
+  if (!vjModuleEnabled || !vjControls.crossTabStreamsEnabled || !video || video.paused || video.ended) return;
   const now = performance.now();
-  if (vjBroadcastBusy || now - vjLastBroadcastAt < vjBroadcastMinIntervalMs) return;
-  if (typeof createImageBitmap !== 'function') return;
+  const staleAfterMs = Math.max(800, getVJTargetIntervalMs() * 8);
+  if (vjLastBroadcastSuccessAt && now - vjLastBroadcastSuccessAt <= staleAfterMs) return;
+  if (vjBroadcastSourceVideo !== video) return;
+  stopVJBroadcastPump();
+  startVJBroadcastPump(video);
+}
+
+async function postCrossTabVJFrame(frameSource) {
+  if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !frameSource) return;
+  const now = performance.now();
+  const frameTimestamp = Number.isFinite(Number(frameSource?.timestamp)) ? Number(frameSource.timestamp) : null;
+  if (frameTimestamp !== null && vjLastBroadcastFrameTimestamp === frameTimestamp) {
+    try { frameSource.close?.(); } catch {}
+    return;
+  }
+  if (vjBroadcastBusy || now - vjLastBroadcastAt < vjBroadcastMinIntervalMs) {
+    try { frameSource.close?.(); } catch {}
+    return;
+  }
   vjBroadcastBusy = true;
   vjLastBroadcastAt = now;
+  if (frameTimestamp !== null) vjLastBroadcastFrameTimestamp = frameTimestamp;
+  try {
+    crossTabVJChannel.postMessage({ type: 'vj-frame', tabId: ytbmTabId, ts: Date.now(), frame: frameSource }, [frameSource]);
+    noteVJFrameStat(ytbmTabId, 'outgoing');
+    vjLastBroadcastSuccessAt = performance.now();
+    return;
+  } catch {}
+  try {
+    if (typeof createImageBitmap === 'function') {
+      const bitmap = await createImageBitmap(frameSource);
+      try { frameSource.close?.(); } catch {}
+      crossTabVJChannel.postMessage({ type: 'vj-frame', tabId: ytbmTabId, ts: Date.now(), frame: bitmap }, [bitmap]);
+      noteVJFrameStat(ytbmTabId, 'outgoing');
+      vjLastBroadcastSuccessAt = performance.now();
+      return;
+    }
+  } catch {}
+  try { frameSource.close?.(); } catch {}
+  vjBroadcastBusy = false;
+}
+
+function stopVJBroadcastPump() {
+  vjBroadcastPumpToken += 1;
+  if (vjBroadcastSourceVideo && vjVideoFrameCallbackId !== null && typeof vjBroadcastSourceVideo.cancelVideoFrameCallback === 'function') {
+    try { vjBroadcastSourceVideo.cancelVideoFrameCallback(vjVideoFrameCallbackId); } catch {}
+  }
+  if (vjBroadcastReader) {
+    try { vjBroadcastReader.cancel(); } catch {}
+  }
+  vjBroadcastReader = null;
+  if (vjBroadcastCaptureTrack) {
+    try { vjBroadcastCaptureTrack.stop(); } catch {}
+  }
+  vjBroadcastCaptureTrack = null;
+  if (vjBroadcastCaptureStream) {
+    try { vjBroadcastCaptureStream.getTracks().forEach((track) => track.stop()); } catch {}
+  }
+  vjBroadcastCaptureStream = null;
+  vjVideoFrameCallbackId = null;
+  vjBroadcastSourceVideo = null;
+  vjLastBroadcastFrameTimestamp = null;
+  vjLastBroadcastSuccessAt = 0;
+  vjBroadcastBusy = false;
+}
+
+function startVJBroadcastPump(video) {
+  if (!video) return;
+  if (vjBroadcastSourceVideo === video && (vjVideoFrameCallbackId !== null || vjBroadcastReader)) return;
+  stopVJBroadcastPump();
+  vjBroadcastSourceVideo = video;
+  const pumpToken = vjBroadcastPumpToken;
+  try {
+    if (typeof video.captureStream === 'function' && typeof MediaStreamTrackProcessor === 'function') {
+      const stream = video.captureStream();
+      const [track] = stream?.getVideoTracks?.() || [];
+      if (track) {
+        vjBroadcastCaptureStream = stream;
+        vjBroadcastCaptureTrack = track;
+        const processor = new MediaStreamTrackProcessor({ track });
+        const reader = processor.readable?.getReader?.();
+        if (reader) {
+          vjBroadcastReader = reader;
+          (async () => {
+            try {
+              while (
+                pumpToken === vjBroadcastPumpToken &&
+                vjBroadcastSourceVideo === video &&
+                vjModuleEnabled &&
+                vjControls.crossTabStreamsEnabled
+              ) {
+                const { value, done } = await reader.read();
+                if (done || !value) break;
+                await postCrossTabVJFrame(value);
+                vjBroadcastBusy = false;
+              }
+            } catch {} finally {
+              if (pumpToken === vjBroadcastPumpToken) {
+                vjBroadcastReader = null;
+                if (vjBroadcastCaptureTrack) {
+                  try { vjBroadcastCaptureTrack.stop(); } catch {}
+                }
+                vjBroadcastCaptureTrack = null;
+                if (vjBroadcastCaptureStream) {
+                  try { vjBroadcastCaptureStream.getTracks().forEach((track) => track.stop()); } catch {}
+                }
+                vjBroadcastCaptureStream = null;
+              }
+            }
+          })();
+          return;
+        }
+      }
+    }
+  } catch {}
+  if (typeof video.requestVideoFrameCallback !== 'function') return;
+  const step = async () => {
+    if (!vjModuleEnabled || !vjControls.crossTabStreamsEnabled || vjBroadcastSourceVideo !== video) {
+      stopVJBroadcastPump();
+      return;
+    }
+    await broadcastLocalVJFrame(video);
+    if (vjBroadcastSourceVideo === video && typeof video.requestVideoFrameCallback === 'function') {
+      try {
+        vjVideoFrameCallbackId = video.requestVideoFrameCallback(step);
+      } catch {
+        stopVJBroadcastPump();
+      }
+    }
+  };
+  try {
+    vjVideoFrameCallbackId = video.requestVideoFrameCallback(step);
+  } catch {
+    stopVJBroadcastPump();
+  }
+}
+
+async function broadcastLocalVJFrame(video) {
+  if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !video || typeof createImageBitmap !== 'function') return;
+  if (!canCreateVJBitmapFromVideo(video)) return;
   try {
     const bitmap = await createImageBitmap(video);
-    crossTabVJChannel.postMessage({ type: 'vj-frame', tabId: ytbmTabId, ts: Date.now(), frame: bitmap }, [bitmap]);
-  } catch {}
-  vjBroadcastBusy = false;
+    await postCrossTabVJFrame(bitmap);
+  } catch (err) {
+    if (!(err && String(err.name || err).includes('InvalidStateError'))) {
+      console.warn('YTBM VJ bitmap fallback failed', err);
+    }
+  } finally {
+    vjBroadcastBusy = false;
+  }
 }
 
 function drawStreamMosaic(ctx, video, width, height, tMs) {
@@ -7997,6 +8253,8 @@ function renderVJFrameCore(tMs = performance.now()) {
   if (!ensureVJCanvases() || !vjOutputCtx) return;
   const vid = getVideoElement();
   if (!vid) return;
+  startVJBroadcastPump(vid);
+  ensureVJBroadcastHealthy(vid);
   updateVJBandLevels();
   const w = vjOutputCanvas.width, h = vjOutputCanvas.height;
 
@@ -8018,6 +8276,10 @@ function renderVJFrameCore(tMs = performance.now()) {
     vjMonitorVideo.srcObject = vjMonitorStream;
     vjMonitorVideo.play().catch(() => {});
   }
+  if (vjMonitorCaptureTrack && typeof vjMonitorCaptureTrack.requestFrame === 'function') {
+    try { vjMonitorCaptureTrack.requestFrame(); } catch {}
+  }
+  renderVJDebugReadout(vid);
 }
 
 function drawVJFrame(tMs = performance.now()) {
@@ -8029,7 +8291,7 @@ function startVJRenderer() {
   if (!vjModuleEnabled) return;
   ensureVJDefaults();
   ensureVJAnalyser();
-  if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
+  ensureVJMonitorStream();
   if (!vjAnimationFrame) vjAnimationFrame = requestAnimationFrame(drawVJFrame);
   // Fallback render pump keeps monitor stream alive when RAF is throttled
   // (e.g. popup fullscreen/occluded main tab situations).
@@ -8037,11 +8299,12 @@ function startVJRenderer() {
     vjRenderInterval = setInterval(() => {
       if (!vjModuleEnabled) return;
       renderVJFrameCore(performance.now());
-    }, 1000 / 30);
+    }, getVJTargetIntervalMs());
   }
 }
 
 function stopVJRenderer() {
+  stopVJBroadcastPump();
   if (vjAnimationFrame) {
     cancelAnimationFrame(vjAnimationFrame);
     vjAnimationFrame = null;
@@ -8075,7 +8338,7 @@ function setupVJMonitorWindow() {
       if (!doc.fullscreenElement) target.requestFullscreen?.(); else doc.exitFullscreen?.();
     }
   });
-  if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
+  ensureVJMonitorStream();
   if (vjMonitorVideo && vjMonitorStream) {
     vjMonitorVideo.srcObject = vjMonitorStream;
     vjMonitorVideo.play().catch(() => {});
@@ -8098,11 +8361,16 @@ function showVJWindowToggle() {
   vjWindowContainer.style.position = 'fixed';
   vjWindowContainer.style.top = '70px';
   vjWindowContainer.style.right = '30px';
-  vjWindowContainer.style.width = 'min(700px, 54vw)';
-  vjWindowContainer.style.maxHeight = '82vh';
+  vjWindowContainer.style.width = 'min(760px, 58vw)';
+  vjWindowContainer.style.height = 'min(900px, 88vh)';
+  vjWindowContainer.style.minWidth = '640px';
+  vjWindowContainer.style.minHeight = '560px';
+  vjWindowContainer.style.maxHeight = '88vh';
   vjWindowContainer.style.zIndex = '999999';
   vjWindowContainer.style.display = 'flex';
   vjWindowContainer.style.flexDirection = 'column';
+  vjWindowContainer.style.resize = 'both';
+  vjWindowContainer.style.overflow = 'hidden';
   document.body.appendChild(vjWindowContainer);
 
   vjDragHandle = document.createElement('div');
@@ -8114,10 +8382,11 @@ function showVJWindowToggle() {
   vjContentWrap.className = 'looper-midimap-content';
   vjContentWrap.style.display = 'flex';
   vjContentWrap.style.flexDirection = 'column';
+  vjContentWrap.style.flex = '1 1 auto';
   vjContentWrap.style.gap = '8px';
   vjContentWrap.style.overflowY = 'auto';
   vjContentWrap.style.overflowX = 'hidden';
-  vjContentWrap.style.maxHeight = 'calc(82vh - 46px)';
+  vjContentWrap.style.maxHeight = 'none';
   vjContentWrap.style.padding = '12px 14px';
   vjContentWrap.style.position = 'relative';
   vjContentWrap.style.background = '#171717';
@@ -8139,6 +8408,17 @@ function showVJWindowToggle() {
   syncPower();
   powerBtn.addEventListener('click', () => { setVJModuleEnabled(!vjModuleEnabled); syncPower(); });
   topRow.appendChild(powerBtn);
+
+  const fpsBtn = document.createElement('button');
+  fpsBtn.className = 'looper-btn';
+  fpsBtn.style.flex = '1 1 auto';
+  const syncFpsBtn = () => { fpsBtn.textContent = `FPS: ${vjTargetFps}`; };
+  syncFpsBtn();
+  fpsBtn.addEventListener('click', () => {
+    applyVJTargetFps(vjTargetFps === 60 ? 30 : 60);
+    syncFpsBtn();
+  });
+  topRow.appendChild(fpsBtn);
 
   const monitorBtn = document.createElement('button');
   monitorBtn.className = 'looper-btn';
@@ -8257,6 +8537,20 @@ function showVJWindowToggle() {
   previewSticky.appendChild(vjPreviewCanvas);
   vjPreviewCtx = vjPreviewCanvas.getContext('2d', { alpha: false });
 
+  vjDebugReadout = document.createElement('div');
+  vjDebugReadout.style.marginTop = '4px';
+  vjDebugReadout.style.padding = '2px 4px';
+  vjDebugReadout.style.border = '1px solid rgba(255,255,255,0.08)';
+  vjDebugReadout.style.borderRadius = '4px';
+  vjDebugReadout.style.background = 'rgba(0,0,0,0.22)';
+  vjDebugReadout.style.font = '9px/1.2 monospace';
+  vjDebugReadout.style.color = '#f3f3f3';
+  vjDebugReadout.style.whiteSpace = 'nowrap';
+  vjDebugReadout.style.overflowX = 'auto';
+  vjDebugReadout.style.opacity = '0.88';
+  vjDebugReadout.textContent = 'Streams: waiting…';
+  previewSticky.appendChild(vjDebugReadout);
+
   const textRow = document.createElement('div');
   textRow.style.display = 'flex';
   textRow.style.gap = '6px';
@@ -8305,8 +8599,14 @@ function showVJWindowToggle() {
   crossTabChk.addEventListener('change', () => {
     vjControls.crossTabStreamsEnabled = crossTabChk.checked;
     if (!crossTabChk.checked) {
-      remoteVJFrames.forEach((f) => { try { f?.bitmap?.close?.(); } catch {} });
+      remoteVJFrames.forEach((f) => {
+        const frame = f?.frame || f?.bitmap;
+        try { frame?.close?.(); } catch {}
+      });
       remoteVJFrames.clear();
+      Array.from(vjFrameStats.keys()).forEach((tabId) => {
+        if (tabId !== ytbmTabId) vjFrameStats.delete(tabId);
+      });
       crossTabVJChannel?.postMessage({ type: 'vj-frame-clear', tabId: ytbmTabId });
     }
     persistVJControls();
@@ -8652,9 +8952,7 @@ function getVideoCaptureStreamForLooper(videoElement) {
   if (vjModuleEnabled) {
     startVJRenderer();
     ensureVJCanvases();
-    if (!vjMonitorStream && vjOutputCanvas && typeof vjOutputCanvas.captureStream === 'function') {
-      vjMonitorStream = vjOutputCanvas.captureStream(30);
-    }
+    ensureVJMonitorStream();
     const hasTrack = vjMonitorStream && vjMonitorStream.getVideoTracks && vjMonitorStream.getVideoTracks().length;
     if (hasTrack) return vjMonitorStream;
   }
@@ -15181,7 +15479,7 @@ document.addEventListener('visibilitychange', () => {
   if (!vjModuleEnabled) return;
   if (document.hidden) {
     if (!vjRenderInterval) {
-      vjRenderInterval = setInterval(() => renderVJFrameCore(performance.now()), 1000 / 30);
+      vjRenderInterval = setInterval(() => renderVJFrameCore(performance.now()), getVJTargetIntervalMs());
     }
   } else if (vjRenderInterval && vjAnimationFrame) {
     // keep one interval only if renderer is active; no-op (interval already used as fallback).
