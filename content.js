@@ -592,9 +592,21 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     inputDeviceSelect.className = 'looper-btn';
     inputDeviceSelect.style.flex = '1 1 auto';
     inputDeviceSelect.title = 'Choose audio input device';
-    inputDeviceSelect.addEventListener('change', e => {
+    inputDeviceSelect.addEventListener('change', async e => {
       micDeviceId = e.target.value || 'default';
       localStorage.setItem('ytbm_inputDeviceId', micDeviceId);
+      // If mic input is armed/live, re-open with the new device + low-latency constraints.
+      if (micState !== 0) {
+        const activeMode = micState;
+        if (micSourceNode?.mediaStream) {
+          micSourceNode.mediaStream.getTracks().forEach(t => t.stop());
+        }
+        try { micSourceNode?.disconnect(); } catch {}
+        try { micGainNode?.disconnect(); } catch {}
+        micSourceNode = null;
+        micGainNode = null;
+        await setMicMode(activeMode);
+      }
     });
     parent.appendChild(inputDeviceSelect);
     populateInputDeviceSelect();
@@ -689,26 +701,29 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     monitorToggleBtn.textContent = monitorEnabled ? 'Monitor On' : 'Monitor Off';
   }
 
+  function buildLowLatencyAudioConstraints(deviceId) {
+    const audio = {
+      latency: { ideal: 0.0, max: 0.02 },
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      sampleRate: 48000,
+      channelCount: 1
+    };
+    if (deviceId && deviceId !== 'default' && deviceId !== 'off') {
+      audio.deviceId = { exact: deviceId };
+    }
+    return { audio, video: false };
+  }
+
   async function startMonitoring() {
     if (!monitorEnabled || monitoringActive) return;
     if (!monitorMicDeviceId || monitorMicDeviceId === 'off') return;
     try {
-      const constraints = {
-        audio: {
-          latency: 0,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-          channelCount: 1
-        },
-        video: false
-      };
-      if (monitorMicDeviceId !== 'default') {
-        constraints.audio.deviceId = { exact: monitorMicDeviceId };
-      }
+      const constraints = buildLowLatencyAudioConstraints(monitorMicDeviceId);
       monitorStream = await navigator.mediaDevices.getUserMedia(constraints);
       // Use a separate low-latency context so monitoring bypasses extension routing
-      monitorContext = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 0 });
+      monitorContext = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
       const src = monitorContext.createMediaStreamSource(monitorStream);
       src.connect(monitorContext.destination);
       monitoringActive = true;
@@ -2185,24 +2200,11 @@ async function setMicMode(mode) {
     micSourceNode = null;
     micGainNode = null;
   } else {
-    if (!micSourceNode) {
-      try {
-        const constraints = {
-          audio: {
-            latency: 0,
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-            sampleRate: 48000,
-            channelCount: 1
-          },
-          video: false
-        };
-        if (micDeviceId && micDeviceId !== 'default') {
-          constraints.audio.deviceId = { exact: micDeviceId };
-        }
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        micSourceNode = audioContext.createMediaStreamSource(stream);
+      if (!micSourceNode) {
+        try {
+          const constraints = buildLowLatencyAudioConstraints(micDeviceId);
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          micSourceNode = audioContext.createMediaStreamSource(stream);
         micGainNode = audioContext.createGain();
         micGainNode.gain.value = 1;
         micSourceNode.connect(micGainNode);
