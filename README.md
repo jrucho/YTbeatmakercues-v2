@@ -16,6 +16,13 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.3.5
+- Added dedicated **Video output** and **Drums output** selectors in Advanced view so processed stems can be routed to separate output devices.
+- Added **Mute main output** option to the main output selector for separated-output-only workflows.
+- Added **Unlock device names** button to request permission and refresh audio device labels on systems where labels are initially hidden.
+- Improved aux output routing path with a low-latency bridge when supported, with fallback routing for broader browser compatibility.
+- Improved low-latency handling for extension mic input and monitoring input by using shared low-latency capture constraints and live device hot-switch refresh.
+
 ## New in 2.3.4
 - Fixed MIDI Mapping **Detect** for note and cue mappings so clicking Detect now captures the next note-on correctly.
 - Added **Detect** buttons for VJ MIDI note mappings so VJ FX can be mapped directly from controller input.
