@@ -1,3 +1,19 @@
+# Release 2.3.5
+
+## Summary
+Release **2.3.5** adds dedicated output routing controls for video/drums stems, a main-output mute option, device-name unlock, and lower-latency input/output handling improvements.
+
+## Clean changelog
+- Added dedicated **Video output** and **Drums output** selectors in Advanced view.
+- Added **Mute main output** option to the main output selector.
+- Added **Unlock device names** button to request mic permission and refresh device labels.
+- Improved auxiliary output routing with a low-latency bridge path when `AudioContext.setSinkId` is supported, with `HTMLAudioElement` fallback.
+- Improved low-latency defaults for extension input and monitoring input via shared low-latency capture constraints.
+- Added active mic device hot-switch behavior so input changes are applied immediately while mic is armed/live.
+- Updated extension version to **2.3.5** in `manifest.json`.
+
+---
+
 # Release 2.3.3
 
 ## Summary

@@ -191,12 +191,16 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       outputAudio = null;
     }
 
+    mainOutputMuted = false;
     currentOutputNode = audioContext.destination;
     let success = true;
 
     const canUseCtxSink = typeof audioContext.setSinkId === 'function';
 
-    if (deviceId && deviceId !== 'default') {
+    if (deviceId === 'mute') {
+      mainOutputMuted = true;
+      currentOutputNode = null;
+    } else if (deviceId && deviceId !== 'default') {
       if (canUseCtxSink) {
         try {
           await audioContext.setSinkId(deviceId);
@@ -241,7 +245,128 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     applyAllFXRouting();
   }
 
+  async function setAuxOutputDevice(kind, deviceId) {
+    if (!audioContext) return;
+    const isVideo = kind === 'video';
+    const storageKey = isVideo ? 'ytbm_videoOutputDeviceId' : 'ytbm_drumOutputDeviceId';
+    const selectEl = isVideo ? videoOutputDeviceSelect : drumOutputDeviceSelect;
+
+    localStorage.setItem(storageKey, deviceId);
+
+    if (isVideo) {
+      if (videoOutputDest) {
+        try { videoOutputDest.disconnect(); } catch {}
+        videoOutputDest = null;
+      }
+      if (videoOutputBridgeNode) {
+        try { videoOutputBridgeNode.disconnect(); } catch {}
+        videoOutputBridgeNode = null;
+      }
+      if (videoOutputBridgeSource) {
+        try { videoOutputBridgeSource.disconnect(); } catch {}
+        videoOutputBridgeSource = null;
+      }
+      if (videoOutputBridgeContext) {
+        try { await videoOutputBridgeContext.close(); } catch {}
+        videoOutputBridgeContext = null;
+      }
+      if (videoOutputAudio) {
+        try { videoOutputAudio.pause(); } catch {}
+        videoOutputAudio.srcObject = null;
+        videoOutputAudio.remove();
+        videoOutputAudio = null;
+      }
+      videoOutputNode = null;
+    } else {
+      if (drumOutputDest) {
+        try { drumOutputDest.disconnect(); } catch {}
+        drumOutputDest = null;
+      }
+      if (drumOutputBridgeNode) {
+        try { drumOutputBridgeNode.disconnect(); } catch {}
+        drumOutputBridgeNode = null;
+      }
+      if (drumOutputBridgeSource) {
+        try { drumOutputBridgeSource.disconnect(); } catch {}
+        drumOutputBridgeSource = null;
+      }
+      if (drumOutputBridgeContext) {
+        try { await drumOutputBridgeContext.close(); } catch {}
+        drumOutputBridgeContext = null;
+      }
+      if (drumOutputAudio) {
+        try { drumOutputAudio.pause(); } catch {}
+        drumOutputAudio.srcObject = null;
+        drumOutputAudio.remove();
+        drumOutputAudio = null;
+      }
+      drumOutputNode = null;
+    }
+
+    if (deviceId && deviceId !== 'off') {
+      try {
+        const auxDest = audioContext.createMediaStreamDestination();
+        const resolvedSinkId = (deviceId === 'default') ? '' : deviceId;
+        let routed = false;
+
+        // Prefer a low-latency AudioContext bridge first.
+        const bridgeCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+        if (typeof bridgeCtx.setSinkId === 'function') {
+          await bridgeCtx.setSinkId(resolvedSinkId);
+          const bridgeSource = bridgeCtx.createMediaStreamSource(auxDest.stream);
+          const bridgeGain = bridgeCtx.createGain();
+          bridgeGain.gain.value = 1;
+          bridgeSource.connect(bridgeGain).connect(bridgeCtx.destination);
+          routed = true;
+          if (isVideo) {
+            videoOutputBridgeContext = bridgeCtx;
+            videoOutputBridgeSource = bridgeSource;
+            videoOutputBridgeNode = bridgeGain;
+          } else {
+            drumOutputBridgeContext = bridgeCtx;
+            drumOutputBridgeSource = bridgeSource;
+            drumOutputBridgeNode = bridgeGain;
+          }
+        } else {
+          try { await bridgeCtx.close(); } catch {}
+        }
+
+        // Fallback for browsers without AudioContext.setSinkId support.
+        if (!routed) {
+          const auxAudio = new Audio();
+          auxAudio.autoplay = true;
+          auxAudio.playsInline = true;
+          auxAudio.preload = 'none';
+          auxAudio.style.display = 'none';
+          auxAudio.setAttribute('x-webkit-airplay', 'deny');
+          document.body.appendChild(auxAudio);
+          auxAudio.srcObject = auxDest.stream;
+          if (auxAudio.setSinkId) await auxAudio.setSinkId(resolvedSinkId);
+          await auxAudio.play().catch(() => {});
+          if (isVideo) videoOutputAudio = auxAudio;
+          else drumOutputAudio = auxAudio;
+        }
+
+        if (isVideo) {
+          videoOutputDest = auxDest;
+          videoOutputNode = auxDest;
+        } else {
+          drumOutputDest = auxDest;
+          drumOutputNode = auxDest;
+        }
+      } catch (err) {
+        console.warn(`Failed to apply ${kind} output device`, err);
+        if (selectEl) selectEl.value = 'off';
+        localStorage.setItem(storageKey, 'off');
+      }
+    }
+
+    applyAllFXRouting();
+  }
+
   let outputDeviceSelect = null;
+  let videoOutputDeviceSelect = null;
+  let drumOutputDeviceSelect = null;
   let inputDeviceSelect = null;
   let monitorInputSelect = null;
   let midiDeviceSelect = null;
@@ -258,8 +383,21 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   let abletonLinkSocket = null;
   let abletonLinkRetryTimer = null;
   let currentOutputNode = null;
+  let mainOutputMuted = false;
   let externalOutputDest = null;
   let outputAudio = null;
+  let videoOutputDest = null;
+  let drumOutputDest = null;
+  let videoOutputAudio = null;
+  let drumOutputAudio = null;
+  let videoOutputNode = null;
+  let drumOutputNode = null;
+  let videoOutputBridgeContext = null;
+  let drumOutputBridgeContext = null;
+  let videoOutputBridgeSource = null;
+  let drumOutputBridgeSource = null;
+  let videoOutputBridgeNode = null;
+  let drumOutputBridgeNode = null;
   let micDeviceId = localStorage.getItem('ytbm_inputDeviceId') || 'default';
   // Monitoring starts disabled on each page load
   let monitorMicDeviceId = localStorage.getItem('ytbm_monitorInputDeviceId') || 'off';
@@ -296,6 +434,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       const outputs = devices.filter(d => d.kind === 'audiooutput');
       outputDeviceSelect.innerHTML = '';
       outputDeviceSelect.add(new Option('Default output', 'default'));
+      outputDeviceSelect.add(new Option('Mute main output', 'mute'));
       outputs.forEach(d => {
         const opt = new Option(d.label || 'Device', d.deviceId);
         outputDeviceSelect.add(opt);
@@ -316,6 +455,35 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     }
   }
 
+  async function populateAuxOutputSelect(selectEl, storageKey, labelPrefix) {
+    if (!selectEl) return;
+    const supportsSetSink = (HTMLMediaElement.prototype.setSinkId !== undefined);
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices || !supportsSetSink) {
+      selectEl.disabled = true;
+      selectEl.innerHTML = '<option>Unsupported</option>';
+      return;
+    }
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const outputs = devices.filter(d => d.kind === 'audiooutput');
+      selectEl.innerHTML = '';
+      selectEl.add(new Option(`${labelPrefix}: Off`, 'off'));
+      selectEl.add(new Option(`${labelPrefix}: Default`, 'default'));
+      outputs.forEach(d => {
+        const opt = new Option(`${labelPrefix}: ${d.label || 'Device'}`, d.deviceId);
+        selectEl.add(opt);
+      });
+      let saved = localStorage.getItem(storageKey) || 'off';
+      const hasSaved = Array.from(selectEl.options).some(opt => opt.value === saved);
+      if (!hasSaved) saved = 'off';
+      selectEl.value = saved;
+      localStorage.setItem(storageKey, saved);
+      selectEl.disabled = false;
+    } catch (err) {
+      console.error(`Failed to enumerate ${labelPrefix.toLowerCase()} output devices`, err);
+    }
+  }
+
   function buildOutputDeviceDropdown(parent) {
     if (outputDeviceSelect || !parent) return;
     outputDeviceSelect = document.createElement('select');
@@ -328,6 +496,62 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
       navigator.mediaDevices.addEventListener('devicechange', populateOutputDeviceSelect);
     }
+  }
+
+  function buildAuxOutputDeviceDropdowns(parent) {
+    if (!parent || videoOutputDeviceSelect || drumOutputDeviceSelect) return;
+    const row = document.createElement('div');
+    row.className = 'ytbm-panel-row';
+    row.style.gap = '6px';
+
+    videoOutputDeviceSelect = document.createElement('select');
+    videoOutputDeviceSelect.className = 'looper-btn';
+    videoOutputDeviceSelect.style.flex = '1 1 50%';
+    videoOutputDeviceSelect.title = 'Choose dedicated output for processed video audio';
+    videoOutputDeviceSelect.addEventListener('change', e => setAuxOutputDevice('video', e.target.value));
+
+    drumOutputDeviceSelect = document.createElement('select');
+    drumOutputDeviceSelect.className = 'looper-btn';
+    drumOutputDeviceSelect.style.flex = '1 1 50%';
+    drumOutputDeviceSelect.title = 'Choose dedicated output for processed drums/instrument audio';
+    drumOutputDeviceSelect.addEventListener('change', e => setAuxOutputDevice('drum', e.target.value));
+
+    row.appendChild(videoOutputDeviceSelect);
+    row.appendChild(drumOutputDeviceSelect);
+    parent.appendChild(row);
+
+    Promise.all([
+      populateAuxOutputSelect(videoOutputDeviceSelect, 'ytbm_videoOutputDeviceId', 'Video output'),
+      populateAuxOutputSelect(drumOutputDeviceSelect, 'ytbm_drumOutputDeviceId', 'Drums output')
+    ]).then(() => {
+      const videoSaved = localStorage.getItem('ytbm_videoOutputDeviceId') || 'off';
+      const drumSaved = localStorage.getItem('ytbm_drumOutputDeviceId') || 'off';
+      setAuxOutputDevice('video', videoSaved);
+      setAuxOutputDevice('drum', drumSaved);
+    });
+
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', () => {
+        populateAuxOutputSelect(videoOutputDeviceSelect, 'ytbm_videoOutputDeviceId', 'Video output');
+        populateAuxOutputSelect(drumOutputDeviceSelect, 'ytbm_drumOutputDeviceId', 'Drums output');
+      });
+    }
+  }
+
+  async function unlockDeviceNamesAndRefresh() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      stream.getTracks().forEach(t => t.stop());
+    } catch (err) {
+      console.warn('Device label unlock permission was denied or unavailable', err);
+    }
+    await Promise.all([
+      populateOutputDeviceSelect(),
+      populateInputDeviceSelect(),
+      populateMonitorInputSelect(),
+      populateAuxOutputSelect(videoOutputDeviceSelect, 'ytbm_videoOutputDeviceId', 'Video output'),
+      populateAuxOutputSelect(drumOutputDeviceSelect, 'ytbm_drumOutputDeviceId', 'Drums output')
+    ]);
   }
 
   async function populateInputDeviceSelect() {
@@ -368,9 +592,21 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     inputDeviceSelect.className = 'looper-btn';
     inputDeviceSelect.style.flex = '1 1 auto';
     inputDeviceSelect.title = 'Choose audio input device';
-    inputDeviceSelect.addEventListener('change', e => {
+    inputDeviceSelect.addEventListener('change', async e => {
       micDeviceId = e.target.value || 'default';
       localStorage.setItem('ytbm_inputDeviceId', micDeviceId);
+      // If mic input is armed/live, re-open with the new device + low-latency constraints.
+      if (micState !== 0) {
+        const activeMode = micState;
+        if (micSourceNode?.mediaStream) {
+          micSourceNode.mediaStream.getTracks().forEach(t => t.stop());
+        }
+        try { micSourceNode?.disconnect(); } catch {}
+        try { micGainNode?.disconnect(); } catch {}
+        micSourceNode = null;
+        micGainNode = null;
+        await setMicMode(activeMode);
+      }
     });
     parent.appendChild(inputDeviceSelect);
     populateInputDeviceSelect();
@@ -465,26 +701,29 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     monitorToggleBtn.textContent = monitorEnabled ? 'Monitor On' : 'Monitor Off';
   }
 
+  function buildLowLatencyAudioConstraints(deviceId) {
+    const audio = {
+      latency: { ideal: 0.0, max: 0.02 },
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      sampleRate: 48000,
+      channelCount: 1
+    };
+    if (deviceId && deviceId !== 'default' && deviceId !== 'off') {
+      audio.deviceId = { exact: deviceId };
+    }
+    return { audio, video: false };
+  }
+
   async function startMonitoring() {
     if (!monitorEnabled || monitoringActive) return;
     if (!monitorMicDeviceId || monitorMicDeviceId === 'off') return;
     try {
-      const constraints = {
-        audio: {
-          latency: 0,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-          channelCount: 1
-        },
-        video: false
-      };
-      if (monitorMicDeviceId !== 'default') {
-        constraints.audio.deviceId = { exact: monitorMicDeviceId };
-      }
+      const constraints = buildLowLatencyAudioConstraints(monitorMicDeviceId);
       monitorStream = await navigator.mediaDevices.getUserMedia(constraints);
       // Use a separate low-latency context so monitoring bypasses extension routing
-      monitorContext = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 0 });
+      monitorContext = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
       const src = monitorContext.createMediaStreamSource(monitorStream);
       src.connect(monitorContext.destination);
       monitoringActive = true;
@@ -529,6 +768,15 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     }
     await setOutputDevice(id);
     if (outputDeviceSelect) outputDeviceSelect.value = id;
+  }
+
+  async function applySavedAuxOutputDevices() {
+    const videoId = localStorage.getItem('ytbm_videoOutputDeviceId') || 'off';
+    const drumId = localStorage.getItem('ytbm_drumOutputDeviceId') || 'off';
+    await setAuxOutputDevice('video', videoId);
+    await setAuxOutputDevice('drum', drumId);
+    if (videoOutputDeviceSelect) videoOutputDeviceSelect.value = videoId;
+    if (drumOutputDeviceSelect) drumOutputDeviceSelect.value = drumId;
   }
   /**************************************
   * Global Variables
@@ -1952,24 +2200,11 @@ async function setMicMode(mode) {
     micSourceNode = null;
     micGainNode = null;
   } else {
-    if (!micSourceNode) {
-      try {
-        const constraints = {
-          audio: {
-            latency: 0,
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-            sampleRate: 48000,
-            channelCount: 1
-          },
-          video: false
-        };
-        if (micDeviceId && micDeviceId !== 'default') {
-          constraints.audio.deviceId = { exact: micDeviceId };
-        }
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        micSourceNode = audioContext.createMediaStreamSource(stream);
+      if (!micSourceNode) {
+        try {
+          const constraints = buildLowLatencyAudioConstraints(micDeviceId);
+          const stream = await navigator.mediaDevices.getUserMedia(constraints);
+          micSourceNode = audioContext.createMediaStreamSource(stream);
         micGainNode = audioContext.createGain();
         micGainNode.gain.value = 1;
         micSourceNode.connect(micGainNode);
@@ -5054,6 +5289,7 @@ async function setupAudioNodes() {
   await setupFxPadNodes();
 
   applyAllFXRouting();
+  await applySavedAuxOutputDevices();
 }
 
 // simple IR for reverb
@@ -5742,8 +5978,16 @@ function applyAllFXRouting() {
     overallOutputGain.connect(tabPlaybackGateGain);
   }
 
-  tabPlaybackGateGain.connect(currentOutputNode || audioContext.destination);
+  if (!mainOutputMuted) {
+    tabPlaybackGateGain.connect(currentOutputNode || audioContext.destination);
+  }
   tabPlaybackGateGain.connect(videoDestination);
+  if (videoOutputNode) {
+    bus1Gain.connect(videoOutputNode);
+  }
+  if (drumOutputNode) {
+    bus2Gain.connect(drumOutputNode);
+  }
   updateTabPlaybackGate();
 
   // If eqFilterApplyTarget === "master", route masterGain -> eqFilterNode -> etc.
@@ -10968,6 +11212,16 @@ function addControls() {
   cw.appendChild(packsModuleWrap);
 
   buildOutputDeviceDropdown(cw);
+  buildAuxOutputDeviceDropdowns(cw);
+  const unlockDevicesRow = document.createElement('div');
+  unlockDevicesRow.className = 'ytbm-panel-row';
+  const unlockDevicesBtn = document.createElement('button');
+  unlockDevicesBtn.className = 'looper-btn ytbm-advanced-btn';
+  unlockDevicesBtn.textContent = 'Unlock device names';
+  unlockDevicesBtn.title = 'Requests mic permission once so audio device names are visible on this Mac/profile';
+  unlockDevicesBtn.addEventListener('click', unlockDeviceNamesAndRefresh);
+  unlockDevicesRow.appendChild(unlockDevicesBtn);
+  cw.appendChild(unlockDevicesRow);
   buildMonitorInputDropdown(cw);
   buildMonitorToggle(cw);
 
