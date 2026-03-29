@@ -241,7 +241,76 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     applyAllFXRouting();
   }
 
+  async function setAuxOutputDevice(kind, deviceId) {
+    if (!audioContext) return;
+    const isVideo = kind === 'video';
+    const storageKey = isVideo ? 'ytbm_videoOutputDeviceId' : 'ytbm_drumOutputDeviceId';
+    const selectEl = isVideo ? videoOutputDeviceSelect : drumOutputDeviceSelect;
+
+    localStorage.setItem(storageKey, deviceId);
+
+    if (isVideo) {
+      if (videoOutputDest) {
+        try { videoOutputDest.disconnect(); } catch {}
+        videoOutputDest = null;
+      }
+      if (videoOutputAudio) {
+        try { videoOutputAudio.pause(); } catch {}
+        videoOutputAudio.srcObject = null;
+        videoOutputAudio.remove();
+        videoOutputAudio = null;
+      }
+      videoOutputNode = null;
+    } else {
+      if (drumOutputDest) {
+        try { drumOutputDest.disconnect(); } catch {}
+        drumOutputDest = null;
+      }
+      if (drumOutputAudio) {
+        try { drumOutputAudio.pause(); } catch {}
+        drumOutputAudio.srcObject = null;
+        drumOutputAudio.remove();
+        drumOutputAudio = null;
+      }
+      drumOutputNode = null;
+    }
+
+    if (deviceId && deviceId !== 'off') {
+      try {
+        const auxAudio = new Audio();
+        auxAudio.autoplay = true;
+        auxAudio.playsInline = true;
+        auxAudio.preload = 'auto';
+        auxAudio.style.display = 'none';
+        document.body.appendChild(auxAudio);
+        const auxDest = audioContext.createMediaStreamDestination();
+        auxAudio.srcObject = auxDest.stream;
+        if (auxAudio.setSinkId) {
+          await auxAudio.setSinkId(deviceId === 'default' ? '' : deviceId);
+        }
+        await auxAudio.play().catch(() => {});
+        if (isVideo) {
+          videoOutputAudio = auxAudio;
+          videoOutputDest = auxDest;
+          videoOutputNode = auxDest;
+        } else {
+          drumOutputAudio = auxAudio;
+          drumOutputDest = auxDest;
+          drumOutputNode = auxDest;
+        }
+      } catch (err) {
+        console.warn(`Failed to apply ${kind} output device`, err);
+        if (selectEl) selectEl.value = 'off';
+        localStorage.setItem(storageKey, 'off');
+      }
+    }
+
+    applyAllFXRouting();
+  }
+
   let outputDeviceSelect = null;
+  let videoOutputDeviceSelect = null;
+  let drumOutputDeviceSelect = null;
   let inputDeviceSelect = null;
   let monitorInputSelect = null;
   let midiDeviceSelect = null;
@@ -260,6 +329,12 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   let currentOutputNode = null;
   let externalOutputDest = null;
   let outputAudio = null;
+  let videoOutputDest = null;
+  let drumOutputDest = null;
+  let videoOutputAudio = null;
+  let drumOutputAudio = null;
+  let videoOutputNode = null;
+  let drumOutputNode = null;
   let micDeviceId = localStorage.getItem('ytbm_inputDeviceId') || 'default';
   // Monitoring starts disabled on each page load
   let monitorMicDeviceId = localStorage.getItem('ytbm_monitorInputDeviceId') || 'off';
@@ -316,6 +391,35 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     }
   }
 
+  async function populateAuxOutputSelect(selectEl, storageKey, labelPrefix) {
+    if (!selectEl) return;
+    const supportsSetSink = (HTMLMediaElement.prototype.setSinkId !== undefined);
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices || !supportsSetSink) {
+      selectEl.disabled = true;
+      selectEl.innerHTML = '<option>Unsupported</option>';
+      return;
+    }
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const outputs = devices.filter(d => d.kind === 'audiooutput');
+      selectEl.innerHTML = '';
+      selectEl.add(new Option(`${labelPrefix}: Off`, 'off'));
+      selectEl.add(new Option(`${labelPrefix}: Default`, 'default'));
+      outputs.forEach(d => {
+        const opt = new Option(`${labelPrefix}: ${d.label || 'Device'}`, d.deviceId);
+        selectEl.add(opt);
+      });
+      let saved = localStorage.getItem(storageKey) || 'off';
+      const hasSaved = Array.from(selectEl.options).some(opt => opt.value === saved);
+      if (!hasSaved) saved = 'off';
+      selectEl.value = saved;
+      localStorage.setItem(storageKey, saved);
+      selectEl.disabled = false;
+    } catch (err) {
+      console.error(`Failed to enumerate ${labelPrefix.toLowerCase()} output devices`, err);
+    }
+  }
+
   function buildOutputDeviceDropdown(parent) {
     if (outputDeviceSelect || !parent) return;
     outputDeviceSelect = document.createElement('select');
@@ -327,6 +431,46 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     populateOutputDeviceSelect().then(applySavedOutputDevice);
     if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
       navigator.mediaDevices.addEventListener('devicechange', populateOutputDeviceSelect);
+    }
+  }
+
+  function buildAuxOutputDeviceDropdowns(parent) {
+    if (!parent || videoOutputDeviceSelect || drumOutputDeviceSelect) return;
+    const row = document.createElement('div');
+    row.className = 'ytbm-panel-row';
+    row.style.gap = '6px';
+
+    videoOutputDeviceSelect = document.createElement('select');
+    videoOutputDeviceSelect.className = 'looper-btn';
+    videoOutputDeviceSelect.style.flex = '1 1 50%';
+    videoOutputDeviceSelect.title = 'Choose dedicated output for processed video audio';
+    videoOutputDeviceSelect.addEventListener('change', e => setAuxOutputDevice('video', e.target.value));
+
+    drumOutputDeviceSelect = document.createElement('select');
+    drumOutputDeviceSelect.className = 'looper-btn';
+    drumOutputDeviceSelect.style.flex = '1 1 50%';
+    drumOutputDeviceSelect.title = 'Choose dedicated output for processed drums/instrument audio';
+    drumOutputDeviceSelect.addEventListener('change', e => setAuxOutputDevice('drum', e.target.value));
+
+    row.appendChild(videoOutputDeviceSelect);
+    row.appendChild(drumOutputDeviceSelect);
+    parent.appendChild(row);
+
+    Promise.all([
+      populateAuxOutputSelect(videoOutputDeviceSelect, 'ytbm_videoOutputDeviceId', 'Video out'),
+      populateAuxOutputSelect(drumOutputDeviceSelect, 'ytbm_drumOutputDeviceId', 'Drums out')
+    ]).then(() => {
+      const videoSaved = localStorage.getItem('ytbm_videoOutputDeviceId') || 'off';
+      const drumSaved = localStorage.getItem('ytbm_drumOutputDeviceId') || 'off';
+      setAuxOutputDevice('video', videoSaved);
+      setAuxOutputDevice('drum', drumSaved);
+    });
+
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      navigator.mediaDevices.addEventListener('devicechange', () => {
+        populateAuxOutputSelect(videoOutputDeviceSelect, 'ytbm_videoOutputDeviceId', 'Video out');
+        populateAuxOutputSelect(drumOutputDeviceSelect, 'ytbm_drumOutputDeviceId', 'Drums out');
+      });
     }
   }
 
@@ -529,6 +673,15 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     }
     await setOutputDevice(id);
     if (outputDeviceSelect) outputDeviceSelect.value = id;
+  }
+
+  async function applySavedAuxOutputDevices() {
+    const videoId = localStorage.getItem('ytbm_videoOutputDeviceId') || 'off';
+    const drumId = localStorage.getItem('ytbm_drumOutputDeviceId') || 'off';
+    await setAuxOutputDevice('video', videoId);
+    await setAuxOutputDevice('drum', drumId);
+    if (videoOutputDeviceSelect) videoOutputDeviceSelect.value = videoId;
+    if (drumOutputDeviceSelect) drumOutputDeviceSelect.value = drumId;
   }
   /**************************************
   * Global Variables
@@ -5054,6 +5207,7 @@ async function setupAudioNodes() {
   await setupFxPadNodes();
 
   applyAllFXRouting();
+  await applySavedAuxOutputDevices();
 }
 
 // simple IR for reverb
@@ -5744,6 +5898,12 @@ function applyAllFXRouting() {
 
   tabPlaybackGateGain.connect(currentOutputNode || audioContext.destination);
   tabPlaybackGateGain.connect(videoDestination);
+  if (videoOutputNode) {
+    bus1Gain.connect(videoOutputNode);
+  }
+  if (drumOutputNode) {
+    bus2Gain.connect(drumOutputNode);
+  }
   updateTabPlaybackGate();
 
   // If eqFilterApplyTarget === "master", route masterGain -> eqFilterNode -> etc.
@@ -10968,6 +11128,7 @@ function addControls() {
   cw.appendChild(packsModuleWrap);
 
   buildOutputDeviceDropdown(cw);
+  buildAuxOutputDeviceDropdowns(cw);
   buildMonitorInputDropdown(cw);
   buildMonitorToggle(cw);
 
