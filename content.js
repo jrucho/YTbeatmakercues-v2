@@ -191,12 +191,16 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       outputAudio = null;
     }
 
+    mainOutputMuted = false;
     currentOutputNode = audioContext.destination;
     let success = true;
 
     const canUseCtxSink = typeof audioContext.setSinkId === 'function';
 
-    if (deviceId && deviceId !== 'default') {
+    if (deviceId === 'mute') {
+      mainOutputMuted = true;
+      currentOutputNode = null;
+    } else if (deviceId && deviceId !== 'default') {
       if (canUseCtxSink) {
         try {
           await audioContext.setSinkId(deviceId);
@@ -327,6 +331,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   let abletonLinkSocket = null;
   let abletonLinkRetryTimer = null;
   let currentOutputNode = null;
+  let mainOutputMuted = false;
   let externalOutputDest = null;
   let outputAudio = null;
   let videoOutputDest = null;
@@ -371,6 +376,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       const outputs = devices.filter(d => d.kind === 'audiooutput');
       outputDeviceSelect.innerHTML = '';
       outputDeviceSelect.add(new Option('Default output', 'default'));
+      outputDeviceSelect.add(new Option('Mute main output', 'mute'));
       outputs.forEach(d => {
         const opt = new Option(d.label || 'Device', d.deviceId);
         outputDeviceSelect.add(opt);
@@ -5896,7 +5902,9 @@ function applyAllFXRouting() {
     overallOutputGain.connect(tabPlaybackGateGain);
   }
 
-  tabPlaybackGateGain.connect(currentOutputNode || audioContext.destination);
+  if (!mainOutputMuted) {
+    tabPlaybackGateGain.connect(currentOutputNode || audioContext.destination);
+  }
   tabPlaybackGateGain.connect(videoDestination);
   if (videoOutputNode) {
     bus1Gain.connect(videoOutputNode);
