@@ -258,6 +258,18 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         try { videoOutputDest.disconnect(); } catch {}
         videoOutputDest = null;
       }
+      if (videoOutputBridgeNode) {
+        try { videoOutputBridgeNode.disconnect(); } catch {}
+        videoOutputBridgeNode = null;
+      }
+      if (videoOutputBridgeSource) {
+        try { videoOutputBridgeSource.disconnect(); } catch {}
+        videoOutputBridgeSource = null;
+      }
+      if (videoOutputBridgeContext) {
+        try { await videoOutputBridgeContext.close(); } catch {}
+        videoOutputBridgeContext = null;
+      }
       if (videoOutputAudio) {
         try { videoOutputAudio.pause(); } catch {}
         videoOutputAudio.srcObject = null;
@@ -270,6 +282,18 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         try { drumOutputDest.disconnect(); } catch {}
         drumOutputDest = null;
       }
+      if (drumOutputBridgeNode) {
+        try { drumOutputBridgeNode.disconnect(); } catch {}
+        drumOutputBridgeNode = null;
+      }
+      if (drumOutputBridgeSource) {
+        try { drumOutputBridgeSource.disconnect(); } catch {}
+        drumOutputBridgeSource = null;
+      }
+      if (drumOutputBridgeContext) {
+        try { await drumOutputBridgeContext.close(); } catch {}
+        drumOutputBridgeContext = null;
+      }
       if (drumOutputAudio) {
         try { drumOutputAudio.pause(); } catch {}
         drumOutputAudio.srcObject = null;
@@ -281,24 +305,52 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
 
     if (deviceId && deviceId !== 'off') {
       try {
-        const auxAudio = new Audio();
-        auxAudio.autoplay = true;
-        auxAudio.playsInline = true;
-        auxAudio.preload = 'auto';
-        auxAudio.style.display = 'none';
-        document.body.appendChild(auxAudio);
         const auxDest = audioContext.createMediaStreamDestination();
-        auxAudio.srcObject = auxDest.stream;
-        if (auxAudio.setSinkId) {
-          await auxAudio.setSinkId(deviceId === 'default' ? '' : deviceId);
+        const resolvedSinkId = (deviceId === 'default') ? '' : deviceId;
+        let routed = false;
+
+        // Prefer a low-latency AudioContext bridge first.
+        const bridgeCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+        if (typeof bridgeCtx.setSinkId === 'function') {
+          await bridgeCtx.setSinkId(resolvedSinkId);
+          const bridgeSource = bridgeCtx.createMediaStreamSource(auxDest.stream);
+          const bridgeGain = bridgeCtx.createGain();
+          bridgeGain.gain.value = 1;
+          bridgeSource.connect(bridgeGain).connect(bridgeCtx.destination);
+          routed = true;
+          if (isVideo) {
+            videoOutputBridgeContext = bridgeCtx;
+            videoOutputBridgeSource = bridgeSource;
+            videoOutputBridgeNode = bridgeGain;
+          } else {
+            drumOutputBridgeContext = bridgeCtx;
+            drumOutputBridgeSource = bridgeSource;
+            drumOutputBridgeNode = bridgeGain;
+          }
+        } else {
+          try { await bridgeCtx.close(); } catch {}
         }
-        await auxAudio.play().catch(() => {});
+
+        // Fallback for browsers without AudioContext.setSinkId support.
+        if (!routed) {
+          const auxAudio = new Audio();
+          auxAudio.autoplay = true;
+          auxAudio.playsInline = true;
+          auxAudio.preload = 'none';
+          auxAudio.style.display = 'none';
+          auxAudio.setAttribute('x-webkit-airplay', 'deny');
+          document.body.appendChild(auxAudio);
+          auxAudio.srcObject = auxDest.stream;
+          if (auxAudio.setSinkId) await auxAudio.setSinkId(resolvedSinkId);
+          await auxAudio.play().catch(() => {});
+          if (isVideo) videoOutputAudio = auxAudio;
+          else drumOutputAudio = auxAudio;
+        }
+
         if (isVideo) {
-          videoOutputAudio = auxAudio;
           videoOutputDest = auxDest;
           videoOutputNode = auxDest;
         } else {
-          drumOutputAudio = auxAudio;
           drumOutputDest = auxDest;
           drumOutputNode = auxDest;
         }
@@ -340,6 +392,12 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
   let drumOutputAudio = null;
   let videoOutputNode = null;
   let drumOutputNode = null;
+  let videoOutputBridgeContext = null;
+  let drumOutputBridgeContext = null;
+  let videoOutputBridgeSource = null;
+  let drumOutputBridgeSource = null;
+  let videoOutputBridgeNode = null;
+  let drumOutputBridgeNode = null;
   let micDeviceId = localStorage.getItem('ytbm_inputDeviceId') || 'default';
   // Monitoring starts disabled on each page load
   let monitorMicDeviceId = localStorage.getItem('ytbm_monitorInputDeviceId') || 'off';
@@ -463,8 +521,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
     parent.appendChild(row);
 
     Promise.all([
-      populateAuxOutputSelect(videoOutputDeviceSelect, 'ytbm_videoOutputDeviceId', 'Video out'),
-      populateAuxOutputSelect(drumOutputDeviceSelect, 'ytbm_drumOutputDeviceId', 'Drums out')
+      populateAuxOutputSelect(videoOutputDeviceSelect, 'ytbm_videoOutputDeviceId', 'Video output'),
+      populateAuxOutputSelect(drumOutputDeviceSelect, 'ytbm_drumOutputDeviceId', 'Drums output')
     ]).then(() => {
       const videoSaved = localStorage.getItem('ytbm_videoOutputDeviceId') || 'off';
       const drumSaved = localStorage.getItem('ytbm_drumOutputDeviceId') || 'off';
@@ -474,10 +532,26 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
 
     if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
       navigator.mediaDevices.addEventListener('devicechange', () => {
-        populateAuxOutputSelect(videoOutputDeviceSelect, 'ytbm_videoOutputDeviceId', 'Video out');
-        populateAuxOutputSelect(drumOutputDeviceSelect, 'ytbm_drumOutputDeviceId', 'Drums out');
+        populateAuxOutputSelect(videoOutputDeviceSelect, 'ytbm_videoOutputDeviceId', 'Video output');
+        populateAuxOutputSelect(drumOutputDeviceSelect, 'ytbm_drumOutputDeviceId', 'Drums output');
       });
     }
+  }
+
+  async function unlockDeviceNamesAndRefresh() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      stream.getTracks().forEach(t => t.stop());
+    } catch (err) {
+      console.warn('Device label unlock permission was denied or unavailable', err);
+    }
+    await Promise.all([
+      populateOutputDeviceSelect(),
+      populateInputDeviceSelect(),
+      populateMonitorInputSelect(),
+      populateAuxOutputSelect(videoOutputDeviceSelect, 'ytbm_videoOutputDeviceId', 'Video output'),
+      populateAuxOutputSelect(drumOutputDeviceSelect, 'ytbm_drumOutputDeviceId', 'Drums output')
+    ]);
   }
 
   async function populateInputDeviceSelect() {
@@ -11137,6 +11211,15 @@ function addControls() {
 
   buildOutputDeviceDropdown(cw);
   buildAuxOutputDeviceDropdowns(cw);
+  const unlockDevicesRow = document.createElement('div');
+  unlockDevicesRow.className = 'ytbm-panel-row';
+  const unlockDevicesBtn = document.createElement('button');
+  unlockDevicesBtn.className = 'looper-btn ytbm-advanced-btn';
+  unlockDevicesBtn.textContent = 'Unlock device names';
+  unlockDevicesBtn.title = 'Requests mic permission once so audio device names are visible on this Mac/profile';
+  unlockDevicesBtn.addEventListener('click', unlockDeviceNamesAndRefresh);
+  unlockDevicesRow.appendChild(unlockDevicesBtn);
+  cw.appendChild(unlockDevicesRow);
   buildMonitorInputDropdown(cw);
   buildMonitorToggle(cw);
 
