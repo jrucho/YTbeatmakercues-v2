@@ -907,6 +907,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       advancedPitchLabel = null,
       minimalPitchSlider = null,
       minimalPitchLabel = null,
+      minimalPitchModeButton = null,
       cuesButtonMin = null,
       minimalCuesLabel = null,
       loopButtonMin = null,
@@ -1104,6 +1105,9 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       // 4-Bus Audio nodes
       audioContext = null,
       videoGain = null,
+      videoSpeedStretchNode = null,
+      previewSpeedStretchNode = null,
+      speedStretchStatus = "loading",
       samplesGain = null,
       loopAudioGain = null,
       instrumentGain = null,
@@ -1176,6 +1180,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       pitchPercentage = 0,
       pitchSemitone = 0,
       pitchSemitoneMode = false,
+      speedOnlyMode = false,
+      speedHDMode = false,
       pitchTarget = "video", // "video" or "loop"
       videoPitchPercentage = 0,
       loopPitchPercentage = 0,
@@ -3701,10 +3707,15 @@ function cleanupResources() {
     loopRecorderNode = null;
     recordedFrames = [];
   }
+  videoSpeedStretchNode?.dispose();
+  previewSpeedStretchNode?.dispose();
   if (audioContext) {
     audioContext.close().catch(console.error);
     audioContext = null;
   }
+  videoSpeedStretchNode = null;
+  previewSpeedStretchNode = null;
+  speedStretchStatus = "loading";
   stopMonitoring();
   if (videoPreviewURL) {
     URL.revokeObjectURL(videoPreviewURL);
@@ -3771,6 +3782,8 @@ function captureAppState() {
     pitchPercentage,
     pitchSemitone,
     pitchSemitoneMode,
+    speedOnlyMode,
+    speedHDMode,
     pitchTarget,
     videoPitchPercentage,
     loopPitchPercentage,
@@ -3824,6 +3837,9 @@ function restoreAppState(st) {
   pitchPercentage = st.pitchPercentage;
   pitchSemitone = typeof st.pitchSemitone === "number" ? st.pitchSemitone : 0;
   pitchSemitoneMode = !!st.pitchSemitoneMode;
+  speedOnlyMode = !!st.speedOnlyMode;
+  // Earlier snapshots used the HQ engine for every speed-only state.
+  speedHDMode = speedOnlyMode && (typeof st.speedHDMode === "boolean" ? st.speedHDMode : true);
   pitchTarget = st.pitchTarget;
   videoPitchPercentage = st.videoPitchPercentage;
   loopPitchPercentage = st.loopPitchPercentage;
@@ -4742,9 +4758,12 @@ function onMinimalPointerUp(e) {
   pitchCluster.className = "ytbm-pitch-cluster";
   pitchCluster.style.marginLeft = "6px";
 
-  const pitchLabel = document.createElement("span");
+  const pitchLabel = document.createElement("button");
+  minimalPitchModeButton = pitchLabel;
+  pitchLabel.type = "button";
   pitchLabel.className = "ytbm-pitch-label";
   pitchLabel.textContent = "Pitch";
+  pitchLabel.addEventListener("click", toggleSpeedOnlyMode);
   pitchCluster.appendChild(pitchLabel);
 
   minimalPitchSlider = document.createElement("input");
@@ -4754,7 +4773,7 @@ function onMinimalPointerUp(e) {
   minimalPitchSlider.step = 1;
   minimalPitchSlider.value = getPitchDisplayValue();
   minimalPitchSlider.className = "ytbm-pitch-slider ytbm-range";
-  minimalPitchSlider.title = pitchSemitoneMode ? "Pitch (st)" : "Pitch (%)";
+  minimalPitchSlider.title = getPitchSliderTitle();
   minimalPitchSlider.style.width = "84px";
   minimalPitchSlider.style.maxWidth = "84px";
   minimalPitchSlider.style.flex = "0 0 84px";
@@ -4879,19 +4898,7 @@ function onMinimalPointerUp(e) {
     if (minimalUIContainer) {
       minimalUIContainer.style.display = (minimalActive && minimalVisible && !blindMode) ? "flex" : "none";
     }
-    const sliderMin = pitchSemitoneMode ? PITCH_SEMITONE_MIN : PITCH_PERCENT_MIN;
-    const sliderMax = pitchSemitoneMode ? PITCH_SEMITONE_MAX : PITCH_PERCENT_MAX;
-    const displayVal = getPitchDisplayValue();
-    const labelText = pitchSemitoneMode ? `${Math.round(pitchSemitone)} st` : `${Math.round(pitchPercentage)}%`;
-
-    if (minimalPitchSlider) {
-      minimalPitchSlider.min = sliderMin;
-      minimalPitchSlider.max = sliderMax;
-      minimalPitchSlider.step = 1;
-      minimalPitchSlider.value = displayVal;
-      minimalPitchSlider.title = pitchSemitoneMode ? "Pitch (st)" : "Pitch (%)";
-    }
-    if (minimalPitchLabel) minimalPitchLabel.textContent = labelText;
+    refreshPitchUI();
 
     if (minimalCuesLabel && cuesButtonMin) {
       const cc = Object.keys(cuePoints).length;
@@ -5123,6 +5130,7 @@ function initTwoDeck() {
 
   deckB.pause();
   activeDeck = "A";
+  syncSpeedPlayback();
 }
 
 async function jumpToCue(targetTime) {
@@ -5288,8 +5296,173 @@ async function setupAudioNodes() {
 
   await setupFxPadNodes();
 
+  await setupSpeedStretchNodes(audioContext);
   applyAllFXRouting();
+  syncSpeedPlayback();
   await applySavedAuxOutputDevices();
+}
+
+async function setupSpeedStretchNodes(ctx) {
+  speedStretchStatus = "loading";
+  try {
+    await ctx.audioWorklet.addModule(chrome.runtime.getURL("worklets/speed-stretch-worklet.js"));
+    if (ctx !== audioContext || ctx.state === "closed") return;
+    videoSpeedStretchNode = await createHighQualitySpeedNode(ctx);
+    previewSpeedStretchNode = await createHighQualitySpeedNode(ctx);
+    if (ctx !== audioContext || ctx.state === "closed") return;
+    speedStretchStatus = "hq";
+    const fallback = () => {
+      console.warn("Speed stretch processor failed; using browser pitch preservation.");
+      videoSpeedStretchNode?.dispose();
+      previewSpeedStretchNode?.dispose();
+      videoSpeedStretchNode = null;
+      previewSpeedStretchNode = null;
+      speedStretchStatus = "browser";
+      applyAllFXRouting();
+      syncSpeedPlayback();
+      refreshPitchUI();
+    };
+    videoSpeedStretchNode.processor.onprocessorerror = fallback;
+    previewSpeedStretchNode.processor.onprocessorerror = fallback;
+  } catch (err) {
+    videoSpeedStretchNode?.dispose();
+    previewSpeedStretchNode?.dispose();
+    videoSpeedStretchNode = null;
+    previewSpeedStretchNode = null;
+    speedStretchStatus = "browser";
+    console.warn("Custom speed stretch unavailable; using browser pitch preservation.", err);
+  }
+  refreshPitchUI();
+}
+
+async function createHighQualitySpeedNode(ctx) {
+  const processor = new AudioWorkletNode(ctx, "signalsmith-stretch", {
+    numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
+    channelCount: 2, channelCountMode: "explicit"
+  });
+  const input = ctx.createGain();
+  const output = ctx.createGain();
+  const dry = ctx.createGain();
+  const wet = ctx.createGain();
+  wet.gain.value = 0;
+  input.connect(dry).connect(output);
+  input.connect(processor).connect(wet).connect(output);
+  let messageId = 0;
+  const pending = new Map();
+  const dispose = () => {
+    input.disconnect();
+    processor.disconnect();
+    dry.disconnect();
+    wet.disconnect();
+    output.disconnect();
+    for (const request of pending.values()) {
+      clearTimeout(request.timeout);
+      request.reject(new Error("Stretch processor disposed"));
+    }
+    pending.clear();
+    processor.port.close();
+  };
+  const waitFor = (id) => new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error("Signalsmith Stretch initialization timed out"));
+    }, 10000);
+    pending.set(id, { resolve, reject, timeout });
+  });
+  processor.port.onmessage = ({ data }) => {
+    const request = pending.get(data[0]);
+    if (!request) return;
+    pending.delete(data[0]);
+    clearTimeout(request.timeout);
+    request.resolve(data[1]);
+  };
+  processor.onprocessorerror = () => {
+    for (const request of pending.values()) request.reject(new Error("Signalsmith Stretch WASM failed"));
+  };
+  const call = (method, ...args) => {
+    const id = messageId++;
+    const result = waitFor(id);
+    processor.port.postMessage([id, method, ...args]);
+    return result;
+  };
+  // Larger spectral windows help resolve bass and overlapping musical notes.
+  // Split computation is important for real-time 128-frame render callbacks.
+  const config = { blockMs: 160, intervalMs: 20, splitComputation: true };
+  let latencySeconds;
+  try {
+    await waitFor("ready");
+    await call("configure", config);
+    latencySeconds = await call("latency");
+    await call("schedule", { active: true, semitones: 0, tonalityHz: ctx.sampleRate });
+  } catch (err) {
+    dispose();
+    throw err;
+  }
+  let lastActive = false;
+  let lastRate = 1;
+  const ramp = (gain, value) => {
+    const now = ctx.currentTime;
+    if (gain.cancelAndHoldAtTime) gain.cancelAndHoldAtTime(now);
+    else {
+      gain.cancelScheduledValues(now);
+      gain.setValueAtTime(gain.value, now);
+    }
+    gain.linearRampToValueAtTime(value, now + 0.025);
+  };
+  const schedule = (active, rate) => {
+    // Live-input processing always consumes and produces the same frame count.
+    // The video supplies the tempo change; the spectral engine undoes ONLY its
+    // pitch change. Full-spectrum transposition also restores slowed formants.
+    processor.port.postMessage([messageId++, "schedule", {
+      active: true,
+      semitones: active ? -12 * Math.log2(rate) : 0,
+      tonalityHz: ctx.sampleRate,
+      formantSemitones: 0,
+      formantCompensation: false
+    }]);
+  };
+  return {
+    input, output, processor, latencySeconds, dispose,
+    port: {
+      postMessage(message) {
+        if (message.reset) {
+          call("configure", config).then(() => schedule(lastActive, lastRate)).catch((err) => {
+            console.warn("Could not reset the stretch processor.", err);
+            processor.onprocessorerror?.();
+          });
+        }
+        if (typeof message.active !== "boolean" || !Number.isFinite(message.rate)) return;
+        const rate = Math.max(0.25, Math.min(4, message.rate));
+        if (message.active === lastActive && rate === lastRate) return;
+        schedule(message.active, rate);
+        if (message.active !== lastActive) {
+          ramp(dry.gain, message.active ? 0 : 1);
+          ramp(wet.gain, message.active ? 1 : 0);
+        }
+        lastActive = message.active;
+        lastRate = rate;
+      }
+    }
+  };
+}
+
+function syncSpeedPlayback() {
+  const rate = pitchTarget === "video" ? getCurrentPitchRate() : 1;
+  const active = speedOnlyMode && pitchTarget === "video";
+  const hdActive = active && speedHDMode;
+  const message = { active: hdActive && Math.abs(rate - 1) > 1e-8, rate };
+  videoSpeedStretchNode?.port.postMessage(message);
+  previewSpeedStretchNode?.port.postMessage(message);
+  // Include the hidden cue deck so cue crossfades keep the same speed/pitch.
+  for (const vid of new Set([getVideoElement(), deckA, deckB])) {
+    if (!vid) continue;
+    vid.preservesPitch = active && !(hdActive && videoSpeedStretchNode && vid._mediaSource);
+    vid.playbackRate = rate;
+  }
+  if (videoPreviewElement) {
+    videoPreviewElement.preservesPitch = active && !(hdActive && previewSpeedStretchNode && videoPreviewElement._mediaSource);
+    videoPreviewElement.playbackRate = rate;
+  }
 }
 
 // simple IR for reverb
@@ -5863,6 +6036,8 @@ function applyAllFXRouting() {
   if (!fxPadLeveler) fxPadLeveler = createLevelComp(audioContext);
   // First, disconnect everything that may have been connected:
   videoGain.disconnect();
+  if (videoSpeedStretchNode) videoSpeedStretchNode.output.disconnect();
+  if (previewSpeedStretchNode) previewSpeedStretchNode.output.disconnect();
   if (sidechainGain) sidechainGain.disconnect();
   if (antiClickGain) antiClickGain.disconnect();
   loopAudioGain.disconnect();
@@ -5891,8 +6066,12 @@ function applyAllFXRouting() {
   // Decide how to chain the "video" path:
   // videoGain -> antiClickGain? -> (optionally eq->reverb->cassette) -> bus1Gain
   let currentVidNode = videoGain;
+  if (videoSpeedStretchNode) {
+    currentVidNode.connect(videoSpeedStretchNode.input);
+    currentVidNode = videoSpeedStretchNode.output;
+  }
   if (sidechainGain) {
-    videoGain.connect(sidechainGain);
+    currentVidNode.connect(sidechainGain);
     currentVidNode = sidechainGain;
   }
   if (antiClickGain) {
@@ -5938,7 +6117,11 @@ function applyAllFXRouting() {
     let prev = videoPreviewElement._mediaSource;
     // Disconnect any existing connections
     prev.disconnect();
-    // Connect the preview directly to bus4Gain (bypassing EQ, reverb, and cassette)
+    if (previewSpeedStretchNode) {
+      prev.connect(previewSpeedStretchNode.input);
+      prev = previewSpeedStretchNode.output;
+    }
+    // Connect the preview to bus4Gain (bypassing EQ, reverb, and cassette)
     prev.connect(bus4Gain);
   }
 
@@ -5989,6 +6172,7 @@ function applyAllFXRouting() {
     bus2Gain.connect(drumOutputNode);
   }
   updateTabPlaybackGate();
+  syncSpeedPlayback();
 
   // If eqFilterApplyTarget === "master", route masterGain -> eqFilterNode -> etc.
   // (But the above logic already demonstrates separate compression paths.)
@@ -7666,8 +7850,8 @@ function createOrUpdateVideoPreviewElement() {
     });
   }
   videoPreviewElement.src = videoPreviewURL;
-  videoPreviewElement.preservesPitch = false;
-  videoPreviewElement.playbackRate = 1;
+  previewSpeedStretchNode?.port.postMessage({ reset: true });
+  syncSpeedPlayback();
   videoPreviewElement.style.display = "block";
 }
 
@@ -11950,6 +12134,35 @@ function getPitchDisplayValue() {
   return pitchSemitoneMode ? pitchSemitone : pitchPercentage;
 }
 
+function getPitchSliderTitle() {
+  if (speedOnlyMode) {
+    const mode = speedHDMode ? "Speed HD" : "Speed";
+    return pitchSemitoneMode
+      ? `${mode} (semitone-equivalent tempo steps) — original pitch preserved`
+      : `${mode} (%) — original pitch preserved`;
+  }
+  return pitchSemitoneMode ? "Pitch (st)" : "Pitch (%)";
+}
+
+function toggleSpeedOnlyMode() {
+  if (!speedOnlyMode) {
+    if (pitchTarget !== "video") togglePitchTarget();
+    speedOnlyMode = true;
+    speedHDMode = false;
+  } else if (!speedHDMode) {
+    speedHDMode = true;
+  } else {
+    speedOnlyMode = false;
+    speedHDMode = false;
+  }
+  updatePitch(getPitchDisplayValue());
+  if (speedOnlyMode) {
+    ensureAudioContext().then(syncSpeedPlayback).catch((err) => {
+      console.warn("Could not initialize speed audio processing.", err);
+    });
+  }
+}
+
 function refreshPitchUI() {
   const sliderMin = pitchSemitoneMode ? PITCH_SEMITONE_MIN : PITCH_PERCENT_MIN;
   const sliderMax = pitchSemitoneMode ? PITCH_SEMITONE_MAX : PITCH_PERCENT_MAX;
@@ -11959,14 +12172,31 @@ function refreshPitchUI() {
     pitchSliderElement.max = sliderMax;
     pitchSliderElement.step = 1;
     pitchSliderElement.value = displayVal;
-    pitchSliderElement.title = pitchSemitoneMode ? "Pitch (st)" : "Pitch (%)";
+    pitchSliderElement.title = getPitchSliderTitle();
   }
   if (minimalPitchSlider) {
     minimalPitchSlider.min = sliderMin;
     minimalPitchSlider.max = sliderMax;
     minimalPitchSlider.step = 1;
     minimalPitchSlider.value = displayVal;
-    minimalPitchSlider.title = pitchSemitoneMode ? "Pitch (st)" : "Pitch (%)";
+    minimalPitchSlider.title = getPitchSliderTitle();
+  }
+  if (minimalPitchModeButton) {
+    const mode = speedOnlyMode ? (speedHDMode ? "Speed HD" : "Speed") : "Pitch";
+    const engine = speedHDMode ? speedStretchStatus : (speedOnlyMode ? "browser" : "pitch");
+    minimalPitchModeButton.textContent = mode;
+    minimalPitchModeButton.title = !speedOnlyMode
+      ? "Pitch: speed and pitch change together. Click for Speed (original pitch preserved)."
+      : (!speedHDMode
+        ? "Speed: browser pitch-preserving playback. Click for Speed HD (Signalsmith Stretch)."
+        : (speedStretchStatus === "hq"
+          ? `Speed HD: Signalsmith Stretch (${Math.round((videoSpeedStretchNode?.latencySeconds || 0) * 1000)} ms audio latency). Original pitch preserved. Click for Pitch.`
+          : (speedStretchStatus === "browser"
+            ? "Speed HD: HD engine unavailable; using browser stretch fallback. Click for Pitch."
+            : "Speed HD: loading Signalsmith Stretch; using browser stretch until ready. Click for Pitch.")));
+    minimalPitchModeButton.setAttribute("data-engine", engine);
+    minimalPitchModeButton.setAttribute("aria-label", `${mode}. ${minimalPitchModeButton.title}`);
+    minimalPitchModeButton.setAttribute("aria-pressed", String(speedOnlyMode));
   }
   const labelText = pitchSemitoneMode ? `${Math.round(pitchSemitone)} st` : `${Math.round(pitchPercentage)}%`;
   if (advancedPitchLabel) advancedPitchLabel.innerText = labelText;
@@ -11988,27 +12218,13 @@ function updatePitch(v) {
 
   const rate = getCurrentPitchRate();
 
-  // Apply pitch even while the video‑looper is recording
-  if (pitchTarget === "video") {
-    const vid = getVideoElement();
-    if (vid) {
-      vid.playbackRate = rate;
-      vid.preservesPitch = false;
-    }
-    if (videoPreviewElement) {
-      videoPreviewElement.playbackRate = rate;
-      videoPreviewElement.preservesPitch = false;
-    }
-  } else {
-    // pitchTarget === "loop"
+  // Apply pitch even while the video-looper is recording.
+  if (pitchTarget === "loop") {
     loopSources.forEach((src, i) => {
       if (src) src.playbackRate.value = rate * (audioLoopRates[i] || 1);
     });
-    // Keep the main video at normal speed
-    if (videoPreviewElement) videoPreviewElement.playbackRate = 1;
-    const mv = getVideoElement();
-    if (mv && !mv.paused) mv.playbackRate = 1;
   }
+  syncSpeedPlayback();
 
   // Update UI elements
   refreshPitchUI();
@@ -12022,17 +12238,20 @@ function getCurrentPitchRate() {
   return 1 + pitchPercentage / 100;
 }
 function togglePitchTarget() {
+  speedOnlyMode = false;
+  speedHDMode = false;
   if (pitchTarget === "video") {
     videoPitchPercentage = pitchPercentage;
     pitchTarget = "loop";
     pitchPercentage = loopPitchPercentage;
-    updatePitch(pitchPercentage);
   } else {
     loopPitchPercentage = pitchPercentage;
     pitchTarget = "video";
     pitchPercentage = videoPitchPercentage;
-    updatePitch(pitchPercentage);
   }
+  // Saved target values are percentages; convert before feeding a st fader.
+  pitchSemitone = 12 * Math.log2(1 + pitchPercentage / 100);
+  updatePitch(getPitchDisplayValue());
 }
 
 function togglePitchMode(forceValue = null) {
@@ -12053,6 +12272,7 @@ function stepPitch(delta) {
 }
 
 function getGlobalPitchSemitone() {
+  if (speedOnlyMode) return 0;
   return 12 * Math.log2(getCurrentPitchRate());
 }
 
@@ -14823,11 +15043,26 @@ function injectCustomCSS() {
       margin-left: 6px;
     }
     .ytbm-pitch-label {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      border-radius: 4px;
+      padding: 0;
+      cursor: pointer;
+      font-family: inherit;
       font-size: 12px;
       font-weight: 600;
       letter-spacing: 0.08em;
       text-transform: uppercase;
       color: rgba(255,255,255,0.8);
+    }
+    .ytbm-pitch-label:hover,
+    .ytbm-pitch-label[aria-pressed="true"] {
+      color: #fff;
+    }
+    .ytbm-pitch-label:focus-visible {
+      outline: 2px solid rgba(255,255,255,0.8);
+      outline-offset: 3px;
     }
     .ytbm-pitch-value {
       font-size: 11px;
@@ -15305,6 +15540,7 @@ function onNewVideoLoaded() {
   pitchPercentage = 0;
   videoPitchPercentage = 0;
   loopPitchPercentage = 0;
+  videoSpeedStretchNode?.port.postMessage({ reset: true });
 
   updatePitch(0); // calls your function that resets slider & playbackRate
 }

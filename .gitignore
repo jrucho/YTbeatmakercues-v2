@@ -1,0 +1,11 @@
+.DS_Store
+ytbeatmakercues-*.zip
+
+# Keep the pinned runtime distribution available in GitHub source downloads.
+# Ignore other installed dependencies and npm's generated module metadata.
+node_modules/*
+!node_modules/signalsmith-stretch/
+node_modules/signalsmith-stretch/*
+!node_modules/signalsmith-stretch/SignalsmithStretch.mjs
+!node_modules/signalsmith-stretch/package.json
+!node_modules/signalsmith-stretch/README.md

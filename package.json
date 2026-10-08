@@ -1,0 +1,12 @@
+{
+  "name": "youtube-beatmaker-cues",
+  "version": "2.3.6",
+  "private": true,
+  "description": "Local runtime dependency and audio checks for the Chrome extension",
+  "scripts": {
+    "test": "node --test tests/speed-stretch.test.cjs"
+  },
+  "dependencies": {
+    "signalsmith-stretch": "1.3.2"
+  }
+}

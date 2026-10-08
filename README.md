@@ -16,6 +16,13 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.3.6
+- Click the minimal-bar label to cycle **Pitch → Speed → Speed HD → Pitch**. Pitch changes speed and pitch together; Speed preserves pitch using Chrome's processing; Speed HD preserves pitch using Signalsmith Stretch.
+- Added the official **Signalsmith Stretch** WebAssembly spectral engine for Speed HD, using a 160 ms quality-focused analysis window and split computation for realtime playback.
+- Hover **Speed HD** to see engine readiness, processing latency, or browser fallback status.
+- **Percent/Semitones** selection stays independent of **Pitch/Speed**. In Speed mode, semitones represent equivalent tempo ratios: +12 doubles speed, −12 halves it, with no musical pitch shift.
+- Normal-speed playback bypasses the stretch processor. At other speeds, HQ processing adds approximately **180 ms of audio latency**. The engine is bundled locally; runtime playback does not need a CDN or network download. Extreme stretching can still produce artifacts.
+
 ## New in 2.3.5
 - Added dedicated **Video output** and **Drums output** selectors in Advanced view so processed stems can be routed to separate output devices.
 - Added **Mute main output** option to the main output selector for separated-output-only workflows.
@@ -130,6 +137,16 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
   include the modified pitch. If loops are pitched when exporting, each file
   name ends with `-pitched-<BPM>bpm` where `<BPM>` reflects the new tempo.
   Export uses offline rendering for reliability.
+  Click the minimal-bar label to cycle **Pitch → Speed → Speed HD → Pitch**.
+  **Pitch** changes playback speed and pitch together. **Speed** changes video
+  speed while preserving the original pitch with Chrome's processing.
+  **Speed HD** uses Signalsmith Stretch for quality-focused processing, adding
+  approximately 180 ms of audio latency. Hover the label for HD readiness or
+  fallback status. Your selected Percent/Semitones units and fader value are
+  retained; in either speed mode, semitone steps describe the tempo ratio, not
+  a pitch shift. Double-click the fader to return to normal speed. Both speed
+  modes target video playback (including the video-loop preview); selecting
+  the Loop target restores Pitch mode.
 
 - 🎛️ **Live Effects**  
   Toggle EQ (`E`), Compressor (`C`), Reverb (`Q`), and Cassette (`W`) in real time.

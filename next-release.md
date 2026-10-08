@@ -1,3 +1,28 @@
+# Release 2.3.6
+
+## Summary
+Release **2.3.6** adds a three-step Pitch/Speed/Speed HD control on the minimal bar and Signalsmith Stretch pitch-preserving speed processing.
+
+## Clean changelog
+- Added a clickable **Pitch → Speed → Speed HD → Pitch** label with keyboard focus and pressed-state feedback. Speed uses browser pitch preservation; Speed HD uses Signalsmith Stretch.
+- Added official **Signalsmith Stretch 1.3.2** for Speed HD, a locally bundled MIT-licensed WebAssembly spectral engine.
+- Use a 160 ms analysis window, 20 ms processing interval, stereo processing and split computation for quality-focused live pitch correction, including +12 semitone correction at half-speed.
+- The Speed HD tooltip reports engine readiness, actual latency, and browser fallback status.
+- Routed both cue decks and the video-loop preview through pitch correction; processed video audio also reaches existing effects, stems, and recorder routing.
+- Bypass processing at normal speed and fall back to browser pitch preservation if the worklet is unavailable.
+- Keep Percent/Semitones selection when switching between Pitch and Speed, including when changing units inside Speed mode.
+- Fixed percentage-to-semitone conversion when switching Video/Loop targets.
+- Keep instrument pitch unchanged in Speed mode.
+- Updated extension version to **2.3.6** in `manifest.json`.
+
+## Processing latency
+HQ processing adds approximately 180 ms of audio latency, as reported by the engine. Normal speed uses the direct dry path. Extreme settings can still produce artifacts; perceived quality depends on the source material.
+
+## Local development
+Run `npm ci` to restore the pinned Signalsmith distribution, `npm test` for the WASM audio checks, and `bash build_release.sh` to package the extension. The release ZIP includes the engine and its MIT notice; no runtime CDN is used.
+
+---
+
 # Release 2.3.5
 
 ## Summary
