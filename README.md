@@ -16,6 +16,16 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.3.8
+- Added **Speed HD latency** profiles in Advanced: **Quality ~168 ms**, **Balanced ~104 ms**, and **Live ~68 ms**. Quality keeps the previous 160 ms analysis window and processes more frequently; this uses more CPU. The shorter-window profiles may add artifacts, especially on bass, drums and extreme stretching.
+- Replaced normal YouTube cross-tab bitmap transport with **local, video-only WebRTC feeds**. Signaling stays local and uses no STUN/TURN service. Source tabs do not need a JavaScript timer to deliver each frame.
+- One output compositor renders at **1920×1080 / 30 fps**, driven by the visible monitor window when open. Default/affine pin layouts use a single draw per feed, and pixelate canvases are reused.
+- Added per-feed decoded FPS and explicit snapshot-fallback status. Source resolution is bounded for the mosaic, obsolete frames are discarded, and stalled native connections recover automatically.
+- While cross-tab VJ is active, participating tabs are protected from automatic discarding and the extension requests display/sleep protection. Turning VJ FX off restores the original tab settings and releases that protection. This does not globally disable Chrome Energy Saver, freezing policies, or hardware/thermal limits.
+- Tab registration survives service-worker idle restarts. Up to eight selected feeds are supported; four-feed browser tests passed, but six/eight-feed performance depends on hardware and source complexity.
+
+See **[VJ-LATENCY-TESTING.md](VJ-LATENCY-TESTING.md)** for setup, latency profiles and performance validation.
+
 ## New in 2.3.7
 - Smoothed sidechain attack/release edges and rapid retriggering to reduce gain-discontinuity clicks, while keeping the selected curve duration and adding no buffering stage.
 - Improved cue-click handling across keyboard, MIDI, pads and sequencer playback: interrupt-safe micro-fades, decoder-ready fade-in and cancellation of obsolete cue requests, without a new audio buffer.

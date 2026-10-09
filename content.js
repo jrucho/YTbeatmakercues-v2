@@ -1187,6 +1187,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       speedOnlyMode = false,
       speedHDMode = false,
       speedHDTuneSemitone = 0,
+      speedHDLatencyProfile = readSpeedHDLatencyProfile(),
+      speedHDLatencySelect = null,
       pitchTarget = "video", // "video" or "loop"
       videoPitchPercentage = 0,
       loopPitchPercentage = 0,
@@ -1237,6 +1239,15 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       vjBroadcastBusy = false,
       vjLastBroadcastAt = 0,
       vjBroadcastMinIntervalMs = 0,
+      vjLiveTransport = null,
+      vjLiveStatusElement = null,
+      vjRenderClockWindow = null,
+      vjLastRenderAt = -Infinity,
+      vjFallbackCanvas = null,
+      vjPixelCanvas = null,
+      vjPixelCtx = null,
+      vjReceiverEpoch = 0,
+      vjRecordingDemand = false,
       vjTabOrder = [],
       vjControlsSyncUI = null,
       // We'll keep them to identify which button is which
@@ -3700,6 +3711,7 @@ function addTrackedListener(target, type, listener, options) {
 }
 function cleanupResources() {
   cancelCueSeek();
+  stopVJRenderer();
   [mediaRecorder, videoMediaRecorder].forEach(mr => {
     if (mr && mr.state === "recording") {
       mr.stop();
@@ -4982,12 +4994,16 @@ function initCrossTabChannel() {
     crossTabVJChannel.onmessage = (evt) => {
       const msg = evt?.data;
       if (!msg || msg.tabId === ytbmTabId) return;
-      if (msg.type === 'vj-frame' && msg.frame && vjControls.crossTabStreamsEnabled) {
+      if (msg.type === 'vj-frame' && msg.frame) {
+        if (!vjControls.crossTabStreamsEnabled || (vjLiveTransport && !vjLiveTransport.isReceiver())) {
+          try { msg.frame.close(); } catch {}
+          return;
+        }
         const prev = remoteVJFrames.get(msg.tabId);
         if (prev?.bitmap?.close) {
           try { prev.bitmap.close(); } catch {}
         }
-        remoteVJFrames.set(msg.tabId, { bitmap: msg.frame, ts: Number(msg.ts) || Date.now() });
+        remoteVJFrames.set(msg.tabId, { bitmap: msg.frame, ts: Number(msg.ts) || Date.now(), receivedAt: Date.now() });
       }
       if (msg.type === 'vj-frame-clear') {
         const prev = remoteVJFrames.get(msg.tabId);
@@ -5017,6 +5033,7 @@ addTrackedListener(window, 'blur', () => {
   updateTabPlaybackGate();
 });
 addTrackedListener(window, 'pagehide', () => {
+  stopVJRenderer();
   if (crossTabVJChannel) {
     try { crossTabVJChannel.postMessage({ type: 'vj-frame-clear', tabId: ytbmTabId }); } catch {}
   }
@@ -5375,8 +5392,8 @@ async function setupSpeedStretchNodes(ctx) {
   try {
     await ctx.audioWorklet.addModule(chrome.runtime.getURL("worklets/speed-stretch-worklet.js"));
     if (ctx !== audioContext || ctx.state === "closed") return;
-    videoSpeedStretchNode = await createHighQualitySpeedNode(ctx);
-    previewSpeedStretchNode = await createHighQualitySpeedNode(ctx);
+    videoSpeedStretchNode = await createHighQualitySpeedNode(ctx, speedHDLatencyProfile);
+    previewSpeedStretchNode = await createHighQualitySpeedNode(ctx, speedHDLatencyProfile);
     if (ctx !== audioContext || ctx.state === "closed") return;
     speedStretchStatus = "hq";
     const fallback = () => {
@@ -5403,7 +5420,39 @@ async function setupSpeedStretchNodes(ctx) {
   refreshPitchUI();
 }
 
-async function createHighQualitySpeedNode(ctx) {
+function readSpeedHDLatencyProfile() {
+  try {
+    const profile = localStorage.getItem('ytbm_hdLatencyProfile');
+    return ['quality', 'balanced', 'live'].includes(profile) ? profile : 'quality';
+  } catch { return 'quality'; }
+}
+
+function getSpeedHDLatencyConfig(profile = 'quality') {
+  const profiles = {
+    quality: { blockMs: 160, intervalMs: 8, splitComputation: true },
+    balanced: { blockMs: 96, intervalMs: 8, splitComputation: true },
+    live: { blockMs: 64, intervalMs: 4, splitComputation: true }
+  };
+  return profiles[profile] || profiles.quality;
+}
+
+async function setSpeedHDLatencyProfile(profile) {
+  speedHDLatencyProfile = ['quality', 'balanced', 'live'].includes(profile) ? profile : 'quality';
+  try { localStorage.setItem('ytbm_hdLatencyProfile', speedHDLatencyProfile); } catch {}
+  if (speedHDLatencySelect) speedHDLatencySelect.disabled = true;
+  try {
+    await Promise.all([videoSpeedStretchNode, previewSpeedStretchNode].filter(Boolean)
+      .map((node) => node.setProfile(speedHDLatencyProfile)));
+    refreshPitchUI();
+  } catch (err) {
+    console.warn('Could not reconfigure the HD latency profile', err);
+    videoSpeedStretchNode?.processor.onprocessorerror?.();
+  } finally {
+    if (speedHDLatencySelect) speedHDLatencySelect.disabled = false;
+  }
+}
+
+async function createHighQualitySpeedNode(ctx, profile = 'quality') {
   const processor = new AudioWorkletNode(ctx, "signalsmith-stretch", {
     numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
     channelCount: 2, channelCountMode: "explicit"
@@ -5455,7 +5504,7 @@ async function createHighQualitySpeedNode(ctx) {
   };
   // Larger spectral windows help resolve bass and overlapping musical notes.
   // Split computation is important for real-time 128-frame render callbacks.
-  const config = { blockMs: 160, intervalMs: 20, splitComputation: true };
+  let config = getSpeedHDLatencyConfig(profile);
   let latencySeconds;
   try {
     await waitFor("ready");
@@ -5497,8 +5546,14 @@ async function createHighQualitySpeedNode(ctx) {
       formantCompensation: false
     }]);
   };
-  return {
+  const node = {
     input, output, processor, latencySeconds, dispose,
+    async setProfile(profile) {
+      config = getSpeedHDLatencyConfig(profile);
+      await call('configure', config);
+      node.latencySeconds = await call('latency');
+      schedule(lastActive, lastRate, lastTuneSemitones);
+    },
     port: {
       postMessage(message) {
         if (message.reset) {
@@ -5523,6 +5578,7 @@ async function createHighQualitySpeedNode(ctx) {
       }
     }
   };
+  return node;
 }
 
 function syncSpeedPlayback() {
@@ -7006,7 +7062,7 @@ var enableReelsSupport = true;
 
 function getVideoElement() {
   // First look for a video; if none, try for an audio.
-  let media = document.querySelector("video") || document.querySelector("audio");
+  let media = document.querySelector("video:not(.ytbm-native-vj-feed)") || document.querySelector("audio");
   if (!media && enableReelsSupport) {
     if (window.location.href.includes("/shorts/") || window.location.href.includes("/reels/")) {
       media = document.querySelector("ytd-reel-video-renderer video") ||
@@ -7855,6 +7911,8 @@ function startVideoRecording() {
 
   let captureStream = getVideoCaptureStreamForLooper(mv);
   if (!captureStream) {
+    vjRecordingDemand = false;
+    vjLiveTransport?.tick();
     alert("Unable to capture video stream!");
     return;
   }
@@ -7875,6 +7933,8 @@ function startVideoRecording() {
     if (e.data.size > 0) videoRecordedChunks.push(e.data);
   };
   videoMediaRecorder.onstop = () => {
+    vjRecordingDemand = false;
+    vjLiveTransport?.tick();
     bus1RecGain.gain.value = 1;
     bus2RecGain.gain.value = 1;
     bus3RecGain.gain.value = 0;
@@ -8105,6 +8165,7 @@ function applySharedVJControlsFromStorage(raw) {
         : vjControls.corners
     };
     ensureVJDefaults();
+    ensureVJLiveTransport();
     if (typeof vjControlsSyncUI === 'function') vjControlsSyncUI();
   } catch {}
 }
@@ -8115,16 +8176,58 @@ function setVJModuleEnabled(enabled) {
   if (vjModuleEnabled) startVJRenderer(); else stopVJRenderer();
 }
 
+function setVJPerformanceSession(active) {
+  try {
+    chrome.runtime.sendMessage({ type: 'ytbm-vj-performance', active }, () => {
+      if (chrome.runtime.lastError) return;
+    });
+  } catch {}
+}
+
+function ensureVJLiveTransport() {
+  const enabled = vjModuleEnabled && vjControls.crossTabStreamsEnabled && window.top === window && typeof YTBMLiveVJ === 'function';
+  if (!enabled) {
+    if (vjLiveTransport) { vjLiveTransport.stop(); vjLiveTransport = null; setVJPerformanceSession(false); }
+    return;
+  }
+  if (vjLiveTransport) return;
+  initCrossTabChannel();
+  vjLiveTransport = new YTBMLiveVJ({
+    id: ytbmTabId,
+    getVideo: getVideoElement,
+    getPriority: () => {
+      if (vjMonitorWindow && !vjMonitorWindow.closed && !vjMonitorWindow.document.hidden) return 2;
+      return document.hidden ? 0 : 1;
+    },
+    getEpoch: () => vjReceiverEpoch,
+    getRecording: () => vjRecordingDemand,
+    getSources: () => (vjTabOrder?.length ? vjTabOrder : [ytbmTabId, ...vjLiveTransport.peers.keys()].filter((id, i, all) => all.indexOf(id) === i))
+      .slice(0, Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1))),
+    getLimits: () => Number(vjControls.streamCount) > 4 ? { width: 640, height: 360 } : { width: 960, height: 540 },
+    onUpdate: () => {
+      if (!vjLiveStatusElement || !vjLiveTransport) return;
+      const feeds = [...vjLiveTransport.videos.values()];
+      const fps = feeds.map((feed) => Math.round(feed.fps)).join('/');
+      const fallbackCount = [...remoteVJFrames.keys()].filter((id) => !vjLiveTransport.videos.has(id)).length;
+      vjLiveStatusElement.textContent = vjLiveTransport.isReceiver()
+        ? `1080p / 30 fps output · ${feeds.length} native remote feeds${fps ? ` (${fps} fps)` : ''}${fallbackCount ? ` · ${fallbackCount} snapshot fallback` : ''}`
+        : (vjLiveTransport.sourceError ? `Snapshot fallback: ${vjLiveTransport.sourceError}` :
+          (vjLiveTransport.hasNativeSender() ? 'Native video source → output tab' : 'Connecting native feed · snapshot fallback until ready'));
+      vjLiveStatusElement.title = 'Source FPS is measured from WebRTC decoded-frame statistics. Keep the monitor window visible. Browser/hardware overload can still drop frames.';
+    }
+  });
+  vjLiveTransport.start();
+  setVJPerformanceSession(true);
+}
+
 function ensureVJCanvases(requirePreview = false) {
   if (requirePreview && !vjPreviewCanvas) return false;
   const vid = getVideoElement();
   if (!vid) return false;
   // Keep a stable 16:9 VJ stage while preserving input aspect inside it.
   const stageRatio = 16 / 9;
-  const srcW = Math.max(320, vid.videoWidth || 1280);
-  const srcH = Math.max(180, vid.videoHeight || 720);
-  const w = Math.max(1140, srcW);
-  const h = Math.max(540, Math.round(w / stageRatio));
+  const w = 1920;
+  const h = Math.round(w / stageRatio);
   if (!vjSourceCanvas) {
     vjSourceCanvas = document.createElement('canvas');
     vjSourceCtx = vjSourceCanvas.getContext('2d', { alpha: false });
@@ -8271,6 +8374,17 @@ function bilerp(p00, p10, p11, p01, u, v) {
 function drawMappedQuad(ctx, img, corners, width, height, subdivisions = 10) {
   const pts = corners.map(c => ({ x: c.x * width, y: c.y * height }));
   const p00 = pts[0], p10 = pts[1], p11 = pts[2], p01 = pts[3];
+  // Default mosaics and affine pin layouts need one draw, not 128 clipped
+  // full-stage draws per feed. Keep the mesh for genuinely warped quads.
+  if (Math.abs(p00.x + p11.x - p10.x - p01.x) < 0.01 &&
+    Math.abs(p00.y + p11.y - p10.y - p01.y) < 0.01) {
+    ctx.save();
+    ctx.transform((p10.x - p00.x) / width, (p10.y - p00.y) / width,
+      (p01.x - p00.x) / height, (p01.y - p00.y) / height, p00.x, p00.y);
+    ctx.drawImage(img, 0, 0, width, height);
+    ctx.restore();
+    return;
+  }
   for (let y = 0; y < subdivisions; y++) {
     const v0 = y / subdivisions, v1 = (y + 1) / subdivisions;
     for (let x = 0; x < subdivisions; x++) {
@@ -8337,43 +8451,56 @@ function resetStreamPinCorner(streamIndex, cornerIndex) {
 
 
 function getVJStreamSources(localVideo) {
-  const entries = [];
-  if (localVideo) entries.push({ tabId: ytbmTabId, source: localVideo, ts: Date.now() });
+  const entries = new Map();
+  if (localVideo) entries.set(ytbmTabId, localVideo);
   if (vjControls.crossTabStreamsEnabled) {
     remoteVJFrames.forEach((f, tabId) => {
-      if (f && f.bitmap) entries.push({ tabId, source: f.bitmap, ts: f.ts || 0 });
+      if (Date.now() - (f.receivedAt || f.ts || 0) > 20000) {
+        try { f.bitmap?.close(); } catch {}
+        remoteVJFrames.delete(tabId);
+      } else if (f?.bitmap) entries.set(tabId, f.bitmap);
+    });
+    vjLiveTransport?.videos.forEach((feed, tabId) => {
+      if (feed.video.readyState >= 2) entries.set(tabId, feed.video);
     });
   }
-  const orderMap = new Map((vjTabOrder || []).map((id, idx) => [id, idx]));
-  entries.sort((a, b) => {
-    const ai = orderMap.has(a.tabId) ? orderMap.get(a.tabId) : Number.MAX_SAFE_INTEGER;
-    const bi = orderMap.has(b.tabId) ? orderMap.get(b.tabId) : Number.MAX_SAFE_INTEGER;
-    if (ai !== bi) return ai - bi;
-    return (a.ts || 0) - (b.ts || 0);
-  });
-  const sources = entries.map((e) => e.source).filter(Boolean);
-  return sources.length ? sources : [localVideo];
+  const order = vjControls.crossTabStreamsEnabled ? [...(vjTabOrder || [])] : [ytbmTabId];
+  for (const id of entries.keys()) if (!order.includes(id)) order.push(id);
+  return order.length ? order.map((id) => entries.get(id) || null) : [localVideo];
 }
 
 async function broadcastLocalVJFrame(video) {
   if (!crossTabVJChannel || !vjControls.crossTabStreamsEnabled || !video) return;
+  if (vjLiveTransport?.hasNativeSender()) return;
   const now = performance.now();
-  if (vjBroadcastBusy || now - vjLastBroadcastAt < vjBroadcastMinIntervalMs) return;
+  if (vjBroadcastBusy || now - vjLastBroadcastAt < 1000 / 15 || video.readyState < 2) return;
   if (typeof createImageBitmap !== 'function') return;
   vjBroadcastBusy = true;
   vjLastBroadcastAt = now;
+  let bitmap;
   try {
-    const bitmap = await createImageBitmap(video);
-    crossTabVJChannel.postMessage({ type: 'vj-frame', tabId: ytbmTabId, ts: Date.now(), frame: bitmap }, [bitmap]);
-  } catch {}
-  vjBroadcastBusy = false;
+    if (!vjFallbackCanvas) vjFallbackCanvas = document.createElement('canvas');
+    const scale = Math.min(1, 960 / (video.videoWidth || 960), 540 / (video.videoHeight || 540));
+    const w = Math.max(1, Math.round((video.videoWidth || 960) * scale));
+    const h = Math.max(1, Math.round((video.videoHeight || 540) * scale));
+    if (vjFallbackCanvas.width !== w) vjFallbackCanvas.width = w;
+    if (vjFallbackCanvas.height !== h) vjFallbackCanvas.height = h;
+    vjFallbackCanvas.getContext('2d', { alpha: false }).drawImage(video, 0, 0, w, h);
+    bitmap = await createImageBitmap(vjFallbackCanvas);
+    // BroadcastChannel clones; unlike MessagePort it accepts no transfer list.
+    crossTabVJChannel.postMessage({ type: 'vj-frame', tabId: ytbmTabId, ts: Date.now(), frame: bitmap });
+  } catch {} finally {
+    bitmap?.close();
+    vjBroadcastBusy = false;
+  }
 }
 
 function drawStreamMosaic(ctx, video, width, height, tMs) {
   const count = Math.max(1, Math.min(8, Number(vjControls.streamCount) || 1));
   const sources = getVJStreamSources(video);
   for (let i = 0; i < count; i++) {
-    const source = sources[i % sources.length] || video;
+    const source = sources[i % sources.length];
+    if (!source) continue;
     const blend = vjControls.streamBlendMap?.[i] || 'source-over';
     const quad = (vjControls.streamPins && vjControls.streamPins[i]) ? vjControls.streamPins[i] : [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
     const fxIndex = vjControls.sharedFxRack ? 0 : i;
@@ -8459,13 +8586,17 @@ function applyVJEffectsToSource(video, width, height, tMs, streamIndex = null) {
     const scale = Math.max(0.03, 1 - pix * 0.94);
     const sw = Math.max(16, Math.floor(width * scale));
     const sh = Math.max(9, Math.floor(height * scale));
-    const tmp = document.createElement('canvas');
-    tmp.width = sw; tmp.height = sh;
-    const tx = tmp.getContext('2d', { alpha: false });
+    if (!vjPixelCanvas) {
+      vjPixelCanvas = document.createElement('canvas');
+      vjPixelCtx = vjPixelCanvas.getContext('2d', { alpha: false });
+    }
+    if (vjPixelCanvas.width !== sw) vjPixelCanvas.width = sw;
+    if (vjPixelCanvas.height !== sh) vjPixelCanvas.height = sh;
+    const tx = vjPixelCtx;
     tx.imageSmoothingEnabled = false;
     tx.drawImage(vjSourceCanvas, 0, 0, sw, sh);
     g.imageSmoothingEnabled = false;
-    g.drawImage(tmp, 0, 0, sw, sh, 0, 0, width, height);
+    g.drawImage(vjPixelCanvas, 0, 0, sw, sh, 0, 0, width, height);
     g.imageSmoothingEnabled = true;
   });
 
@@ -8546,8 +8677,14 @@ function drawVJPinsOverlay(ctx, w, h) {
 }
 
 function renderVJFrameCore(tMs = performance.now()) {
-  if (!ensureVJCanvases() || !vjOutputCtx) return;
+  if (!vjModuleEnabled) return;
+  ensureVJLiveTransport();
   const vid = getVideoElement();
+  broadcastLocalVJFrame(vid);
+  if (vjLiveTransport && !vjLiveTransport.isReceiver() && !vjRecordingDemand) return;
+  if (tMs - vjLastRenderAt < 1000 / 30 - 1) return;
+  vjLastRenderAt = tMs;
+  if (!ensureVJCanvases() || !vjOutputCtx) return;
   if (!vid) return;
   updateVJBandLevels();
   const w = vjOutputCanvas.width, h = vjOutputCanvas.height;
@@ -8556,10 +8693,9 @@ function renderVJFrameCore(tMs = performance.now()) {
   vjOutputCtx.fillStyle = '#000';
   vjOutputCtx.fillRect(0, 0, w, h);
   drawStreamMosaic(vjOutputCtx, vid, w, h, tMs);
-  broadcastLocalVJFrame(vid);
 
   // Preview mirrors output then overlays editable pins when the VJ panel is open.
-  if (vjPreviewCtx && vjPreviewCanvas) {
+  if (vjPreviewCtx && vjPreviewCanvas && !document.hidden && vjWindowContainer?.style.display !== 'none') {
     vjPreviewCtx.fillStyle = '#000';
     vjPreviewCtx.fillRect(0, 0, w, h);
     vjPreviewCtx.drawImage(vjOutputCanvas, 0, 0, w, h);
@@ -8573,31 +8709,44 @@ function renderVJFrameCore(tMs = performance.now()) {
 }
 
 function drawVJFrame(tMs = performance.now()) {
-  vjAnimationFrame = requestAnimationFrame(drawVJFrame);
-  renderVJFrameCore(tMs);
+  if (!vjModuleEnabled) return;
+  const clockWindow = vjMonitorWindow && !vjMonitorWindow.closed ? vjMonitorWindow : window;
+  vjRenderClockWindow = clockWindow;
+  vjAnimationFrame = clockWindow.requestAnimationFrame(drawVJFrame);
+  renderVJFrameCore(performance.now());
 }
 
 function startVJRenderer() {
   if (!vjModuleEnabled) return;
   ensureVJDefaults();
   ensureVJAnalyser();
+  ensureVJCanvases();
+  ensureVJLiveTransport();
   if (!vjMonitorStream && vjOutputCanvas) vjMonitorStream = vjOutputCanvas.captureStream(30);
-  if (!vjAnimationFrame) vjAnimationFrame = requestAnimationFrame(drawVJFrame);
-  // Fallback render pump keeps monitor stream alive when RAF is throttled
-  // (e.g. popup fullscreen/occluded main tab situations).
+  const clockWindow = vjMonitorWindow && !vjMonitorWindow.closed ? vjMonitorWindow : window;
+  if (vjAnimationFrame && vjRenderClockWindow !== clockWindow) {
+    try { vjRenderClockWindow?.cancelAnimationFrame(vjAnimationFrame); } catch {}
+    vjAnimationFrame = null;
+  }
+  vjRenderClockWindow = clockWindow;
+  if (!vjAnimationFrame) vjAnimationFrame = clockWindow.requestAnimationFrame(drawVJFrame);
+  // Watchdog only; normal rendering uses one visible-window clock at 30 fps.
   if (!vjRenderInterval) {
     vjRenderInterval = setInterval(() => {
       if (!vjModuleEnabled) return;
-      renderVJFrameCore(performance.now());
-    }, 1000 / 30);
+      const clock = vjMonitorWindow && !vjMonitorWindow.closed ? vjMonitorWindow : window;
+      if (clock !== vjRenderClockWindow) startVJRenderer();
+      if (performance.now() - vjLastRenderAt > 200) renderVJFrameCore(performance.now());
+    }, 250);
   }
 }
 
 function stopVJRenderer() {
   if (vjAnimationFrame) {
-    cancelAnimationFrame(vjAnimationFrame);
+    try { vjRenderClockWindow?.cancelAnimationFrame(vjAnimationFrame); } catch {}
     vjAnimationFrame = null;
   }
+  if (vjLiveTransport) { vjLiveTransport.stop(); vjLiveTransport = null; setVJPerformanceSession(false); }
   if (vjRenderInterval) {
     clearInterval(vjRenderInterval);
     vjRenderInterval = null;
@@ -8632,6 +8781,9 @@ function setupVJMonitorWindow() {
     vjMonitorVideo.srcObject = vjMonitorStream;
     vjMonitorVideo.play().catch(() => {});
   }
+  vjReceiverEpoch = Date.now();
+  vjLiveTransport?.tick();
+  startVJRenderer();
 }
 
 function showVJWindowToggle() {
@@ -8861,6 +9013,7 @@ function showVJWindowToggle() {
       remoteVJFrames.clear();
       crossTabVJChannel?.postMessage({ type: 'vj-frame-clear', tabId: ytbmTabId });
     }
+    ensureVJLiveTransport();
     persistVJControls();
   });
   const crossTabLbl = document.createElement('span');
@@ -8868,6 +9021,11 @@ function showVJWindowToggle() {
   crossTabRow.appendChild(crossTabChk);
   crossTabRow.appendChild(crossTabLbl);
   vjContentWrap.appendChild(crossTabRow);
+  vjLiveStatusElement = document.createElement('div');
+  vjLiveStatusElement.style.fontSize = '11px';
+  vjLiveStatusElement.style.color = '#b8d9ff';
+  vjLiveStatusElement.textContent = 'Native live feeds start when VJ FX and cross-tab streams are enabled.';
+  vjContentWrap.appendChild(vjLiveStatusElement);
 
   const tabAudioRow = document.createElement('div');
   tabAudioRow.style.display = 'flex';
@@ -9202,7 +9360,9 @@ function handleVJMidiNote(note, velocity, command) {
 function getVideoCaptureStreamForLooper(videoElement) {
   if (!videoElement) return null;
   if (vjModuleEnabled) {
+    vjRecordingDemand = true;
     startVJRenderer();
+    vjLiveTransport?.tick();
     ensureVJCanvases();
     if (!vjMonitorStream && vjOutputCanvas && typeof vjOutputCanvas.captureStream === 'function') {
       vjMonitorStream = vjOutputCanvas.captureStream(30);
@@ -11575,6 +11735,27 @@ function addControls() {
     pitchTargetButton.innerText = (pitchTarget === "video") ? "Video" : "Loop";
   });
   pitchWrap.appendChild(pitchTargetButton);
+  const hdLatencyRow = document.createElement('div');
+  hdLatencyRow.className = 'ytbm-panel-row';
+  const hdLatencyLabel = document.createElement('label');
+  hdLatencyLabel.textContent = 'Speed HD latency: ';
+  speedHDLatencySelect = document.createElement('select');
+  for (const [value, text] of [
+    ['quality', 'Quality ~168 ms — same 160 ms analysis window'],
+    ['balanced', 'Balanced ~104 ms — shorter window'],
+    ['live', 'Live ~68 ms — lowest delay, possible extra artifacts']
+  ]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    speedHDLatencySelect.appendChild(option);
+  }
+  speedHDLatencySelect.value = speedHDLatencyProfile;
+  speedHDLatencySelect.title = 'Engine latency only. Quality retains the long window with more CPU/overlap; shorter windows can reduce bass/transient quality. Profile changes reset the analysis buffer.';
+  speedHDLatencySelect.addEventListener('change', () => setSpeedHDLatencyProfile(speedHDLatencySelect.value));
+  hdLatencyLabel.appendChild(speedHDLatencySelect);
+  hdLatencyRow.appendChild(hdLatencyLabel);
+  cw.appendChild(hdLatencyRow);
 
   let looperButtonRow = document.createElement("div");
   looperButtonRow.style.display = "flex";
@@ -15860,15 +16041,10 @@ window.runLooperDeterministicSimulation = runLooperDeterministicSimulation;
 
 
 // Keep VJ stream pumping when tab visibility changes (fullscreen monitor scenarios).
-document.addEventListener('visibilitychange', () => {
+addTrackedListener(document, 'visibilitychange', () => {
   if (!vjModuleEnabled) return;
-  if (document.hidden) {
-    if (!vjRenderInterval) {
-      vjRenderInterval = setInterval(() => renderVJFrameCore(performance.now()), 1000 / 30);
-    }
-  } else if (vjRenderInterval && vjAnimationFrame) {
-    // keep one interval only if renderer is active; no-op (interval already used as fallback).
-  }
+  vjLiveTransport?.tick();
+  startVJRenderer();
 });
 
 initialize();

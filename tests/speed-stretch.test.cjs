@@ -6,8 +6,10 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const engineSource = fs.readFileSync(path.join(root, 'node_modules/signalsmith-stretch/SignalsmithStretch.mjs'), 'utf8');
+const contentSource = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+const configFunction = contentSource.slice(contentSource.indexOf('function getSpeedHDLatencyConfig('), contentSource.indexOf('async function setSpeedHDLatencyProfile('));
 
-async function processor(sampleRate = 48000) {
+async function processor(sampleRate = 48000, profile = 'quality') {
   let Processor;
   let ready;
   const readyPromise = new Promise((resolve) => { ready = resolve; });
@@ -24,7 +26,7 @@ async function processor(sampleRate = 48000) {
   vm.runInNewContext(engineSource.slice(0, engineSource.lastIndexOf('let _export=')), context);
   const p = new Processor({ numberOfOutputs: 1, outputChannelCount: [2] });
   await readyPromise;
-  const config = { blockMs: 160, intervalMs: 20, splitComputation: true };
+  const config = vm.runInNewContext(configFunction + '\ngetSpeedHDLatencyConfig(' + JSON.stringify(profile) + ')');
   const send = (method, ...args) => p.port.onmessage({ data: [0, method, ...args] });
   send('configure', config);
   p.control = (message) => {
@@ -120,6 +122,16 @@ test('official WASM engine initializes with the quality window and finite latenc
   assert.ok(Math.abs(frequency(mono[0].subarray(24000), 48000) - 220) < 1);
   for (let i = 24000; i < mono[0].length; i++) assert.ok(Math.abs(mono[0][i] - mono[1][i]) < 1e-5);
 });
+
+for (const [profile, expected] of [['quality', 168], ['balanced', 104], ['live', 68]]) {
+  test(`HD ${profile} profile reports ${expected} ms and preserves half-speed pitch`, async () => {
+    const p = await processor(48000, profile);
+    assert.ok(Math.abs((p.inputLatencySeconds + p.outputLatencySeconds) * 1000 - expected) < 0.1);
+    p.control({ active: true, rate: 0.5, tuneSemitones: 3 });
+    const output = render(p, 96000, (i) => 0.5 * Math.sin(2 * Math.PI * 110 * i / 48000));
+    assert.ok(Math.abs(frequency(output[0].subarray(48000), 48000) - 220 * 2 ** (3 / 12)) < 1);
+  });
+}
 
 for (const rate of [0.5, 1, 2]) {
   for (const tuneSemitones of [-5, 3]) {
@@ -407,7 +419,8 @@ test('adapter configures HQ processing, bypasses dry audio and applies octave co
         close() {},
         postMessage: (data) => {
           this.messages.push(data);
-          queueMicrotask(() => this.port.onmessage?.({ data: [data[0], data[1] === 'latency' ? 0.18 : undefined] }));
+          if (data[1] === 'configure') this.config = data[2];
+          queueMicrotask(() => this.port.onmessage?.({ data: [data[0], data[1] === 'latency' ? (this.config.blockMs + this.config.intervalMs) / 1000 : undefined] }));
         }
       };
       queueMicrotask(() => this.port.onmessage?.({ data: ['ready', {}] }));
@@ -415,11 +428,12 @@ test('adapter configures HQ processing, bypasses dry audio and applies octave co
   }
   const context = { console, setTimeout, clearTimeout, AudioWorkletNode: WorkletNode };
   vm.createContext(context);
+  vm.runInContext(configFunction, context);
   vm.runInContext(source.slice(source.indexOf('async function createHighQualitySpeedNode('), source.indexOf('function syncSpeedPlayback()')), context);
   const node = await context.createHighQualitySpeedNode({ currentTime: 2, sampleRate: 48000, createGain: () => new Gain() });
   assert.equal(workletNode.name, 'signalsmith-stretch');
   assert.equal(workletNode.options.channelCount, 2);
-  assert.equal(node.latencySeconds, 0.18);
+  assert.equal(node.latencySeconds, 0.168);
   const configure = workletNode.messages.find((m) => m[1] === 'configure')[2];
   assert.equal(configure.blockMs, 160);
   assert.equal(configure.splitComputation, true);
@@ -435,13 +449,16 @@ test('adapter configures HQ processing, bypasses dry audio and applies octave co
   node.port.postMessage({ active: true, rate: 0.5, tuneSemitones: 3 });
   assert.equal(workletNode.messages.at(-1)[2].semitones, 15);
   assert.equal(workletNode.messages.filter((m) => m[1] === 'configure').length, 1, 'tuning must not reconfigure or add buffering');
-  assert.equal(node.latencySeconds, 0.18);
+  assert.equal(node.latencySeconds, 0.168);
   const count = workletNode.messages.length;
   node.port.postMessage({ active: true, rate: 0.5, tuneSemitones: 3 });
   assert.equal(workletNode.messages.length, count, 'unchanged controls should not reschedule processing');
   node.port.postMessage({ active: false, rate: 1 });
   assert.equal(dry.gain.value, 1);
   assert.equal(wet.gain.value, 0);
+  await node.setProfile('live');
+  assert.equal(node.latencySeconds, 0.068);
+  assert.equal(workletNode.messages.filter((m) => m[1] === 'configure').at(-1)[2].blockMs, 64);
   node.dispose();
   assert.equal(node.input.connections.length, 0);
   assert.equal(workletNode.connections.length, 0);
@@ -474,9 +491,11 @@ test('three-step label is stable and HD engine readiness/fallback is reported in
   assert.equal(c.deckA.preservesPitch, false);
 });
 
-test('release exposes the worklet and declares version 2.3.7', () => {
+test('release exposes the worklet and declares version 2.3.8', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '2.3.7');
+  assert.equal(manifest.version, '2.3.8');
+  assert.equal(manifest.content_scripts[0].js[0], 'vj-live.js');
+  assert.ok(manifest.permissions.includes('power'));
   assert.ok(manifest.web_accessible_resources.some((entry) => entry.resources.includes('worklets/speed-stretch-worklet.js')));
   assert.ok(manifest.web_accessible_resources.some((entry) => entry.resources.includes('node_modules/signalsmith-stretch/SignalsmithStretch.mjs')));
 });

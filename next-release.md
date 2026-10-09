@@ -1,3 +1,25 @@
+# Release 2.3.8
+
+## Summary
+Lower-latency HD profiles and native cross-tab YouTube VJ feeds, targeting four or more inputs with a 1080p/30 output.
+
+## Changes
+- Quality uses the same 160 ms analysis window with an 8 ms processing interval, reporting approximately 168 ms engine latency instead of 180 ms, at increased CPU cost.
+- Balanced uses a 96 ms window / 8 ms interval (~104 ms); Live uses a 64 ms window / 4 ms interval (~68 ms). These are explicit quality/latency tradeoffs, not lossless replacements.
+- Profile changes retain speed/tuning and update the actual latency tooltip; changing profiles resets the analysis buffer and can briefly interrupt playback.
+- Native local WebRTC transports video-only captured media tracks to one elected compositor. No external STUN/TURN/relay is used; bitmap snapshots are a bounded fallback only.
+- Use the visible monitor window's render clock, cap the stage at 1920×1080 and 30 fps, skip duplicate render work, optimize affine quads, and reuse scratch canvases.
+- Negotiate only demanded sources (up to eight) and temporarily support an additional receiver when recording a VJ mix from another tab.
+- Add decoded-frame FPS/drop statistics, bounded resolution, stale-session protection, reconnect handling and explicit fallback status.
+- Protect active VJ tabs from automatic discarding and request display wake protection only during the live session; restore original discard flags on stop.
+- Persist tab registration/protection in chrome.storage.session so service-worker idle restarts retain order and session state.
+- Updated manifest/package versions to 2.3.8 and added the power permission for session wake protection.
+
+## Scope and limits
+Browser/device latency remains in addition to the reported HD engine delay. Chrome energy/freezing policies cannot be globally disabled by an extension. Codec, network, CPU/GPU and thermal limits can still reduce frame rate; snapshot fallback is not a guarantee of background 30 fps. Keep the output/monitor visible and validate your actual YouTube clips before publication.
+
+---
+
 # Release 2.3.7
 
 ## Summary
