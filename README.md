@@ -16,6 +16,14 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.3.7
+- Smoothed sidechain attack/release edges and rapid retriggering to reduce gain-discontinuity clicks, while keeping the selected curve duration and adding no buffering stage.
+- Improved cue-click handling across keyboard, MIDI, pads and sequencer playback: interrupt-safe micro-fades, decoder-ready fade-in and cancellation of obsolete cue requests, without a new audio buffer.
+- Added a compact **‹ 0 ›** semitone tuning control next to the fader, visible only in **Speed HD**. Arrows change tuning by one semitone (−24 to +24); clicking the number resets tuning to zero.
+- HD tuning changes musical pitch independently of speed and Percent/Semitones fader units. The tuning value is remembered when switching modes and applies only in Speed HD.
+- Tuning uses the existing Signalsmith processor and its existing approximately 180 ms latency; it adds no extra processing buffer. Pitch and basic Speed continue to bypass the HD buffer.
+- At normal speed, nonzero HD tuning still works; normal speed with zero tuning uses the direct dry path. Double-clicking the fader resets speed without resetting the separate tuning value.
+
 ## New in 2.3.6
 - Click the minimal-bar label to cycle **Pitch → Speed → Speed HD → Pitch**. Pitch changes speed and pitch together; Speed preserves pitch using Chrome's processing; Speed HD preserves pitch using Signalsmith Stretch.
 - Added the official **Signalsmith Stretch** WebAssembly spectral engine for Speed HD, using a 160 ms quality-focused analysis window and split computation for realtime playback.
@@ -147,6 +155,10 @@ The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, aud
   a pitch shift. Double-click the fader to return to normal speed. Both speed
   modes target video playback (including the video-loop preview); selecting
   the Loop target restores Pitch mode.
+  In **Speed HD**, the small **‹ 0 ›** control tunes pitch separately in semitone
+  steps, from −24 to +24. Click the number to reset tuning. It uses the same HD
+  processor, adding no further buffering; Pitch and basic Speed have no tune
+  control and bypass that HD buffer.
 
 - 🎛️ **Live Effects**  
   Toggle EQ (`E`), Compressor (`C`), Reverb (`Q`), and Cassette (`W`) in real time.

@@ -908,6 +908,10 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       minimalPitchSlider = null,
       minimalPitchLabel = null,
       minimalPitchModeButton = null,
+      speedHDTuneControl = null,
+      speedHDTuneValue = null,
+      speedHDTuneDownButton = null,
+      speedHDTuneUpButton = null,
       cuesButtonMin = null,
       minimalCuesLabel = null,
       loopButtonMin = null,
@@ -1182,6 +1186,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       pitchSemitoneMode = false,
       speedOnlyMode = false,
       speedHDMode = false,
+      speedHDTuneSemitone = 0,
       pitchTarget = "video", // "video" or "loop"
       videoPitchPercentage = 0,
       loopPitchPercentage = 0,
@@ -1267,7 +1272,6 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       dcBlockA = null,
       dcBlockB = null,
       activeDeck = "A",       // which deck is currently audible
-      crossFadeTime = 0.20,   // 80 ms smoothed constant‑power fade
             compMode = "off";
 
   if (superKnobMode !== 'absolute' && superKnobMode !== 'relative') {
@@ -3695,6 +3699,7 @@ function addTrackedListener(target, type, listener, options) {
   cleanupFunctions.push(() => target.removeEventListener(type, listener, options));
 }
 function cleanupResources() {
+  cancelCueSeek();
   [mediaRecorder, videoMediaRecorder].forEach(mr => {
     if (mr && mr.state === "recording") {
       mr.stop();
@@ -3784,6 +3789,7 @@ function captureAppState() {
     pitchSemitoneMode,
     speedOnlyMode,
     speedHDMode,
+    speedHDTuneSemitone,
     pitchTarget,
     videoPitchPercentage,
     loopPitchPercentage,
@@ -3840,6 +3846,8 @@ function restoreAppState(st) {
   speedOnlyMode = !!st.speedOnlyMode;
   // Earlier snapshots used the HQ engine for every speed-only state.
   speedHDMode = speedOnlyMode && (typeof st.speedHDMode === "boolean" ? st.speedHDMode : true);
+  speedHDTuneSemitone = Number.isFinite(st.speedHDTuneSemitone)
+    ? clampPitchSemitone(Math.round(st.speedHDTuneSemitone)) : 0;
   pitchTarget = st.pitchTarget;
   videoPitchPercentage = st.videoPitchPercentage;
   loopPitchPercentage = st.loopPitchPercentage;
@@ -4790,6 +4798,7 @@ function onMinimalPointerUp(e) {
   minimalPitchLabel.className = "ytbm-pitch-value";
   minimalPitchLabel.textContent = pitchSemitoneMode ? `${Math.round(pitchSemitone)} st` : `${Math.round(pitchPercentage)}%`;
   pitchCluster.appendChild(minimalPitchLabel);
+  pitchCluster.appendChild(buildSpeedHDTuneControl());
 
   minimalUIContainer.appendChild(pitchCluster);
 
@@ -5133,48 +5142,107 @@ function initTwoDeck() {
   syncSpeedPlayback();
 }
 
-async function jumpToCue(targetTime) {
-  const activeVid  = (activeDeck === "A") ? deckA : deckB;
-  const silentVid  = (activeDeck === "A") ? deckB : deckA;
-  const activeGain = (activeDeck === "A") ? gainA : gainB;
-  const silentGain = (activeDeck === "A") ? gainB : gainA;
+// The 2 ms envelope replaces the existing keyboard fade; it is not an audio
+// buffer. The incoming fade starts when the seek is ready, not on a blind timer.
+const CUE_FADE_SECONDS = 0.002;
+let cueSeekGeneration = 0;
+let cueSeekTimer = null;
+let cueSeekCleanup = null;
+let cueGainRamp = null;
 
-  if (!activeVid || !silentVid || !activeGain || !silentGain) {
-    const vid = getVideoElement();
-    if (vid) vid.currentTime = targetTime;
-    return;
+function cancelCueSeek() {
+  cueSeekGeneration++;
+  if (cueSeekTimer !== null) clearTimeout(cueSeekTimer);
+  cueSeekTimer = null;
+  if (cueSeekCleanup) cueSeekCleanup();
+  cueSeekCleanup = null;
+}
+
+function rampCueGain(target, duration = CUE_FADE_SECONDS) {
+  if (!audioContext || audioContext.state === "closed" || !videoGain) return;
+  const param = videoGain.gain;
+  const now = audioContext.currentTime;
+  let held = param.value;
+  // Track our own envelope for browsers without cancelAndHoldAtTime, rather
+  // than assuming the intrinsic AudioParam value equals an interrupted ramp.
+  if (cueGainRamp?.param === param) {
+    const phase = Math.max(0, Math.min(1, (now - cueGainRamp.start) / (cueGainRamp.end - cueGainRamp.start)));
+    held = cueGainRamp.from + (cueGainRamp.to - cueGainRamp.from) * phase;
+  }
+  if (typeof param.cancelAndHoldAtTime === "function") {
+    param.cancelAndHoldAtTime(now);
+  } else {
+    param.cancelScheduledValues(now);
+  }
+  // Anchor the next ramp explicitly: cancelAndHoldAtTime alone may leave the
+  // previous ramp endpoint as its start, restoring gain before seek readiness.
+  param.setValueAtTime(held, now);
+  param.linearRampToValueAtTime(target, now + duration);
+  cueGainRamp = { param, start: now, end: now + duration, from: held, to: target };
+}
+
+function jumpToCue(targetTime) {
+  const video = getVideoElement();
+  if (!video || !Number.isFinite(targetTime)) return false;
+  const end = Number.isFinite(video.duration) ? Math.max(0, video.duration) : Infinity;
+  const target = Math.max(0, Math.min(end, targetTime));
+  cancelCueSeek();
+  const generation = cueSeekGeneration;
+  if (!audioContext || audioContext.state === "closed" || !videoGain) {
+    try { video.currentTime = target; } catch (err) { console.warn("Cue seek failed:", err); return false; }
+    return true;
   }
 
-  /* 1 – prepare the silent deck */
-  const now = audioContext.currentTime;
-  const EPS = 0.005;                 // −46 dB: low but never hard‑zero
-  silentGain.gain.cancelScheduledValues(now);
-  silentGain.gain.setValueAtTime(EPS, now);        // avoid 0 → EPS step
-  silentVid.pause();
-  silentVid.muted = false;           // ensure audio actually comes out
-  silentVid.currentTime = targetTime;              // or fastSeek()
-  try { await silentVid.play(); } catch (_) {}
-
-  /* 2 – 80 ms constant‑power cross‑fade (starts 5 ms later so audio is ready) */
-  const fadeStart = now + 0.005;     // 5 ms grace to let decoder queue data
-  const xf  = Math.max(crossFadeTime, (audioContext.baseLatency || 0.012) * 2);
-
-  // Cancel any still‑pending ramps
-  activeGain.gain.cancelScheduledValues(now);
-  silentGain.gain.cancelScheduledValues(now);
-
-  // --- Fade OUT the current deck ---
-  activeGain.gain.setValueAtTime(1, now);          // hold full level
-  activeGain.gain.setValueAtTime(1, fadeStart);    // flat until fadeStart
-  activeGain.gain.linearRampToValueAtTime(EPS, fadeStart + xf);
-
-  // --- Fade IN the new deck ---
-  silentGain.gain.setValueAtTime(EPS, now);        // hold low level
-  silentGain.gain.setValueAtTime(EPS, fadeStart);  // flat until fadeStart
-  silentGain.gain.linearRampToValueAtTime(1,  fadeStart + xf);
-
-  /* 3 – swap */
-  activeDeck = (activeDeck === "A") ? "B" : "A";
+  rampCueGain(0);
+  const fadeOutEnd = audioContext.currentTime + CUE_FADE_SECONDS;
+  const seek = () => {
+    if (generation !== cueSeekGeneration) return;
+    cueSeekTimer = null;
+    if (video !== getVideoElement()) { rampCueGain(1); return; }
+    // Wall-clock timers can fire before the audio render clock reaches zero.
+    // Finish the existing micro-fade before changing the media timeline.
+    const remaining = fadeOutEnd - audioContext.currentTime;
+    if (audioContext.state === "running" && remaining > 0.000001) {
+      cueSeekTimer = setTimeout(seek, Math.max(1, remaining * 1000));
+      return;
+    }
+    let watchdog = null;
+    const cleanup = () => {
+      video.removeEventListener("seeked", ready);
+      video.removeEventListener("canplay", ready);
+      video.removeEventListener("playing", ready);
+      video.removeEventListener("error", recover);
+      video.removeEventListener("emptied", recover);
+      if (watchdog !== null) clearTimeout(watchdog);
+      if (cueSeekCleanup === cleanup) cueSeekCleanup = null;
+    };
+    const recover = () => {
+      cleanup();
+      if (generation === cueSeekGeneration) rampCueGain(1);
+    };
+    const ready = () => {
+      if (generation !== cueSeekGeneration) { cleanup(); return; }
+      if (video.seeking || video.readyState < 2) return;
+      recover();
+    };
+    cueSeekCleanup = cleanup;
+    video.addEventListener("seeked", ready);
+    video.addEventListener("canplay", ready);
+    video.addEventListener("playing", ready);
+    video.addEventListener("error", recover);
+    video.addEventListener("emptied", recover);
+    // Recovery for a failed/stalled seek; this never delays a ready cue.
+    watchdog = setTimeout(recover, 2000);
+    try {
+      video.currentTime = target;
+      ready(); // Same-position seeks may not emit seeked.
+    } catch (err) {
+      console.warn("Cue seek failed:", err);
+      recover();
+    }
+  };
+  cueSeekTimer = setTimeout(seek, CUE_FADE_SECONDS * 1000);
+  return true;
 }
 
 let videoCheckInterval = setInterval(() => {
@@ -5400,22 +5468,30 @@ async function createHighQualitySpeedNode(ctx) {
   }
   let lastActive = false;
   let lastRate = 1;
+  let lastTuneSemitones = 0;
+  const gainRamps = new Map();
   const ramp = (gain, value) => {
     const now = ctx.currentTime;
-    if (gain.cancelAndHoldAtTime) gain.cancelAndHoldAtTime(now);
-    else {
-      gain.cancelScheduledValues(now);
-      gain.setValueAtTime(gain.value, now);
+    let held = gain.value;
+    const previous = gainRamps.get(gain);
+    if (previous) {
+      const phase = Math.max(0, Math.min(1, (now - previous.start) / (previous.end - previous.start)));
+      held = previous.from + (previous.to - previous.from) * phase;
     }
+    if (gain.cancelAndHoldAtTime) gain.cancelAndHoldAtTime(now);
+    else gain.cancelScheduledValues(now);
+    gain.setValueAtTime(held, now);
     gain.linearRampToValueAtTime(value, now + 0.025);
+    gainRamps.set(gain, { start: now, end: now + 0.025, from: held, to: value });
   };
-  const schedule = (active, rate) => {
+  const schedule = (active, rate, tuneSemitones) => {
     // Live-input processing always consumes and produces the same frame count.
     // The video supplies the tempo change; the spectral engine undoes ONLY its
-    // pitch change. Full-spectrum transposition also restores slowed formants.
+    // pitch change and adds the independent HD tuning in the SAME processor.
+    // Full-spectrum transposition also restores slowed formants.
     processor.port.postMessage([messageId++, "schedule", {
       active: true,
-      semitones: active ? -12 * Math.log2(rate) : 0,
+      semitones: active ? tuneSemitones - 12 * Math.log2(rate) : 0,
       tonalityHz: ctx.sampleRate,
       formantSemitones: 0,
       formantCompensation: false
@@ -5426,21 +5502,24 @@ async function createHighQualitySpeedNode(ctx) {
     port: {
       postMessage(message) {
         if (message.reset) {
-          call("configure", config).then(() => schedule(lastActive, lastRate)).catch((err) => {
+          call("configure", config).then(() => schedule(lastActive, lastRate, lastTuneSemitones)).catch((err) => {
             console.warn("Could not reset the stretch processor.", err);
             processor.onprocessorerror?.();
           });
         }
         if (typeof message.active !== "boolean" || !Number.isFinite(message.rate)) return;
         const rate = Math.max(0.25, Math.min(4, message.rate));
-        if (message.active === lastActive && rate === lastRate) return;
-        schedule(message.active, rate);
+        const tuneSemitones = Number.isFinite(message.tuneSemitones)
+          ? Math.max(-24, Math.min(24, Math.round(message.tuneSemitones))) : 0;
+        if (message.active === lastActive && rate === lastRate && tuneSemitones === lastTuneSemitones) return;
+        schedule(message.active, rate, tuneSemitones);
         if (message.active !== lastActive) {
           ramp(dry.gain, message.active ? 0 : 1);
           ramp(wet.gain, message.active ? 1 : 0);
         }
         lastActive = message.active;
         lastRate = rate;
+        lastTuneSemitones = tuneSemitones;
       }
     }
   };
@@ -5450,7 +5529,12 @@ function syncSpeedPlayback() {
   const rate = pitchTarget === "video" ? getCurrentPitchRate() : 1;
   const active = speedOnlyMode && pitchTarget === "video";
   const hdActive = active && speedHDMode;
-  const message = { active: hdActive && Math.abs(rate - 1) > 1e-8, rate };
+  const tuneSemitones = hdActive ? speedHDTuneSemitone : 0;
+  const message = {
+    active: hdActive && (Math.abs(rate - 1) > 1e-8 || tuneSemitones !== 0),
+    rate,
+    tuneSemitones
+  };
   videoSpeedStretchNode?.port.postMessage(message);
   previewSpeedStretchNode?.port.postMessage(message);
   // Include the hidden cue deck so cue crossfades keep the same speed/pitch.
@@ -6394,6 +6478,32 @@ function stopSidechainDraw() {
   sidechainIsDrawing = false;
 }
 
+const SIDECHAIN_EDGE_SECONDS = 0.003;
+let sidechainGainEnvelope = null;
+
+function holdSidechainGain(param, now) {
+  let held = param.value;
+  if (sidechainGainEnvelope?.param === param) {
+    const points = sidechainGainEnvelope.points;
+    held = points[points.length - 1].gain;
+    for (let i = 1; i < points.length; i++) {
+      if (now <= points[i].time) {
+        const a = points[i - 1], b = points[i];
+        const phase = Math.max(0, Math.min(1, (now - a.time) / (b.time - a.time)));
+        held = a.gain + (b.gain - a.gain) * phase;
+        break;
+      }
+    }
+  }
+  if (typeof param.cancelAndHoldAtTime === 'function') {
+    param.cancelAndHoldAtTime(now);
+  } else {
+    param.cancelScheduledValues(now);
+  }
+  param.setValueAtTime(held, now);
+  return held;
+}
+
 async function triggerSidechainEnvelope(reason = 'tap') {
   await ensureAudioContext();
   ensureSidechainDefaults();
@@ -6404,17 +6514,31 @@ async function triggerSidechainEnvelope(reason = 'tap') {
   if (typeof recordSequencerTargetHit === 'function') recordSequencerTargetHit('sidechain');
 
   const now = audioContext.currentTime;
-  const dur = sidechainEnvelopeDuration || 0.6;
-  sidechainGain.gain.cancelScheduledValues(now);
-  sidechainGain.gain.setValueAtTime(sidechainGain.gain.value, now);
-  sidechainGain.gain.linearRampToValueAtTime(1, now);
+  const dur = Number.isFinite(sidechainEnvelopeDuration) && sidechainEnvelopeDuration > 0
+    ? sidechainEnvelopeDuration : 0.6;
+  const edge = Math.min(SIDECHAIN_EDGE_SECONDS, dur / 4);
+  const param = sidechainGain.gain;
+  const held = holdSidechainGain(param, now);
   const playableCurve = resampleSidechainCurve(getActiveSidechainCurve());
+  const points = [{ time: now, gain: held }];
+  const ramp = (gain, offset) => {
+    const time = now + offset;
+    const g = Math.max(0, Math.min(1, gain));
+    param.linearRampToValueAtTime(g, time);
+    points.push({ time, gain: g });
+  };
+  // Duck immediately from the held gain, reaching the curve's initial depth
+  // over a 3 ms edge. Do not jump to 1 or schedule a hard cutoff at time zero.
+  ramp(playableCurve[0].g, edge);
   for (const p of playableCurve) {
-    const t = now + Math.max(0, p.t) * dur;
-    const g = Math.max(0, Math.min(1, p.g));
-    sidechainGain.gain.linearRampToValueAtTime(g, t);
+    const offset = p.t * dur;
+    if (offset > edge && offset < dur - edge) ramp(p.g, offset);
   }
-  sidechainGain.gain.linearRampToValueAtTime(1, now + dur);
+  // Custom curves can finish below unity: smooth that final edge inside the
+  // existing duration, rather than restoring full volume at the same instant.
+  ramp(sampleSidechainCurve(playableCurve, (dur - edge) / dur), dur - edge);
+  ramp(1, dur);
+  sidechainGainEnvelope = { param, points };
 }
 
 function setSidechainFollowMode(mode) {
@@ -10090,34 +10214,20 @@ document.addEventListener("keydown", e => {
 function sequencerTriggerCue(cueKey, opts = {}) {
   const source = opts?.source || 'local';
   const video = getVideoElement();
-  if (!video || getCueTime(cueKey) === undefined) return;
+  const cueTime = getCueTime(cueKey);
+  if (!video || !Number.isFinite(cueTime)) return;
   const idx = cueKey === '0' ? 9 : Math.max(0, Number(cueKey) - 1);
   const targetKey = `pad-${idx}`;
   if (typeof pulseSequencerTargetButton === 'function') pulseSequencerTargetButton(targetKey);
   if (typeof recordSequencerTargetHit === 'function') recordSequencerTargetHit(targetKey);
   selectedCueKey = cueKey;
   clearSuperKnobHistory();
-  const fadeTime = 0.003; // 3ms fade for cue click handling
-  const gainFloor = 0.0001; // avoid hard-zero discontinuity clicks
-  const now = audioContext.currentTime;
-
-  // Cancel any scheduled changes and ramp down the gain (without hard-zero)
-  videoGain.gain.cancelScheduledValues(now);
-  videoGain.gain.setValueAtTime(Math.max(gainFloor, videoGain.gain.value), now);
-  videoGain.gain.linearRampToValueAtTime(gainFloor, now + fadeTime);
-
-  // After the fade out, jump to the new cue and fade back in
-  setTimeout(() => {
-    video.currentTime = getCueTime(cueKey);
-    const t = audioContext.currentTime;
-    videoGain.gain.setValueAtTime(gainFloor, t);
-    videoGain.gain.linearRampToValueAtTime(1, t + fadeTime);
-  }, fadeTime * 1000);
+  jumpToCue(cueTime);
 
   recordMidiEvent('cue', cueKey);
   if (source === 'local') broadcastCueTriggerToTabs(cueKey);
   
-  console.log(`Sequencer triggered cue ${cueKey} at time ${getCueTime(cueKey)}`);
+  console.log(`Sequencer triggered cue ${cueKey} at time ${cueTime}`);
 }
 
 function isTypingInTextField(e) {
@@ -10328,24 +10438,13 @@ function onKeyDown(e) {
   }
   
   // Trigger cue points when keys 1-0 are pressed.
-  if ((e.key >= "1" && e.key <= "9") || e.key === "0") {
-    let video = getVideoElement();
-    if (video && getCueTime(e.key) !== undefined) {
-      selectedCueKey = e.key;
-      clearSuperKnobHistory();
-      const fadeTime = 0.002; // 50ms fade duration
-      const now = audioContext.currentTime;
-      // Fade out the audio
-      videoGain.gain.cancelScheduledValues(now);
-      videoGain.gain.setValueAtTime(videoGain.gain.value, now);
-      videoGain.gain.linearRampToValueAtTime(0, now + fadeTime);
-      // After fade out, change cue and fade back in
-      setTimeout(() => {
-        video.currentTime = getCueTime(e.key);
-        const t = audioContext.currentTime;
-        videoGain.gain.setValueAtTime(0, t);
-        videoGain.gain.linearRampToValueAtTime(1, t + fadeTime);
-      }, fadeTime * 1000);
+  if (!e.ctrlKey && !e.metaKey && ((e.key >= "1" && e.key <= "9") || e.key === "0")) {
+    if (getVideoElement() && getCueTime(e.key) !== undefined) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      sequencerTriggerCue(e.key);
+      return;
     }
   }
   
@@ -12134,12 +12233,51 @@ function getPitchDisplayValue() {
   return pitchSemitoneMode ? pitchSemitone : pitchPercentage;
 }
 
+function buildSpeedHDTuneControl() {
+  speedHDTuneControl = document.createElement("div");
+  speedHDTuneControl.className = "ytbm-speed-hd-tune";
+  speedHDTuneControl.hidden = true;
+  speedHDTuneControl.setAttribute("role", "group");
+  speedHDTuneControl.setAttribute("aria-label", "Speed HD tuning in semitones");
+  speedHDTuneDownButton = document.createElement("button");
+  speedHDTuneDownButton.type = "button";
+  speedHDTuneDownButton.textContent = "‹";
+  speedHDTuneDownButton.title = "Tune down one semitone";
+  speedHDTuneDownButton.setAttribute("aria-label", "Tune down one semitone");
+  speedHDTuneDownButton.addEventListener("click", () => updateSpeedHDTune(speedHDTuneSemitone - 1));
+  speedHDTuneValue = document.createElement("button");
+  speedHDTuneValue.type = "button";
+  speedHDTuneValue.className = "ytbm-speed-hd-tune-value";
+  speedHDTuneValue.textContent = "0";
+  speedHDTuneValue.setAttribute("aria-live", "polite");
+  speedHDTuneValue.addEventListener("click", () => updateSpeedHDTune(0));
+  speedHDTuneUpButton = document.createElement("button");
+  speedHDTuneUpButton.type = "button";
+  speedHDTuneUpButton.textContent = "›";
+  speedHDTuneUpButton.title = "Tune up one semitone";
+  speedHDTuneUpButton.setAttribute("aria-label", "Tune up one semitone");
+  speedHDTuneUpButton.addEventListener("click", () => updateSpeedHDTune(speedHDTuneSemitone + 1));
+  speedHDTuneControl.append(speedHDTuneDownButton, speedHDTuneValue, speedHDTuneUpButton);
+  return speedHDTuneControl;
+}
+
+function updateSpeedHDTune(value) {
+  if (!speedOnlyMode || !speedHDMode || pitchTarget !== "video" || !Number.isFinite(value)) return;
+  const next = clampPitchSemitone(Math.round(value));
+  if (next === speedHDTuneSemitone) return;
+  speedHDTuneSemitone = next;
+  syncSpeedPlayback();
+  refreshPitchUI();
+  if (window.refreshMinimalState) window.refreshMinimalState();
+  applyInstrumentPitchSync();
+}
+
 function getPitchSliderTitle() {
   if (speedOnlyMode) {
     const mode = speedHDMode ? "Speed HD" : "Speed";
     return pitchSemitoneMode
-      ? `${mode} (semitone-equivalent tempo steps) — original pitch preserved`
-      : `${mode} (%) — original pitch preserved`;
+      ? `${mode} (semitone-equivalent tempo steps) — ${speedHDMode ? "tune is controlled separately" : "original pitch preserved"}`
+      : `${mode} (%) — ${speedHDMode ? "tune is controlled separately" : "original pitch preserved"}`;
   }
   return pitchSemitoneMode ? "Pitch (st)" : "Pitch (%)";
 }
@@ -12190,13 +12328,26 @@ function refreshPitchUI() {
       : (!speedHDMode
         ? "Speed: browser pitch-preserving playback. Click for Speed HD (Signalsmith Stretch)."
         : (speedStretchStatus === "hq"
-          ? `Speed HD: Signalsmith Stretch (${Math.round((videoSpeedStretchNode?.latencySeconds || 0) * 1000)} ms audio latency). Original pitch preserved. Click for Pitch.`
+          ? `Speed HD: Signalsmith Stretch (${Math.round((videoSpeedStretchNode?.latencySeconds || 0) * 1000)} ms audio latency). Separate tune: ${speedHDTuneSemitone > 0 ? "+" : ""}${speedHDTuneSemitone} st. Click for Pitch.`
           : (speedStretchStatus === "browser"
             ? "Speed HD: HD engine unavailable; using browser stretch fallback. Click for Pitch."
             : "Speed HD: loading Signalsmith Stretch; using browser stretch until ready. Click for Pitch.")));
     minimalPitchModeButton.setAttribute("data-engine", engine);
     minimalPitchModeButton.setAttribute("aria-label", `${mode}. ${minimalPitchModeButton.title}`);
     minimalPitchModeButton.setAttribute("aria-pressed", String(speedOnlyMode));
+  }
+  if (speedHDTuneControl) {
+    speedHDTuneControl.hidden = !(speedOnlyMode && speedHDMode && pitchTarget === "video");
+    const available = speedStretchStatus === "hq" && !!videoSpeedStretchNode;
+    const tuneText = `${speedHDTuneSemitone > 0 ? "+" : ""}${speedHDTuneSemitone}`;
+    speedHDTuneValue.textContent = tuneText;
+    speedHDTuneValue.title = `Tune: ${tuneText} semitones. Click to reset to 0.`;
+    speedHDTuneValue.setAttribute("aria-label", `Tune ${tuneText} semitones. Reset tuning to zero.`);
+    speedHDTuneDownButton.disabled = !available || speedHDTuneSemitone <= PITCH_SEMITONE_MIN;
+    speedHDTuneUpButton.disabled = !available || speedHDTuneSemitone >= PITCH_SEMITONE_MAX;
+    speedHDTuneControl.title = available
+      ? "Independent Speed HD tuning. Uses the existing HD processor; no additional buffering."
+      : "HD tuning unavailable until the Signalsmith engine is ready.";
   }
   const labelText = pitchSemitoneMode ? `${Math.round(pitchSemitone)} st` : `${Math.round(pitchPercentage)}%`;
   if (advancedPitchLabel) advancedPitchLabel.innerText = labelText;
@@ -12272,7 +12423,9 @@ function stepPitch(delta) {
 }
 
 function getGlobalPitchSemitone() {
-  if (speedOnlyMode) return 0;
+  if (speedOnlyMode) {
+    return speedHDMode && videoSpeedStretchNode ? speedHDTuneSemitone : 0;
+  }
   return 12 * Math.log2(getCurrentPitchRate());
 }
 
@@ -15064,6 +15217,44 @@ function injectCustomCSS() {
       outline: 2px solid rgba(255,255,255,0.8);
       outline-offset: 3px;
     }
+    .ytbm-speed-hd-tune {
+      display: inline-flex;
+      align-items: center;
+      gap: 1px;
+      flex: 0 0 auto;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 5px;
+    }
+    .ytbm-speed-hd-tune[hidden] {
+      display: none !important;
+    }
+    .ytbm-speed-hd-tune button {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      border-radius: 3px;
+      color: #fff;
+      cursor: pointer;
+      font: 600 12px sans-serif;
+      padding: 2px 4px;
+      min-width: 18px;
+      line-height: 18px;
+    }
+    .ytbm-speed-hd-tune .ytbm-speed-hd-tune-value {
+      min-width: 28px;
+      font-variant-numeric: tabular-nums;
+    }
+    .ytbm-speed-hd-tune button:hover:not(:disabled) {
+      background: rgba(255,255,255,0.12);
+    }
+    .ytbm-speed-hd-tune button:focus-visible {
+      outline: 2px solid rgba(255,255,255,0.8);
+      outline-offset: 1px;
+    }
+    .ytbm-speed-hd-tune button:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
     .ytbm-pitch-value {
       font-size: 11px;
       font-weight: 600;
@@ -15533,6 +15724,8 @@ function attachVideoMetadataListener() {
 
 // 3) In that listener, reset pitch back to 0
 function onNewVideoLoaded() {
+  cancelCueSeek();
+  rampCueGain(1);
   console.log("New video loaded => resetting pitch to 0%");
   ensureMinimalToggleButton();
 

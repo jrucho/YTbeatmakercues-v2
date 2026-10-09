@@ -1,3 +1,30 @@
+# Release 2.3.7
+
+## Summary
+Release **2.3.7** adds independent semitone tuning to Speed HD and improves cue and sidechain click handling without adding an audio buffer.
+
+## Clean changelog
+- Show the tuning control only in Speed HD; arrows change tuning in one-semitone steps from −24 to +24, and clicking the value resets it to zero.
+- Keep playback speed, Percent/Semitones fader units, and HD tuning independent.
+- Remember HD tuning when switching modes, applying it only in Speed HD.
+- Combine tuning and speed-related pitch correction in the existing Signalsmith processor without adding another buffer or changing its analysis configuration.
+- Support nonzero HD tuning at normal playback speed, while bypassing HD processing at normal speed with zero tuning.
+- Keep Pitch and basic Speed on the direct path, without HD processing latency.
+- Include the tuning value in app-state snapshots and apply the actual tuned pitch to the instrument's video-pitch-follow setting.
+- Disable tuning arrows if the HD engine is unavailable; the number still allows resetting to zero.
+- Unify keyboard, MIDI, pad, sequencer and remote cue playback through a short, interrupt-safe gain envelope.
+- Keep the existing 2 ms fade-out, then fade back in when the media seek is ready rather than before the decoder supplies the new audio.
+- Cancel obsolete cue callbacks and preserve gain continuity during rapid retriggering. Recover safely from failed seeks and source changes.
+- Replace the legacy hidden-deck cue crossfade with the same visible-player seek path; no new audio buffer or additional fixed cue delay is introduced.
+- Remove instantaneous sidechain gain resets and retrigger from the current envelope value. Smooth the attack/release edges over up to 3 ms, preserving the curve's overall duration without a new buffer or trigger timer.
+- Updated extension and package versions to **2.3.7**.
+
+## Processing latency
+Speed HD uses the same approximately 180 ms processing buffer as 2.3.6, including when tuning. Pitch and basic Speed bypass that buffer; normal browser/device latency still applies.
+Cue smoothing uses a 2 ms gain fade, matching the previous keyboard fade. Decoder seek time still depends on the media source; it does not add a buffering stage or a longer fixed cue delay.
+
+---
+
 # Release 2.3.6
 
 ## Summary

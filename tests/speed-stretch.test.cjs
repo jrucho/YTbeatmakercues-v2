@@ -31,8 +31,9 @@ async function processor(sampleRate = 48000) {
     if (message.reset) send('configure', config);
     if (typeof message.active === 'boolean') p.active = message.active;
     if (Number.isFinite(message.rate)) p.rate = Math.max(0.25, Math.min(4, message.rate));
+    if (Number.isFinite(message.tuneSemitones)) p.tuneSemitones = Math.max(-24, Math.min(24, Math.round(message.tuneSemitones)));
     send('schedule', {
-      active: true, semitones: p.active ? -12 * Math.log2(p.rate || 1) : 0,
+      active: true, semitones: p.active ? (p.tuneSemitones || 0) - 12 * Math.log2(p.rate || 1) : 0,
       tonalityHz: sampleRate, formantSemitones: 0, formantCompensation: false
     });
   };
@@ -120,6 +121,21 @@ test('official WASM engine initializes with the quality window and finite latenc
   for (let i = 24000; i < mono[0].length; i++) assert.ok(Math.abs(mono[0][i] - mono[1][i]) < 1e-5);
 });
 
+for (const rate of [0.5, 1, 2]) {
+  for (const tuneSemitones of [-5, 3]) {
+    test(`HD tuning changes pitch independently at ${rate}x / ${tuneSemitones} st with unchanged engine latency`, async () => {
+      const p = await processor();
+      const latency = p.inputLatencySeconds + p.outputLatencySeconds;
+      p.control({ active: true, rate, tuneSemitones });
+      const output = render(p, 96000, (i) => 0.5 * Math.sin(2 * Math.PI * 220 * rate * i / 48000));
+      const expected = 220 * 2 ** (tuneSemitones / 12);
+      const measured = frequency(output[0].subarray(48000), 48000);
+      assert.ok(Math.abs(measured - expected) < 1, `expected ${expected} Hz; got ${measured} Hz`);
+      assert.equal(p.inputLatencySeconds + p.outputLatencySeconds, latency);
+    });
+  }
+}
+
 for (const sampleRate of [44100, 48000]) {
   for (const rate of [0.25, 0.5, 0.75, 1.25, 1.5, 2, 4]) {
     test(`restores 220 Hz pitch and stereo phase at ${rate}x / ${sampleRate} Hz`, async () => {
@@ -163,16 +179,26 @@ function controls() {
   const deckB = { _mediaSource: {} };
   const preview = { _mediaSource: {} };
   const makeNode = () => ({ port: { postMessage: (message) => messages.push(message) } });
+  const makeElement = () => ({
+    children: [], listeners: {}, hidden: false, disabled: false,
+    setAttribute(name, value) { this[name] = value; },
+    addEventListener(name, handler) { this.listeners[name] = handler; },
+    append(...children) { this.children.push(...children); },
+    click() { if (!this.disabled) this.listeners.click?.(); }
+  });
   const context = {
     console,
     pitchPercentage: 0, pitchSemitone: 0, pitchSemitoneMode: false,
-    speedOnlyMode: false, speedHDMode: false, pitchTarget: 'video', videoPitchPercentage: 0, loopPitchPercentage: 25,
+    speedOnlyMode: false, speedHDMode: false, speedHDTuneSemitone: 0,
+    speedHDTuneControl: null, speedHDTuneValue: null, speedHDTuneDownButton: null, speedHDTuneUpButton: null,
+    pitchTarget: 'video', videoPitchPercentage: 0, loopPitchPercentage: 25,
     pitchSliderElement: {}, minimalPitchSlider: {},
     minimalPitchModeButton: { setAttribute(name, value) { this[name] = value; } },
     advancedPitchLabel: {}, minimalPitchLabel: {}, pitchModeButton: {}, pitchTargetButton: {},
     videoPreviewElement: preview, deckA: video, deckB,
     videoSpeedStretchNode: makeNode(), previewSpeedStretchNode: makeNode(),
     speedStretchStatus: 'hq',
+    document: { createElement: makeElement },
     getVideoElement: () => video,
     loopSources: [{ playbackRate: { value: 1 } }], audioLoopRates: [1],
     window: {}, applyInstrumentPitchSync() {}, ensureAudioContext: async () => {},
@@ -234,6 +260,101 @@ test('units can change inside Speed without disabling speed mode', () => {
   assert.equal(c.messages.at(-1).active, false, 'unity should bypass buffered processing');
 });
 
+test('HD tune arrows change one semitone and reset without altering fader units or speed', () => {
+  const c = controls();
+  c.buildSpeedHDTuneControl();
+  c.updatePitch(-50);
+  c.togglePitchMode(true);
+  c.toggleSpeedOnlyMode();
+  c.toggleSpeedOnlyMode();
+  assert.equal(c.speedHDTuneControl.hidden, false);
+  assert.equal(c.speedHDTuneValue.textContent, '0');
+  c.speedHDTuneUpButton.click();
+  c.speedHDTuneUpButton.click();
+  assert.equal(c.speedHDTuneSemitone, 2);
+  assert.equal(c.speedHDTuneValue.textContent, '+2');
+  assert.equal(c.pitchSemitoneMode, true);
+  assert.equal(c.pitchSemitone, -12);
+  assert.equal(c.minimalPitchSlider.value, -12);
+  assert.equal(c.deckA.playbackRate, 0.5);
+  assert.equal(c.deckB.playbackRate, 0.5);
+  assert.equal(c.videoPreviewElement.playbackRate, 0.5);
+  assert.equal(c.messages.at(-1).tuneSemitones, 2);
+  assert.equal(c.getGlobalPitchSemitone(), 2);
+  c.speedHDTuneDownButton.click();
+  assert.equal(c.speedHDTuneSemitone, 1);
+  c.speedHDTuneValue.click();
+  assert.equal(c.speedHDTuneSemitone, 0);
+  assert.equal(c.speedHDTuneValue.textContent, '0');
+  assert.equal(c.deckA.playbackRate, 0.5);
+});
+
+test('tuning is remembered but hidden and bypassed in Pitch and basic Speed', () => {
+  const c = controls();
+  c.buildSpeedHDTuneControl();
+  c.updatePitch(-50);
+  c.toggleSpeedOnlyMode();
+  c.toggleSpeedOnlyMode();
+  c.updateSpeedHDTune(3);
+  c.toggleSpeedOnlyMode();
+  assert.equal(c.speedHDTuneControl.hidden, true);
+  assert.equal(c.speedHDTuneSemitone, 3);
+  assert.equal(c.messages.at(-1).active, false);
+  assert.equal(c.messages.at(-1).tuneSemitones, 0);
+  assert.equal(c.deckA.preservesPitch, false);
+  assert.equal(c.getGlobalPitchSemitone(), -12);
+  c.toggleSpeedOnlyMode();
+  assert.equal(c.speedHDTuneControl.hidden, true);
+  assert.equal(c.deckA.preservesPitch, true);
+  assert.equal(c.messages.at(-1).active, false);
+  assert.equal(c.getGlobalPitchSemitone(), 0);
+  c.updateSpeedHDTune(12);
+  assert.equal(c.speedHDTuneSemitone, 3, 'tuning must not change outside HD mode');
+  c.toggleSpeedOnlyMode();
+  assert.equal(c.speedHDTuneControl.hidden, false);
+  assert.equal(c.speedHDTuneValue.textContent, '+3');
+  assert.equal(c.messages.at(-1).tuneSemitones, 3);
+  assert.equal(c.deckA.playbackRate, 0.5);
+});
+
+test('HD tuning at normal speed stays active and speed reset does not reset tuning', () => {
+  const c = controls();
+  c.toggleSpeedOnlyMode();
+  c.toggleSpeedOnlyMode();
+  c.updateSpeedHDTune(3);
+  assert.equal(c.deckA.playbackRate, 1);
+  assert.equal(c.messages.at(-1).active, true);
+  c.updatePitch(-50);
+  c.updatePitch(0);
+  assert.equal(c.speedHDTuneSemitone, 3);
+  assert.equal(c.messages.at(-1).active, true);
+  c.updateSpeedHDTune(0);
+  assert.equal(c.messages.at(-1).active, false, 'normal speed and zero tuning should bypass HD buffering');
+});
+
+test('HD tuning clamps at 24 semitones and disables arrows when the engine is unavailable', () => {
+  const c = controls();
+  c.buildSpeedHDTuneControl();
+  c.toggleSpeedOnlyMode();
+  c.toggleSpeedOnlyMode();
+  c.updateSpeedHDTune(100);
+  assert.equal(c.speedHDTuneSemitone, 24);
+  assert.equal(c.speedHDTuneUpButton.disabled, true);
+  c.updateSpeedHDTune(-100);
+  assert.equal(c.speedHDTuneSemitone, -24);
+  assert.equal(c.speedHDTuneDownButton.disabled, true);
+  c.updateSpeedHDTune(NaN);
+  assert.equal(c.speedHDTuneSemitone, -24);
+  c.speedStretchStatus = 'browser';
+  c.videoSpeedStretchNode = null;
+  c.refreshPitchUI();
+  assert.equal(c.speedHDTuneUpButton.disabled, true);
+  assert.equal(c.speedHDTuneDownButton.disabled, true);
+  assert.equal(c.getGlobalPitchSemitone(), 0);
+  c.speedHDTuneValue.click();
+  assert.equal(c.speedHDTuneSemitone, 0);
+});
+
 test('target changes restore video semitone value and browser fallback avoids double stretching', () => {
   const c = controls();
   c.togglePitchMode(true);
@@ -268,6 +389,7 @@ test('adapter configures HQ processing, bypasses dry audio and applies octave co
       this.connections = [];
       this.gain = {
         value: 1, cancelAndHoldAtTime() {},
+        setValueAtTime(value) { this.value = value; },
         linearRampToValueAtTime(value) { this.value = value; }
       };
     }
@@ -310,8 +432,12 @@ test('adapter configures HQ processing, bypasses dry audio and applies octave co
   assert.equal(wet.gain.value, 1);
   assert.equal(workletNode.messages.at(-1)[2].semitones, 12);
   assert.equal(workletNode.messages.at(-1)[2].tonalityHz, 48000);
+  node.port.postMessage({ active: true, rate: 0.5, tuneSemitones: 3 });
+  assert.equal(workletNode.messages.at(-1)[2].semitones, 15);
+  assert.equal(workletNode.messages.filter((m) => m[1] === 'configure').length, 1, 'tuning must not reconfigure or add buffering');
+  assert.equal(node.latencySeconds, 0.18);
   const count = workletNode.messages.length;
-  node.port.postMessage({ active: true, rate: 0.5 });
+  node.port.postMessage({ active: true, rate: 0.5, tuneSemitones: 3 });
   assert.equal(workletNode.messages.length, count, 'unchanged controls should not reschedule processing');
   node.port.postMessage({ active: false, rate: 1 });
   assert.equal(dry.gain.value, 1);
@@ -348,9 +474,9 @@ test('three-step label is stable and HD engine readiness/fallback is reported in
   assert.equal(c.deckA.preservesPitch, false);
 });
 
-test('release exposes the worklet and declares version 2.3.6', () => {
+test('release exposes the worklet and declares version 2.3.7', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '2.3.6');
+  assert.equal(manifest.version, '2.3.7');
   assert.ok(manifest.web_accessible_resources.some((entry) => entry.resources.includes('worklets/speed-stretch-worklet.js')));
   assert.ok(manifest.web_accessible_resources.some((entry) => entry.resources.includes('node_modules/signalsmith-stretch/SignalsmithStretch.mjs')));
 });
