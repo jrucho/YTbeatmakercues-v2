@@ -908,6 +908,18 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       minimalPitchSlider = null,
       minimalPitchLabel = null,
       minimalPitchModeButton = null,
+      stemsButtonMin = null,
+      stemsDropdownMin = null,
+      stemsGridMin = null,
+      stemsStatusMin = null,
+      stemsDownloadBtn = null,
+      stemsDownloadAllBtn = null,
+      stemsProgressWrap = null,
+      stemsProgressBar = null,
+      stemsProgressLabel = null,
+      stemsCancelBtn = null,
+      stemsContextMenu = null,
+      stemsUninstallBtn = null,
       speedHDTuneControl = null,
       speedHDTuneValue = null,
       speedHDTuneDownButton = null,
@@ -1121,6 +1133,18 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       bus4Gain = null,
       masterGain = null,
       antiClickGain = null,
+      // Optional Stems add-on (dormant unless pack installed). Zero-latency
+      // bypass when inactive: stemBus is a unity pass-through.
+      stemBusInput = null,
+      stemBusOutput = null,
+      stemBusContext = null,
+      stemBranchGains = null,
+      stemBranchFilters = null,
+      stemLiveGains = null,
+      stemAiGains = null,
+      stemTap = null,
+      stemWorker = null,
+      stemState = null,
       loFiCompNode = null,
       postCompGain = null,
       mainRecorderMix = null,
@@ -1624,6 +1648,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       ensureAudioContext().then(() => {
         if (!audioContext) return;
         this._stopPlayback();
+        // A retiring source owns its gain until its fade finishes.
         const gain = this._ensureGain();
         if (!gain) return;
         const src = audioContext.createBufferSource();
@@ -1634,6 +1659,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
         const startAt = Math.max(when, audioContext.currentTime);
         src.playbackRate.setValueAtTime(finalRate, startAt);
         src.connect(gain);
+        if (typeof rampLoopGain === "function") rampLoopGain(gain.gain, 1, startAt, 0);
+        else { try { gain.gain.setValueAtTime(1, startAt); } catch {} }
         src.start(startAt);
         this.sourceNode = src;
         this.playbackRate = finalRate;
@@ -1643,10 +1670,29 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
 
     _stopPlayback() {
       if (this.sourceNode) {
-        try { this.sourceNode.stop(); } catch {}
-        try { this.sourceNode.disconnect(); } catch {}
+        const deadSrc = this.sourceNode;
+        const gain = this.gainNode;
+        this.sourceNode = null;
+        this.gainNode = null;
+        if (gain && audioContext && typeof rampLoopGain === "function") {
+          try {
+            rampLoopGain(gain.gain, 0, audioContext.currentTime);
+            setTimeout(() => {
+              try { deadSrc.stop(); } catch {}
+              try { deadSrc.disconnect(); } catch {}
+              try { gain.disconnect(); } catch {}
+            }, Math.ceil(LOOP_FADE_SECONDS * 1000) + 30);
+          } catch {
+            try { deadSrc.stop(); } catch {}
+            try { deadSrc.disconnect(); } catch {}
+            try { gain.disconnect(); } catch {}
+          }
+        } else {
+          try { deadSrc.stop(); } catch {}
+          try { deadSrc.disconnect(); } catch {}
+          try { gain?.disconnect(); } catch {}
+        }
       }
-      this.sourceNode = null;
       this._updateState(this.buffer ? "stopped" : "empty");
     }
 
@@ -2706,17 +2752,43 @@ function toggleBlindMode() {
     const tapBpmBtn = document.createElement("button");
     tapBpmBtn.className = "looper-btn";
     tapBpmBtn.innerText = "Tap BPM";
-    tapBpmBtn.addEventListener("click", () => {
-      let now = performance.now();
+    const onTapBpm = () => {
+      const now = performance.now();
+      // Tapping means manual tempo: take over from MIDI clock / Ableton Link
+      // (which otherwise silently swallow every tap) and switch to Internal.
+      if (sequencerClockSource !== 'internal') {
+        sequencerClockSource = 'internal';
+        try { localStorage.setItem('ytbm_sequencerClockSource', 'internal'); } catch {}
+        try { teardownAbletonLinkSession(); } catch {}
+      }
+      // A pause longer than 2.5 s starts a new tap run; otherwise one stale
+      // tap from minutes ago would corrupt the average.
+      if (tapTimes.length && now - tapTimes[tapTimes.length - 1] > 2500) tapTimes.length = 0;
       tapTimes.push(now);
       if (tapTimes.length > 8) tapTimes.shift();
-      if (tapTimes.length >= 4) {
-        let intervals = [];
+      tapBpmBtn.style.transform = "scale(0.93)";
+      setTimeout(() => { tapBpmBtn.style.transform = ""; }, 110);
+      if (tapTimes.length >= 2) {
+        const intervals = [];
         for (let i = 1; i < tapTimes.length; i++) intervals.push(tapTimes[i] - tapTimes[i - 1]);
-        let avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
         const newBpm = Math.round(60000 / avgInterval);
         applySequencerBpm(newBpm);
+        tapBpmBtn.innerText = tapTimes.length >= 4 ? `${newBpm} BPM` : "Tap BPM";
       }
+    };
+    // Touch devices: click alone can be delayed or swallowed by scrolling,
+    // so answer touchstart directly; the click guard ignores the emulated
+    // click that follows a handled touch.
+    let tapBpmTouchAt = -Infinity;
+    tapBpmBtn.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      tapBpmTouchAt = performance.now();
+      onTapBpm();
+    }, { passive: false });
+    tapBpmBtn.addEventListener("click", () => {
+      if (performance.now() - tapBpmTouchAt < 600) return;
+      onTapBpm();
     });
     controlRow.appendChild(tapBpmBtn);
 
@@ -3726,10 +3798,18 @@ function cleanupResources() {
   }
   videoSpeedStretchNode?.dispose();
   previewSpeedStretchNode?.dispose();
+  try { if (typeof teardownStemTap === "function") teardownStemTap(); } catch {}
+  try { if (typeof stemAiTeardown === "function") stemAiTeardown(true); } catch {}
   if (audioContext) {
     audioContext.close().catch(console.error);
     audioContext = null;
   }
+  // Drop nodes owned by the closed context; ensureStemBus() rebuilds them.
+  stemBusInput = null;
+  stemBusOutput = null;
+  stemBusContext = null;
+  stemBranchGains = null;
+  stemBranchFilters = null;
   videoSpeedStretchNode = null;
   previewSpeedStretchNode = null;
   speedStretchStatus = "loading";
@@ -4814,6 +4894,10 @@ function onMinimalPointerUp(e) {
 
   minimalUIContainer.appendChild(pitchCluster);
 
+  try {
+    minimalUIContainer.appendChild(buildStemsControl());
+  } catch (err) { console.warn("Stems control unavailable:", err); }
+
   const cuesPieces = createIconButton(YTBM_ICON_PATHS.cues, "Cues");
   cuesButtonMin = cuesPieces.button;
   minimalCuesLabel = cuesPieces.labelEl;
@@ -5034,6 +5118,8 @@ addTrackedListener(window, 'blur', () => {
 });
 addTrackedListener(window, 'pagehide', () => {
   stopVJRenderer();
+  try { if (typeof clearStemSession === "function") clearStemSession("tab hidden/closed"); } catch {}
+  try { if (typeof stemAiTeardown === "function") stemAiTeardown(true); } catch {}
   if (crossTabVJChannel) {
     try { crossTabVJChannel.postMessage({ type: 'vj-frame-clear', tabId: ytbmTabId }); } catch {}
   }
@@ -5063,6 +5149,68 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((msg) => {
     if (!msg || msg.type !== 'ytbm-tab-order-update') return;
     updateVJTabOrder(msg.order || []);
+  });
+  chrome.runtime.onMessage.addListener((msg, sender, respond) => {
+    if (msg?.type !== 'ytbm-stems-session-inspect' || !shouldRunOnThisPage()) return false;
+    respond(getStemSessionStorageInfo());
+    return false;
+  });
+  // Service-worker messages for the optional stems model download.
+  chrome.runtime.onMessage.addListener((msg) => {
+    try {
+      if (!msg || msg.target !== 'ytbm-stems') return;
+      const st = getStemState();
+      if (msg.kind === 'ytbm-stems-download-progress') {
+        st.downloadedBytes = Number(msg.received) || 0;
+        if (typeof msg.f === 'number') st.downloadProgress = msg.f;
+        st._lastDownloadActivity = Date.now();
+        refreshStemsUI();
+      } else if (msg.kind === 'ytbm-stems-download-done') {
+        if (msg.ok) {
+          if (typeof st._downloadResolve === 'function') st._downloadResolve(msg);
+          else { st.downloading = false; reconcileStemInstallation(); }
+        } else {
+          const reason = msg.cancelled ? 'Download cancelled' : (msg.error || 'Download failed');
+          if (typeof st._downloadReject === 'function') st._downloadReject(new Error(reason));
+          else {
+            st.downloading = false;
+            st.downloadProgress = 0;
+            st.installError = reason;
+            if (stemsStatusMin) stemsStatusMin.textContent = reason;
+            refreshStemsUI();
+          }
+        }
+      } else if (msg.kind === 'ytbm-stems-model-removed') {
+        disableStemPackLocally();
+      } else if (msg.kind === 'ytbm-stems-track-status' && msg.track === st.preloadId) {
+        st.preloadStatus = msg.status;
+        st.preloadBytes = msg.bytes || 0;
+        st.preloadError = msg.error || null;
+        if (msg.status === 'ready') stemMaybeOpenTrack(st.ai);
+        if (msg.status === 'unavailable') queueStemPreload();
+        refreshStemsUI();
+      } else if (msg.kind === 'ytbm-stems-buffered-ready' && msg.track === st.bufferedId) {
+        st.bufferedInfo = msg;
+        st.bufferedError = msg.error || null;
+        stemMaybeOpenBuffered(st.ai);
+        refreshStemsUI();
+      }
+    } catch {}
+  });
+}
+
+function sendToBackground(msg) {
+  return new Promise((resolve, reject) => {
+    const fail = error => {
+      if (msg?.type?.startsWith('ytbm-stems-') && isStemContextError(error)) stopStemsForInvalidContext();
+      reject(error);
+    };
+    try {
+      chrome.runtime.sendMessage(msg, (res) => {
+        if (chrome.runtime.lastError) return fail(new Error(chrome.runtime.lastError.message));
+        resolve(res);
+      });
+    } catch (err) { fail(err); }
   });
 }
 
@@ -5098,7 +5246,7 @@ async function ensureAudioContext() {
   if (audioContext.state === "suspended") {
     await audioContext.resume().catch(err => console.error("AudioContext resume failed:", err.message));
   }
-  if (!deckA) { initTwoDeck(); }
+  if (!deckA || deckA !== getVideoElement()) { initTwoDeck(); }
   if (!currentOutputNode) currentOutputNode = audioContext.destination;
   await applySavedOutputDevice();
   if (created) {
@@ -5112,7 +5260,15 @@ async function ensureAudioContext() {
 
 /***** Two-deck initialisation (error-safe) *****/
 function initTwoDeck() {
-  deckA = getVideoElement();
+  const previous = deckA;
+  const next = getVideoElement();
+  if (previous && previous !== next) {
+    try { previous._mediaSource?.disconnect(); } catch {}
+    try { gainA?.disconnect(); gainB?.disconnect(); dcBlockA?.disconnect(); dcBlockB?.disconnect(); } catch {}
+    try { deckB?.pause(); deckB?.remove(); } catch {}
+    deckB = null;
+  }
+  deckA = next;
   if (!deckA) return;
 
   /* -----  A-deck: visible player  ----- */
@@ -5141,6 +5297,8 @@ function initTwoDeck() {
 
   /* -----  B-deck: hidden clone  ----- */
   deckB = deckA.cloneNode(false);
+  deckB.className = "ytbm-cue-deck";
+  deckB.removeAttribute("id");
   deckB.style.display = "none";
   deckB.muted = true;               // autoplay guarantee
   deckB.playsInline = true;
@@ -5203,6 +5361,14 @@ function jumpToCue(targetTime) {
   if (!video || !Number.isFinite(targetTime)) return false;
   const end = Number.isFinite(video.duration) ? Math.max(0, video.duration) : Infinity;
   const target = Math.max(0, Math.min(end, targetTime));
+  // Stop old scheduled stems before moving the player. Never reopen the
+  // unseparated mix while a requested stem mute waits for the cue target.
+  if (typeof stemsNeedSplit === "function" && stemsNeedSplit()) {
+    const stems = getStemState();
+    stems.seekHold = !!stems.ai?.hasPlayedSplit;
+    stemAiSetPath(stems.seekHold ? "waiting" : "live");
+    stemAiBreakRun();
+  }
   cancelCueSeek();
   const generation = cueSeekGeneration;
   if (!audioContext || audioContext.state === "closed" || !videoGain) {
@@ -5240,6 +5406,10 @@ function jumpToCue(targetTime) {
     const ready = () => {
       if (generation !== cueSeekGeneration) { cleanup(); return; }
       if (video.seeking || video.readyState < 2) return;
+      // Cached stems are already separated: queue them as soon as the decoder
+      // reaches the cue, rather than waiting up to 150 ms for the polling tick.
+      // Coverage checks and the silent hold still protect unanalysed targets.
+      if (typeof stemsNeedSplit === "function" && stemsNeedSplit()) stemAiTick();
       recover();
     };
     cueSeekCleanup = cleanup;
@@ -5263,6 +5433,7 @@ function jumpToCue(targetTime) {
 }
 
 let videoCheckInterval = setInterval(() => {
+  if (stemState?.installed && !stemState.analysisRequested && !stemState.analysisCancelled && getVideoElement()?.readyState >= 1) requestStemAnalysis();
   if (audioContext) {
     let vid = getVideoElement();
     if (vid && !vid._audioConnected) {
@@ -5585,18 +5756,21 @@ function syncSpeedPlayback() {
   const rate = pitchTarget === "video" ? getCurrentPitchRate() : 1;
   const active = speedOnlyMode && pitchTarget === "video";
   const hdActive = active && speedHDMode;
+  const stemsSpeedActive = active && !hdActive && !!videoSpeedStretchNode &&
+    typeof stemState !== "undefined" && stemState?.ai?.pathMix === "ai";
   const tuneSemitones = hdActive ? speedHDTuneSemitone : 0;
   const message = {
-    active: hdActive && (Math.abs(rate - 1) > 1e-8 || tuneSemitones !== 0),
+    active: (hdActive || stemsSpeedActive) && (Math.abs(rate - 1) > 1e-8 || tuneSemitones !== 0),
     rate,
     tuneSemitones
   };
   videoSpeedStretchNode?.port.postMessage(message);
-  previewSpeedStretchNode?.port.postMessage(message);
+  previewSpeedStretchNode?.port.postMessage({ ...message,
+    active: hdActive && (Math.abs(rate - 1) > 1e-8 || tuneSemitones !== 0) });
   // Include the hidden cue deck so cue crossfades keep the same speed/pitch.
   for (const vid of new Set([getVideoElement(), deckA, deckB])) {
     if (!vid) continue;
-    vid.preservesPitch = active && !(hdActive && videoSpeedStretchNode && vid._mediaSource);
+    vid.preservesPitch = active && !((hdActive || stemsSpeedActive) && videoSpeedStretchNode && vid._mediaSource);
     vid.playbackRate = rate;
   }
   if (videoPreviewElement) {
@@ -6176,6 +6350,7 @@ function applyAllFXRouting() {
   if (!fxPadLeveler) fxPadLeveler = createLevelComp(audioContext);
   // First, disconnect everything that may have been connected:
   videoGain.disconnect();
+  try { if (typeof disconnectStemBus === "function") disconnectStemBus(); } catch {}
   if (videoSpeedStretchNode) videoSpeedStretchNode.output.disconnect();
   if (previewSpeedStretchNode) previewSpeedStretchNode.output.disconnect();
   if (sidechainGain) sidechainGain.disconnect();
@@ -6204,8 +6379,21 @@ function applyAllFXRouting() {
   }
 
   // Decide how to chain the "video" path:
-  // videoGain -> antiClickGain? -> (optionally eq->reverb->cassette) -> bus1Gain
+  // videoGain -> [optional Stems bus, ONLY when the pack is installed] -> speed/HD -> antiClickGain? -> (optionally eq->reverb->cassette) -> bus1Gain
+  // When stems are not installed this block is skipped entirely, so routing
+  // is byte-identical to 2.3.8 (no stem nodes are even created). Stems operate
+  // on the original YouTube source, before drums/synth/loopers.
   let currentVidNode = videoGain;
+  try {
+    const stemActive = (typeof getStemState === "function") && !!getStemState().installed;
+    if (stemActive && typeof ensureStemBus === "function") {
+      const stemNode = ensureStemBus();
+      if (stemNode) {
+        currentVidNode.connect(stemNode);
+        currentVidNode = (typeof getStemBusOutput === "function" ? getStemBusOutput() : null) || stemNode;
+      }
+    }
+  } catch {}
   if (videoSpeedStretchNode) {
     currentVidNode.connect(videoSpeedStretchNode.input);
     currentVidNode = videoSpeedStretchNode.output;
@@ -7062,7 +7250,8 @@ var enableReelsSupport = true;
 
 function getVideoElement() {
   // First look for a video; if none, try for an audio.
-  let media = document.querySelector("video:not(.ytbm-native-vj-feed)") || document.querySelector("audio");
+  let media = document.querySelector("video.html5-main-video:not(.ytbm-native-vj-feed):not(.ytbm-cue-deck)") ||
+    document.querySelector("video:not(.ytbm-native-vj-feed):not(.ytbm-cue-deck)") || document.querySelector("audio");
   if (!media && enableReelsSupport) {
     if (window.location.href.includes("/shorts/") || window.location.href.includes("/reels/")) {
       media = document.querySelector("ytd-reel-video-renderer video") ||
@@ -7178,17 +7367,76 @@ if (videoEl) {
   videoEl.addEventListener("timeupdate", updateVideoWithCues);
 }
 
+function base64ToArrayBuffer(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let bin = "";
+  const CHUNK = 8192;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+function fetchAssetViaBackground(path) {
+  // Background service worker fetches our own packaged files same-origin,
+  // which works even when the page blocks the content script's direct fetch.
+  // The worker base64-encodes the bytes because raw ArrayBuffers do not
+  // survive sendMessage responses (they arrive as plain {}). Resolves ONLY
+  // with a genuine non-empty ArrayBuffer; anything else rejects loudly
+  // instead of poisoning decodeAudioData downstream.
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage({ type: "ytbm-fetch-asset", path }, (res) => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        try {
+          if (res && res.ok && typeof res.dataB64 === "string" && res.dataB64.length) {
+            const buf = base64ToArrayBuffer(res.dataB64);
+            if (buf.byteLength > 0) return resolve(buf);
+          }
+        } catch (decErr) {
+          return reject(new Error(`background payload decode failed: ${decErr.message}`));
+        }
+        reject(new Error((res && res.error) || "background fetch returned unusable data"));
+      });
+    } catch (err) { reject(err); }
+  });
+}
+
 async function loadAudio(path) {
   try {
     const isExternal = /^(data:|blob:|https?:)/.test(path);
-    const url = isExternal ? path : chrome.runtime.getURL(path);
-    let r = await fetch(url);
-    if (!r.ok) throw new Error(`HTTP error ${r.status}`);
-    let b = await r.arrayBuffer();
-    return audioContext.decodeAudioData(b);
+    let b = null;
+    if (isExternal) {
+      const r = await fetch(path);
+      if (!r.ok) throw new Error(`HTTP error ${r.status}`);
+      b = await r.arrayBuffer();
+    } else {
+      // Background-first: the worker fetches our packaged files same-origin,
+      // so YouTube never logs "Unsafe attempt to load URL" warnings. Direct
+      // fetch is only a fallback (it is blocked on these pages).
+      try {
+        b = await fetchAssetViaBackground(path);
+      } catch (bgErr) {
+        console.warn("Background asset fetch failed, trying direct:", path, bgErr);
+        const r = await fetch(chrome.runtime.getURL(path));
+        if (!r.ok) throw new Error(`HTTP error ${r.status}`);
+        b = await r.arrayBuffer();
+      }
+    }
+    if (!(b instanceof ArrayBuffer) || b.byteLength === 0) {
+      throw new TypeError(`loadAudio got ${Object.prototype.toString.call(b)} instead of audio bytes for ${path}`);
+    }
+    return await audioContext.decodeAudioData(b);
   } catch (e) {
+    // Console-only: loadDefaultSamples reports one summary, not 30 popups.
     console.error("Failed to load audio file:", path, e);
-    alert(`Error loading ${path}!`);
     return null;
   }
 }
@@ -7322,6 +7570,36 @@ function getNextMidiLoopAlignedStart(afterMs, excludeIndex = null) {
   return best;
 }
 
+// Loop playback always fades in/out over a few milliseconds so starting,
+// stopping, muting or launching loops never splices the waveform (clicks).
+// Fades only shape gain; record timing and sync boundaries are unchanged.
+const LOOP_FADE_SECONDS = 0.008;
+let loopFadeTimers = [];
+
+const loopGainEnvelopes = new WeakMap();
+function loopGainHeld(param, when) {
+  // AudioParam.value does not track scheduled ramps, so remember our own
+  // envelope per gain. Retriggering mid-fade then continues smoothly.
+  try {
+    const env = loopGainEnvelopes.get(param);
+    if (!env) return Math.max(0, param.value);
+    if (when <= env.start) return env.from;
+    if (when >= env.end) return env.to;
+    const phase = (when - env.start) / Math.max(1e-6, env.end - env.start);
+    return env.from + (env.to - env.from) * phase;
+  } catch { return 0; }
+}
+
+function rampLoopGain(param, target, when, from = null) {
+  try {
+    const held = from !== null ? from : loopGainHeld(param, when);
+    param.cancelScheduledValues(when);
+    param.setValueAtTime(held, when);
+    param.linearRampToValueAtTime(target, when + LOOP_FADE_SECONDS);
+    loopGainEnvelopes.set(param, { from: held, to: target, start: when, end: when + LOOP_FADE_SECONDS });
+  } catch {}
+}
+
 function playLoop(startTime = null) {
   ensureAudioContext().then(() => {
     if (!audioContext) return;
@@ -7335,7 +7613,10 @@ function playLoop(startTime = null) {
       let rate = audioLoopRates[i] || 1;
       if (pitchTarget === "loop") rate *= getCurrentPitchRate();
       src.playbackRate.value = rate;
-      src.connect(loopAudioGain);
+      const g = audioContext.createGain();
+      g.gain.value = 0;
+      loopGainNodes[i] = g;
+      src.connect(g).connect(loopAudioGain);
       loopSources[i] = src;
     });
     if (!loopSources.some(Boolean)) return;
@@ -7346,6 +7627,8 @@ function playLoop(startTime = null) {
     loopStartAbsoluteTime = clock.startTime;
     loopSources.forEach((src, i) => {
       if (src) {
+        const g = loopGainNodes[i];
+        if (g) rampLoopGain(g.gain, 1, when);
         src.start(when);
         loopStartOffsets[i] = 0;
         const looper = loopers.audio[i];
@@ -7369,7 +7652,7 @@ function playNewLoop(index) {
     src.buffer = buf;
     src.loop = true;
     const g = audioContext.createGain();
-    g.gain.value = 1;
+    g.gain.value = 0;
     loopGainNodes[index] = g;
     let rate = audioLoopRates[index] || 1;
     if (pitchTarget === "loop") rate *= getCurrentPitchRate();
@@ -7377,6 +7660,7 @@ function playNewLoop(index) {
     src.connect(g).connect(loopAudioGain);
     const shouldSync = hasActiveSyncLoop();
     const when = shouldSync ? getNextLoopCycleTime(audioContext.currentTime + PLAY_PADDING) : (audioContext.currentTime + PLAY_PADDING);
+    rampLoopGain(g.gain, 1, when);
     src.start(when);
     if (!hasActiveSyncLoop()) {
       if (!clock.isRunning) {
@@ -7401,7 +7685,7 @@ function playSingleLoop(index, startTime = null, offset = 0) {
     src.buffer = buf;
     src.loop = true;
     const g = audioContext.createGain();
-    g.gain.value = 1;
+    g.gain.value = 0;
     loopGainNodes[index] = g;
     let rate = audioLoopRates[index] || 1;
     if (pitchTarget === "loop") rate *= getCurrentPitchRate();
@@ -7409,6 +7693,7 @@ function playSingleLoop(index, startTime = null, offset = 0) {
     src.connect(g).connect(loopAudioGain);
     const when = startTime !== null ? startTime : (hasActiveSyncLoop() ? getNextLoopCycleTime(audioContext.currentTime + PLAY_PADDING) : audioContext.currentTime);
     const off = Math.max(0, offset % (audioLoopBuffers[index].duration || 1e-6));
+    rampLoopGain(g.gain, 1, when);
     src.start(when, off);
     if (!hasActiveSyncLoop()) {
       if (!clock.isRunning) {
@@ -7461,11 +7746,25 @@ function scheduleResumeLoop(index) {
 }
 
 function stopAllLoopSources() {
+  const now = audioContext ? audioContext.currentTime : 0;
   loopSources.forEach((src, i) => {
     const g = loopGainNodes[i];
-    if (src) { try { src.stop(); src.disconnect(); } catch {} }
-    if (g) { try { g.disconnect(); } catch {} }
-    loopGainNodes[i] = null;
+    if (src && g && audioContext) {
+      // Fade out first so the stop never splices the waveform.
+      try { rampLoopGain(g.gain, 0, now); } catch {}
+      const deadSrc = src, deadGain = g;
+      loopFadeTimers[i] = setTimeout(() => {
+        try { deadSrc.stop(); } catch {}
+        try { deadSrc.disconnect(); } catch {}
+        // Always release the faded node; only clear the slot if unreassigned.
+        try { deadGain.disconnect(); } catch {}
+        if (loopGainNodes[i] === deadGain) loopGainNodes[i] = null;
+      }, Math.ceil(LOOP_FADE_SECONDS * 1000) + 30);
+    } else {
+      if (src) { try { src.stop(); src.disconnect(); } catch {} }
+      if (g) { try { g.disconnect(); } catch {} }
+      loopGainNodes[i] = null;
+    }
     loopStartOffsets[i] = 0;
   });
   loopSources = new Array(MAX_AUDIO_LOOPS).fill(null);
@@ -7478,15 +7777,29 @@ function stopAllLoopSources() {
 
 function stopLoopSource(index) {
   const src = loopSources[index];
-  if (src) {
-    try { src.stop(); src.disconnect(); } catch {}
-  }
   const g = loopGainNodes[index];
-  if (g) {
-    try { g.disconnect(); } catch {}
+  if (src && g && audioContext) {
+    const now = audioContext.currentTime;
+    try { rampLoopGain(g.gain, 0, now); } catch {}
+    const deadSrc = src, deadGain = g;
+    loopFadeTimers[index] = setTimeout(() => {
+      try { deadSrc.stop(); } catch {}
+      try { deadSrc.disconnect(); } catch {}
+      // Always release the faded node; only clear slots if unreassigned.
+      try { deadGain.disconnect(); } catch {}
+      if (loopSources[index] === deadSrc) loopSources[index] = null;
+      if (loopGainNodes[index] === deadGain) loopGainNodes[index] = null;
+    }, Math.ceil(LOOP_FADE_SECONDS * 1000) + 30);
+  } else {
+    if (src) {
+      try { src.stop(); src.disconnect(); } catch {}
+    }
+    if (g) {
+      try { g.disconnect(); } catch {}
+    }
+    loopGainNodes[index] = null;
   }
   loopSources[index] = null;
-  loopGainNodes[index] = null;
   loopPlaying[index] = false;
   loopStartOffsets[index] = 0;
   if (pendingStopTimeouts[index]) { clearTimeout(pendingStopTimeouts[index]); pendingStopTimeouts[index] = null; }
@@ -12453,6 +12766,2036 @@ function updateSpeedHDTune(value) {
   applyInstrumentPitchSync();
 }
 
+/**************************************
+ * Optional Stems add-on (browser-only, dormant unless installed)
+ * - Stems text button + dropdown on the minimal bar.
+ * - Automatic model install (~166 MB, OPFS) with progress + cancel.
+ * - 2x2 square icon grid when installed + tiny Uninstall text.
+ * - Zero-latency bypass when inactive: stemBus is a unity pass-through.
+ * - Genuine Demucs stems only. Original audio keeps playing while the
+ *   model downloads / sections are analysed; no frequency-band substitute.
+ * - Session-only stem cache: cleared on tab close / video change.
+ *   Background tabs keep stems. Model file is kept on Uninstall? No —
+ *   Uninstall removes model + temp stems (user chose automatic install).
+ * - Right-click stem button: download that stem (captured ring buffer).
+ *   Right-click Stems button (or Shift+right-click a stem): download all.
+ **************************************/
+const STEM_KEYS = ["vocals", "drums", "bass", "other"];
+const STEM_LABELS = { vocals: "Vocals", drums: "Drums", bass: "Bass", other: "Other" };
+const STEM_SVG_OPEN = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">';
+const STEM_ICONS = {
+  vocals: `${STEM_SVG_OPEN}<rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/></svg>`,
+  drums: `${STEM_SVG_OPEN}<ellipse cx="12" cy="9" rx="7" ry="2.8"/><path d="M5 9v9.5c0 1.5 3.1 2.8 7 2.8s7-1.3 7-2.8V9"/><path d="M7.5 2.5l2.5 3M16.5 2.5l-2.5 3"/></svg>`,
+  bass: `${STEM_SVG_OPEN}<circle cx="8.5" cy="15.5" r="5"/><circle cx="8.5" cy="15.5" r="1.4"/><path d="M12.3 11.7L19 5M16.8 4.2l2.4 2.4M18.6 2.4l.9.9"/></svg>`,
+  other: `${STEM_SVG_OPEN}<rect x="3.5" y="6" width="17" height="12" rx="2"/><path d="M8 6v6.5M12 6v6.5M16 6v6.5M6.8 6v3.5h10.4V6"/></svg>`,
+};
+const STEM_MODEL_URL = "https://huggingface.co/StemSplitio/htdemucs-onnx/resolve/d54ed9eb60e258ea82131c6ee14578628816456a/htdemucs_fp16weights.onnx";
+const STEM_MODEL_BYTES = 165612636;
+const STEM_MODEL_SHA256 = "d05c269d0178d2a72ad484b10b11dd370193fc923201c3b27a99f848745db70a";
+const STEM_CAPTURE_SECONDS = 45;
+// Demucs model domain: fixed 44.1 kHz stereo in 7.8 s windows.
+const STEM_SR = 44100;
+const STEM_SCHED_WINDOW_S = 0.4;
+const STEM_SCHED_AHEAD_S = 1.5;
+const STEM_SCHED_FADE = 512;
+const STEM_MAX_SEGMENTS = 96; // Covers a complete ten-minute track, with overlap.
+const STEM_MODEL_INDEX = { drums: 0, bass: 1, other: 2, vocals: 3 };
+
+/* STEM-DRIVE-HELPER-START */
+function stemDriveToDirectUrl(url) {
+  // Pure helper: normalize share links into direct-download URLs.
+  // Google Drive share links -> uc?export=download&id=...
+  // Dropbox share links -> dl=1. Other https URLs pass through unchanged.
+  if (typeof url !== "string") return null;
+  const raw = url.trim();
+  if (!/^https:\/\//i.test(raw)) return null;
+  let parsed = null;
+  try { parsed = new URL(raw); } catch { return null; }
+  const host = parsed.hostname.toLowerCase();
+  if (host === "drive.google.com" || host.endsWith(".drive.google.com")) {
+    let id = parsed.searchParams.get("id");
+    if (!id) {
+      const m = parsed.pathname.match(/\/file\/d\/([^/]+)/) || parsed.pathname.match(/\/uc\/([^/]+)/);
+      if (m) id = m[1];
+    }
+    if (!id) return null;
+    return `https://drive.google.com/uc?export=download&id=${id}`;
+  }
+  if (host === "dropbox.com" || host.endsWith(".dropbox.com") || host === "dropboxusercontent.com") {
+    parsed.searchParams.set("dl", "1");
+    return parsed.toString();
+  }
+  return raw;
+}
+/* STEM-DRIVE-HELPER-END */
+
+function getStemState() {
+  if (!stemState) {
+    stemState = {
+      installed: false,
+      downloading: false,
+      modelCheckState: "checking",
+      modelCheckError: null,
+      downloadProgress: 0,
+      downloadAbort: null,
+      engine: "original",
+      analysisRequested: false,
+      analysisStartTime: null,
+      preloadStatus: "idle",
+      preloadAttempts: 0,
+      bufferedId: null,
+      bufferedInfo: null,
+      bufferedError: null,
+      mutes: { vocals: false, drums: false, bass: false, other: false },
+      solos: { vocals: false, drums: false, bass: false, other: false },
+      analyzing: { vocals: false, drums: false, bass: false, other: false },
+      videoId: null,
+      ringBuffers: { vocals: null, drums: null, bass: null, other: null },
+      ringWritePos: 0,
+      dropdownOpen: false,
+    };
+  }
+  return stemState;
+}
+
+function isStemContextError(error) {
+  return /extension context invalidated|extension was reloaded|context.*invalidated/i.test(String(error?.message || error || ''));
+}
+
+function stemContextAvailable() {
+  const st = getStemState();
+  if (st.contextInvalidated) return false;
+  try {
+    if (typeof chrome === "undefined" || !chrome.runtime?.getManifest?.()) throw new Error("Extension context invalidated");
+    return true;
+  } catch (error) {
+    stopStemsForInvalidContext();
+    return false;
+  }
+}
+
+function stopStemsForInvalidContext() {
+  const st = getStemState();
+  if (st.contextInvalidated) return;
+  st.contextInvalidated = true;
+  st.installGeneration = (st.installGeneration || 0) + 1;
+  st.installed = false;
+  st.analysisRequested = false;
+  st.analysisCancelled = true;
+  st.downloading = false;
+  st.seekHold = false;
+  st.modelCheckState = "error";
+  st.modelCheckError = "Extension updated — refresh this video tab to reconnect";
+  for (const name of ['_stallTimer', '_resourceHeartbeat', '_preloadTimer']) {
+    clearInterval(st[name]); clearTimeout(st[name]); st[name] = null;
+  }
+  try { st._downloadReject?.(new Error("Extension context invalidated")); } catch {}
+  try { teardownBufferedSubscription(); } catch {}
+  try { teardownStemTap(); } catch {}
+  try { stemAiTeardown(true); } catch {}
+  try { st._resourcePort?.disconnect(); } catch {}
+  st._resourcePort = null;
+  st.bufferedInfo = null;
+  st.preloadId = null; st.bufferedId = null;
+  for (const key of STEM_KEYS) { st.mutes[key] = false; st.solos[key] = false; st.ringBuffers[key] = null; }
+  // Restore the internal bypass only. The main AudioContext/FX graph belongs
+  // to the rest of the extension and must not be closed on this lifecycle event.
+  try { updateStemBusTopology(); } catch {}
+  try { refreshStemsUI(); } catch {}
+}
+
+function getStemVideoId() {
+  try {
+    const page = new URL(location.href);
+    if (/(^|\.)youtube(?:-nocookie)?\.com$/.test(page.hostname)) {
+      const id = page.searchParams.get("v") || page.pathname.match(/^\/(?:embed|shorts)\/([^/]+)/)?.[1];
+      if (id) return `youtube:${id}`;
+    }
+    const vid = typeof getVideoElement === "function" ? getVideoElement() : null;
+    const src = (vid && (vid.currentSrc || vid.src)) || location.href;
+    return String(src).slice(0, 256);
+  } catch { return location.href; }
+}
+
+function ensureStemSession() {
+  const st = getStemState();
+  const vid = getStemVideoId();
+  if (st.videoId !== vid) {
+    if (st.videoId != null) resetStemAnalysisSession();
+    st.videoId = vid;
+    // New video: drop temp capture, keep mutes/solos + installed flag.
+    st.ringWritePos = 0;
+    for (const k of STEM_KEYS) {
+      st.ringBuffers[k] = null;
+      st.analyzing[k] = false;
+    }
+  }
+  return st;
+}
+
+function resetStemAnalysisSession() {
+  const st = getStemState();
+  st.analysisRequested = false;
+  st.seekHold = false;
+  st.analysisStartTime = null;
+  teardownBufferedSubscription();
+  teardownStemTap();
+  stemAiTeardown(true);
+  if (st._preloadTimer) clearTimeout(st._preloadTimer);
+  st._preloadTimer = null;
+  if (st.preloadId) sendToBackground({ type: "ytbm-stems-track-clear", track: st.preloadId }).catch(() => {});
+  if (st.bufferedId) sendToBackground({ type: "ytbm-stems-buffered-clear", track: st.bufferedId }).catch(() => {});
+  st.preloadId = null;
+  st.preloadAttempts = 0;
+  st.preloadStatus = "idle";
+  st.preloadBusy = false;
+  st.bufferedId = null;
+  st.bufferedInfo = null;
+  st.bufferedError = null;
+  st.sourceSince = typeof performance !== "undefined" ? performance.now() : 0;
+  for (const k of STEM_KEYS) { st.mutes[k] = false; st.solos[k] = false; }
+  updateStemBusTopology();
+}
+
+function queueStemPreload() {
+  const st = getStemState();
+  if (st.contextInvalidated || !st.installed || st._preloadTimer || st.preloadAttempts >= 6 || st.preloadStatus === "ready") return;
+  st._preloadTimer = setTimeout(() => { st._preloadTimer = null; preloadStemSong(); }, 5000);
+}
+
+function teardownBufferedSubscription() {
+  const st = getStemState();
+  try { if (typeof st._bufferedUnsub === "function") st._bufferedUnsub(); } catch {}
+  st._bufferedUnsub = null;
+}
+
+function ensureBufferedSubscription() {
+  const st = getStemState();
+  if (!st.installed || !st.analysisRequested || st._bufferedUnsub) return;
+  if (!st.bufferedId) st.bufferedId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const track = st.bufferedId;
+  const videoId = st.videoId;
+  let bridge = null;
+  try { bridge = globalThis.YTBMBufferedAudio || null; } catch { bridge = null; }
+  if (!bridge || typeof bridge.subscribe !== "function") {
+    if (track === st.bufferedId) st.bufferedError = "Buffered audio bridge unavailable";
+    return;
+  }
+  try {
+    st._bufferedUnsub = bridge.subscribe((packet) => {
+      try {
+        const cur = getStemState();
+        if (!cur.installed || !cur.analysisRequested || cur.videoId !== videoId || track !== cur.bufferedId) return;
+        if (!packet || !(packet.buffer instanceof ArrayBuffer)) return;
+        const dataB64 = arrayBufferToBase64(packet.buffer);
+        // Chrome messages are independent promises. Serialize appends so a
+        // slow initial model check cannot reorder the WebM initialization
+        // bytes and later packets, poisoning the entire buffered stream.
+        st._bufferedSendChain = (st._bufferedSendChain || Promise.resolve()).then(() => {
+          if (!st.installed || track !== st.bufferedId) return { ok: true };
+          return sendToBackground({
+            type: "ytbm-stems-buffered-append", track,
+            packet: { ...packet, buffer: undefined, dataB64 },
+          });
+        }).then(response => {
+          if (!response?.ok) throw new Error(response?.error || "Buffered audio transfer failed");
+        }).catch((err) => {
+          const s = getStemState();
+          if (track === s.bufferedId) s.bufferedError = String((err && err.message) || err);
+        });
+      } catch {}
+    });
+  } catch (err) {
+    st._bufferedUnsub = null;
+    if (track === st.bufferedId) st.bufferedError = String((err && err.message) || err);
+  }
+}
+
+async function stemMaybeOpenBuffered(ai) {
+  const st = getStemState();
+  const info = st.bufferedInfo;
+  if (!ai || st.ai !== ai || !st.analysisRequested || !info || info.track !== st.bufferedId) return;
+  if (ai.mode === "track") return;
+  const frames = Number(info.frames) || 0;
+  if (!Number.isInteger(frames) || frames < 1 || frames > STEM_SR * 600) return;
+  const TL = YTBMStemTimeline;
+  // Only full windows are ready until the native player has buffered the
+  // actual end. A partial-prefix tail is not an inference-ready song tail.
+  const plan = TL.planTrack(frames, Number(getVideoElement()?.currentTime) || 0)
+    .filter(segment => info.complete || segment.validLength === TL.SEG);
+  if (!plan.length) return;
+  if (ai.mode === "buffered" && ai.stream === info.stream) {
+    ai.trackFrames = frames;
+    ai.trackDuration = Number(info.duration) || 0;
+    ai.trackComplete = !!info.complete;
+    ai.trackAnchor.csEnd = frames;
+    ai.trackTotal = plan.length;
+    const queued = new Set(ai.pendingQueue.map(segment => segment.index));
+    for (const pending of ai.pending.values()) if (pending.epoch === ai.epoch) queued.add(pending.index);
+    for (const segment of plan) if (!ai.timeline.segments.has(segment.index) && !queued.has(segment.index)) ai.pendingQueue.push(segment);
+    stemAiPump();
+    return;
+  }
+  ai.bufferedOpened = true;
+  ai.trackAttempted = true;
+  const track = st.bufferedId;
+  try {
+    stemAiStopFuture();
+    ai.epoch++;
+    ai.mode = "buffered";
+    ai.track = track;
+    ai.stream = info.stream;
+    ai.trackFrames = frames;
+    ai.trackDuration = Number(info.duration) || 0;
+    ai.trackComplete = !!info.complete;
+    ai.trackTotal = plan.length;
+    ai.trackAnchor = { vt: 0, cs: 0, csEnd: frames };
+    ai.timeline = new YTBMStemTimeline.StemTimeline();
+    ai.learnedSegs = 0;
+    ai.pendingQueue = plan;
+    ai.queue = null;
+    ai.captureActive = false;
+    teardownStemTap();
+    stemAiPump();
+  } catch {
+    if (st.ai === ai) { ai.bufferedOpened = false; st.bufferedError = "Buffered song unavailable"; }
+  } finally {
+    if (st.ai === ai) refreshStemsUI();
+  }
+}
+
+async function preloadStemSong() {
+  const st = ensureStemSession();
+  if (!st.installed || st.preloadBusy || ["ready", "loading"].includes(st.preloadStatus) || st.preloadAttempts >= 6) return;
+  if (!st.preloadId) st.preloadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const track = st.preloadId;
+  st.preloadBusy = true;
+  st.preloadAttempts++;
+  try {
+    const response = await sendToBackground({ type: "ytbm-stems-track-preload", track,
+      videoId: st.videoId?.startsWith("youtube:") ? st.videoId.slice(8) : null, since: st.sourceSince || 0 });
+    if (!st.installed || track !== st.preloadId) return;
+    if (!(st.preloadStatus === "ready" && response?.status === "loading")) {
+      st.preloadStatus = response?.ok ? response.status : "unavailable";
+    }
+    st.preloadError = response?.ok ? null : response?.error;
+    if (st.preloadStatus === "ready") stemMaybeOpenTrack(st.ai);
+    if (st.preloadStatus === "unavailable") queueStemPreload();
+  } catch (error) {
+    if (track === st.preloadId) { st.preloadError = error.message; st.preloadStatus = "unavailable"; queueStemPreload(); }
+  } finally {
+    if (track === st.preloadId) { st.preloadBusy = false; refreshStemsUI(); }
+  }
+}
+
+function requestStemAnalysis() {
+  const st = ensureStemSession();
+  if (!st.installed || !getVideoElement()) return;
+  if (!stemContextAvailable()) return;
+  st.analysisCancelled = false;
+  ensureStemResourcePort();
+  // A control press must not tear down/reconnect every FX/output node while
+  // the same video's separation session is already running.
+  if (st.analysisRequested && st.ai && !st.ai.failed && stemBusContext === audioContext &&
+      (typeof deckA === "undefined" || deckA === getVideoElement())) {
+    ensureBufferedSubscription();
+    if (audioContext?.state === "suspended") audioContext.resume().catch(() => {});
+    return;
+  }
+  if (!st.analysisRequested) {
+    st.analysisRequested = true;
+    st.analysisStartTime = Number(getVideoElement()?.currentTime) || 0;
+    if (st.preloadStatus === "unavailable") st.preloadAttempts = 0;
+  }
+  const videoId = st.videoId;
+  ensureAudioContext().then(() => {
+    if (!st.installed || !st.analysisRequested || st.videoId !== videoId) return;
+    ensureStemBus();
+    applyAllFXRouting();
+    ensureBufferedSubscription();
+    ensureStemTap();
+    const ai = ensureStemAI();
+    stemMaybeOpenBuffered(ai);
+    stemMaybeOpenTrack(ai);
+    preloadStemSong();
+  }).catch(error => {
+    if (st.contextInvalidated || isStemContextError(error)) { stopStemsForInvalidContext(); return; }
+    st.installError = error.message;
+    st.ai = { failed: `Audio setup failed: ${error.message}` };
+    refreshStemsUI();
+  });
+}
+
+function ensureStemResourcePort() {
+  const st = getStemState();
+  if (st._resourcePort || typeof chrome.runtime.connect !== "function") return;
+  try {
+    const port = chrome.runtime.connect({ name: "ytbm-stems-session" });
+    st._resourcePort = port;
+    st._resourceHeartbeat = setInterval(() => { try { port.postMessage({ alive: true }); } catch {} }, 20000);
+    port.onDisconnect.addListener(() => {
+      clearInterval(st._resourceHeartbeat); st._resourceHeartbeat = null;
+      if (st._resourcePort === port) st._resourcePort = null;
+      stemContextAvailable();
+    });
+  } catch {}
+}
+
+function stopStemAnalysis() {
+  const st = getStemState();
+  resetStemAnalysisSession();
+  st.analysisCancelled = true;
+  refreshStemsUI();
+}
+
+function isStemSoloActive() {
+  const st = getStemState();
+  return STEM_KEYS.some((k) => st.solos[k]);
+}
+
+function isStemAudible(key) {
+  const st = getStemState();
+  if (isStemSoloActive()) return !!st.solos[key] && !st.mutes[key];
+  return !st.mutes[key];
+}
+
+function ensureStemBus() {
+  if (!audioContext || audioContext.state === "closed" || !videoGain) return null;
+  if (stemBusInput && stemBusOutput && stemBusContext === audioContext) return stemBusInput;
+  // Stale nodes from a closed AudioContext can never carry audio again.
+  stemBusInput = null;
+  stemBusOutput = null;
+  stemBranchGains = null;
+  stemBranchFilters = null;
+  stemBusContext = null;
+  try {
+    stemBusInput = audioContext.createGain();
+    stemBusOutput = audioContext.createGain();
+    stemBranchGains = {};
+    stemBranchFilters = {};
+    stemLiveGains = {};
+    stemAiGains = {};
+    for (const key of STEM_KEYS) {
+      const gain = audioContext.createGain();
+      gain.gain.value = 1;
+      const ai = audioContext.createGain();
+      ai.gain.value = 0;
+      ai.connect(gain);
+      gain.connect(stemBusOutput);
+      stemBranchGains[key] = gain;
+      stemAiGains[key] = ai;
+    }
+    // Unity pass-through when stems inactive (no coloration, no latency).
+    stemBusInput._direct = audioContext.createGain();
+    stemBusInput._direct.gain.value = 1;
+    stemBusInput.connect(stemBusInput._direct);
+    stemBusInput._direct.connect(stemBusOutput);
+    stemBusContext = audioContext;
+    updateStemBusTopology();
+    ensureStemTap();
+  } catch (err) {
+    console.warn("Stem bus unavailable:", err);
+    return null;
+  }
+  return stemBusInput;
+}
+
+function getStemBusOutput() { return stemBusOutput; }
+
+// Build stamp: verify in console that the loaded copy is current.
+// If this is missing or stale, the extension was loaded from an old folder.
+window.__ytbmBuild = { version: "2.4", flavor: "stems-browser-only-pitch-stretch", built: "2026-10-16" };
+
+// Live diagnostic for console checks: samples, loopers, audio graph.
+window.__ytbmAudioDiag = function () {
+  try {
+    return {
+      samples: {
+        kick: (audioBuffers.kick || []).length,
+        hihat: (audioBuffers.hihat || []).length,
+        snare: (audioBuffers.snare || []).length,
+      },
+      looperState: looperState || null,
+      videoLooperState: videoLooperState || null,
+      audioContextState: audioContext ? audioContext.state : null,
+      videoFound: !!getVideoElement(),
+      minimalBarPresent: !!minimalUIContainer,
+    };
+  } catch (err) { return { error: String((err && err.message) || err) }; }
+};
+
+// Live diagnostic for console checks: versions, audio path, stems state.
+window.__ytbmStemDiag = function () {
+  try {
+    const st = getStemState();
+    return {
+      extVersion: st.contextInvalidated ? window.__ytbmBuild?.version || "2.4" : chrome?.runtime?.getManifest?.().version || null,
+      contextInvalidated: !!st.contextInvalidated,
+      audioRunning: !!audioContext && audioContext.state === "running",
+      videoGainConnected: !!videoGain,
+      stemBusBuilt: !!(stemBusInput && stemBusOutput) && stemBusContext === audioContext,
+      stemBypass: !!(stemBusInput && stemBusInput._direct),
+      stemsInstalled: !!st.installed,
+      stemsDownloading: !!st.downloading,
+      modelCheckState: st.modelCheckState,
+      modelCheckError: st.modelCheckError,
+      stemVideoId: st.videoId || null,
+      engine: st.engine,
+      aiReady: !!st.ai?.ready,
+      aiError: st.ai?.failed || null,
+      aiProvider: st.ai?.ep || null,
+      learnedSegments: st.ai?.learnedSegs || 0,
+      lastInferenceMs: st.ai?.lastInferenceMs || null,
+      providerErrors: st.ai?.providerErrors || [],
+      analysisRequested: !!st.analysisRequested,
+      analysisStartTime: st.analysisStartTime,
+      analysisMode: st.ai?.mode || "idle",
+      pathMix: st.ai?.pathMix || "live",
+      hasCurrentCoverage: (() => { try { return stemAiHasCurrentCoverage(); } catch { return false; } })(),
+      trackPreload: st.preloadStatus,
+      preloadError: st.preloadError || null,
+      bufferedReady: !!st.bufferedInfo?.frames,
+      bufferedError: st.bufferedError || null,
+      lastSegmentError: st.ai?.lastSegmentError || null,
+      consecErrors: st.ai?.consecErrors || 0,
+      trackSegments: st.ai?.trackTotal || 0,
+      installError: st.installError || null,
+    };
+  } catch (err) { return { error: String((err && err.message) || err) }; }
+};
+
+function getStemSessionStorageInfo() {
+  const st = getStemState();
+  const ai = st.ai;
+  let stemBytes = 0;
+  for (const segment of ai?.timeline?.segments?.values() || []) stemBytes += segment.data.byteLength;
+  return {
+    videoId: st.videoId,
+    installed: st.installed,
+    modelCheckState: st.modelCheckState,
+    contextInvalidated: !!st.contextInvalidated,
+    analysisRequested: st.analysisRequested,
+    analysisMode: ai?.mode || "idle",
+    pathMix: ai?.pathMix || "live",
+    modelReady: !!ai?.ready,
+    error: ai?.failed || st.modelCheckError || null,
+    lastSegmentError: ai?.lastSegmentError || null,
+    consecErrors: ai?.consecErrors || 0,
+    cachedStemSegments: ai?.timeline?.segments?.size || 0,
+    cachedStemBytes: stemBytes,
+    bufferedReady: !!st.bufferedInfo?.frames,
+    bufferedError: st.bufferedError || ai?.bufferedError || null,
+    captureQueueBytes: ai?.queue?.buf?.byteLength || 0,
+    pendingAudioBytes: (ai?.pendingQueue || []).reduce((sum, item) => sum + (item.mix?.byteLength || 0), 0),
+    learnedSegments: ai?.learnedSegs || 0,
+    lastInferenceMs: ai?.lastInferenceMs || null,
+    provider: ai?.ep || null,
+    threads: ai?.threads || 1,
+    providerErrors: ai?.providerErrors || [],
+    pendingJobs: (ai?.pendingQueue?.length || 0) + (ai?.inFlight ? 1 : 0),
+    totalSongSegments: ai?.trackTotal || 0,
+    allocation: "Video-frame JavaScript memory: stemState.ai.timeline.segments",
+  };
+}
+
+function disconnectStemBus() {
+  // Sever ONLY the bus's external downstream link (rebuilt by the caller).
+  // Internal wiring (input -> filters/gains/direct -> output) must stay
+  // intact, otherwise every FX re-routing would mute the video.
+  try {
+    if (stemBusOutput) stemBusOutput.disconnect();
+  } catch {}
+}
+
+function stemsNeedSplit() {
+  // Splitting is only needed when the user actually mutes or solos something.
+  // With all 4 stems on, the original untouched audio plays: bit-identical
+  // quality to non-stem mode (no model, no filters involved at all).
+  const st = getStemState();
+  return !!st.installed && STEM_KEYS.some((k) => !isStemAudible(k));
+}
+
+function updateStemBusTopology() {
+  if (!stemBusInput || !stemBusOutput || !stemBusInput._direct) return;
+  updateStemGains();
+  const st = getStemState();
+  const allMuted = st.installed && STEM_KEYS.every(k => !isStemAudible(k));
+  stemAiSetPath(allMuted ? "silent" : (stemsNeedSplit() && stemAiAudibleNow() ? "ai" : "live"));
+}
+
+function updateStemGains() {
+  if (!stemBranchGains || !audioContext) return;
+  const t = audioContext.currentTime;
+  for (const k of STEM_KEYS) {
+    const g = stemBranchGains[k];
+    if (!g) continue;
+    const target = isStemAudible(k) ? 1 : 0;
+    try {
+      g.gain.cancelScheduledValues(t);
+      g.gain.setValueAtTime(g.gain.value, t);
+      g.gain.linearRampToValueAtTime(target, t + 0.02);
+    } catch {}
+  }
+}
+
+// Capture taps via AudioWorklet (no deprecated ScriptProcessor): one mix tap
+// feeding the AI segment queue, plus per-branch taps feeding the export
+// rings. All taps are silent (zero-gain sink) and run only while installed.
+function stemsResamplePush(interleaved, inRate, outRate, carry) {
+  // Linear fractional resampler for stereo interleaved input.
+  // carry: { frac, prevL, prevR } persisted across calls per stream.
+  const frames = interleaved.length / 2;
+  const step = inRate / outRate;
+  const left = [];
+  const right = [];
+  let pos = carry.frac || 0;
+  const at = (idx, ch) => {
+    if (idx < 0) return ch === 0 ? carry.prevL || 0 : carry.prevR || 0;
+    if (idx >= frames) return null;
+    return interleaved[idx * 2 + ch];
+  };
+  for (;;) {
+    const i0 = Math.floor(pos);
+    const f = pos - i0;
+    const aL = at(i0, 0);
+    const bL = at(i0 + 1, 0);
+    if (aL === null || bL === null) break;
+    const aR = at(i0, 1);
+    const bR = at(i0 + 1, 1);
+    left.push(aL + (bL - aL) * f);
+    right.push(aR + (bR - aR) * f);
+    pos += step;
+  }
+  if (frames > 0) {
+    carry.prevL = interleaved[(frames - 1) * 2];
+    carry.prevR = interleaved[(frames - 1) * 2 + 1];
+    carry.frac = pos - frames;
+  }
+  return { left: Float32Array.from(left), right: Float32Array.from(right) };
+}
+
+function stemsInterleave(left, right) {
+  const n = Math.min(left.length, right.length);
+  const out = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    out[i * 2] = left[i];
+    out[i * 2 + 1] = right[i];
+  }
+  return out;
+}
+
+async function ensureStemTapWorklet() {
+  const st = getStemState();
+  if (st._tapReady || !audioContext || audioContext.state === "closed" || !stemBusInput) return false;
+  if (!st.installed || !st.analysisRequested) return false;
+  if (!stemContextAvailable()) return false;
+  const session = st.videoId;
+  const tapGeneration = st._tapGeneration || 0;
+  const context = audioContext;
+  const input = stemBusInput;
+  st._tapReady = true;
+  try {
+    await context.audioWorklet.addModule(chrome.runtime.getURL("worklets/stems-tap-worklet.js"));
+    if (!stemContextAvailable() || !st.installed || !st.analysisRequested || st.videoId !== session ||
+        (st._tapGeneration || 0) !== tapGeneration || audioContext !== context || stemBusInput !== input) return false;
+    const keepAlive = (node) => {
+      const sink = audioContext.createGain();
+      sink.gain.value = 0;
+      node.connect(sink);
+      sink.connect(audioContext.destination);
+      return sink;
+    };
+    // Full-mix tap for the AI segment queue (pre-split, original audio).
+    const mixNode = new AudioWorkletNode(audioContext, "stems-tap", {
+      numberOfInputs: 1,
+      outputChannelCount: [2],
+      processorOptions: { tapId: "mix", batchFrames: 4096 },
+    });
+    stemBusInput.connect(mixNode);
+    const mixSink = keepAlive(mixNode);
+    const onFrames = (ev) => {
+      try {
+        const msg = ev.data || {};
+        if (msg.type !== "frames" || !msg.buffer) return;
+        const interleaved = new Float32Array(msg.buffer);
+        if (msg.tap === "mix") {
+          stemAiCaptureFrames(interleaved, msg.startTime);
+        }
+      } catch {}
+    };
+    mixNode.port.onmessage = onFrames;
+    st._tapNodes = [
+      { node: mixNode, sink: mixSink, input: stemBusInput },
+    ];
+    return true;
+  } catch (err) {
+    if (isStemContextError(err)) { stopStemsForInvalidContext(); return false; }
+    if (st.contextInvalidated || (st._tapGeneration || 0) !== tapGeneration) return false;
+    console.warn("Stem worklet tap unavailable:", err);
+    st._tapReady = false;
+    return false;
+  }
+}
+
+function ensureStemTap() {
+  // Fire-and-forget: module load is async, capture starts when ready.
+  ensureStemTapWorklet().catch(() => {});
+}
+
+function teardownStemTap() {
+  const st = getStemState();
+  st._tapGeneration = (st._tapGeneration || 0) + 1;
+  try {
+    for (const n of (st._tapNodes || [])) {
+      try { n.input.disconnect(n.node); } catch {}
+      try { n.node.port.onmessage = null; } catch {}
+      try { n.node.port.close(); } catch {}
+      try { n.node.disconnect(); } catch {}
+      try { n.sink.disconnect(); } catch {}
+    }
+  } catch {}
+  st._tapNodes = [];
+  stemTap = null;
+  if (st) st._tapReady = false;
+}
+
+// ---- Real Demucs path: capture -> worker inference -> timeline ----
+function createStemEngineClient() {
+  const client = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  let closed = false;
+  const proxy = {
+    onmessage: null,
+    postMessage(message) {
+      if (closed) return;
+      const payload = { ...message };
+      if (payload.mix) {
+        const bytes = new Uint8Array(payload.mix.buffer, payload.mix.byteOffset, payload.mix.byteLength);
+        const parts = [];
+        for (let i = 0; i < bytes.length; i += 8192) parts.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
+        payload.mixB64 = btoa(parts.join('')); delete payload.mix;
+      }
+      let timer;
+      Promise.race([
+        sendToBackground({ type: "ytbm-stems-engine-request", client, message: payload }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("AI request timed out after 120 seconds")), 120000); }),
+      ]).then(response => {
+        if (closed) return;
+        if (!response?.ok) throw new Error(response?.error || "Engine did not respond");
+        const data = response.message;
+        if (data.dataB64) {
+          data.data = new Float32Array(base64ToArrayBuffer(data.dataB64));
+          delete data.dataB64;
+        }
+        proxy.onmessage?.({ data });
+      }).catch(error => {
+        if (!closed) {
+          proxy.onmessage?.({ data: { type: "error", id: message.id, error: error.message } });
+          proxy.terminate();
+        }
+      }).finally(() => clearTimeout(timer));
+    },
+    terminate() {
+      closed = true;
+      sendToBackground({ type: "ytbm-stems-engine-close", client }).catch(() => {});
+    },
+  };
+  return proxy;
+}
+function ensureStemAI() {
+  const st = getStemState();
+  if (!st.installed || !st.analysisRequested) return null;
+  if (!stemContextAvailable()) return null;
+  if (st.ai && (st.ai.ready || st.ai.starting) && !st.ai.failed) {
+    if (!st.ai.timer) {
+      try { st.ai.timer = setInterval(stemAiTick, 150); } catch {}
+    }
+    return st.ai;
+  }
+  if (st.ai) stemAiTeardown(true);
+  if (typeof YTBMStemTimeline === "undefined") {
+    st.ai = { failed: "timeline module missing" };
+    try { refreshStemsUI(); } catch {}
+    return null;
+  }
+  const TL = YTBMStemTimeline;
+  const ai = (st.ai = {
+    worker: null, starting: true, ready: false, failed: null, ep: null,
+    queue: new TL.SegmentQueue(),
+    timeline: new TL.StemTimeline(),
+    pending: new Map(),
+    pendingQueue: [],
+    nextId: 1,
+    inFlight: false,
+    anchors: [],
+    history: [],
+    anchor: null,
+    captureSamples: 0,
+    captureActive: false,
+    captureAfter: audioContext?.currentTime || 0,
+    mode: "capture",
+    requestedAt: st.analysisStartTime,
+    sources: [],
+    schedHorizon: 0,
+    generation: 0,
+    epoch: 0,
+    lastVt: null,
+    pathMix: "live",
+    pauseReason: null,
+    learnedSegs: 0,
+    rsCarry: { frac: 0, prevL: 0, prevR: 0 },
+    timer: null,
+  });
+  try { refreshStemsUI(); } catch {}
+  try {
+    const video = getVideoElement();
+    ai.captureActive = !!(video && !video.paused && !video.seeking && Math.abs(video.playbackRate - 1) < 0.02);
+  } catch {}
+  try {
+    ai.timer = setInterval(stemAiTick, 150);
+  } catch {}
+  try {
+    const worker = createStemEngineClient();
+    ai.worker = worker;
+    worker.onmessage = (ev) => { if (st.ai === ai && st.installed) stemAiOnWorkerMessage(ev.data || {}); };
+    worker.onerror = (err) => {
+      ai.failed = "worker error: " + ((err && err.message) || err);
+      ai.starting = false;
+      try { refreshStemsUI(); } catch {}
+    };
+    worker.postMessage({
+      type: "init",
+      modelBytes: STEM_MODEL_BYTES,
+      modelSha256: STEM_MODEL_SHA256,
+      wasmPaths: {
+        ortMin: chrome.runtime.getURL("addons/stems/vendor/ort.min.js"),
+        dir: chrome.runtime.getURL("addons/stems/vendor/"),
+      },
+      ep: "webgpu",
+    });
+  } catch (err) {
+    ai.failed = String((err && err.message) || err);
+    ai.starting = false;
+    try { refreshStemsUI(); } catch {}
+  }
+  return ai;
+}
+
+async function stemMaybeOpenTrack(ai) {
+  const st = getStemState();
+  if (!ai || st.ai !== ai || !st.analysisRequested || st.preloadStatus !== "ready" || ai.trackOpening || ai.trackAttempted) return;
+  ai.trackOpening = true;
+  ai.trackAttempted = true;
+  const track = st.preloadId;
+  try {
+    const response = await sendToBackground({ type: "ytbm-stems-track-open", track });
+    if (st.ai !== ai || track !== st.preloadId || !st.analysisRequested) return;
+    if (!response?.ok) throw new Error(response?.error || "Whole song unavailable");
+    const plan = YTBMStemTimeline.planTrack(response.frames, ai.requestedAt);
+    stemAiStopFuture();
+    ai.epoch++;
+    ai.mode = "track";
+    ai.track = track;
+    ai.trackFrames = response.frames;
+    ai.trackTotal = plan.length;
+    ai.trackDuration = response.duration;
+    ai.trackAnchor = { vt: 0, cs: 0, csEnd: response.frames };
+    ai.timeline = new YTBMStemTimeline.StemTimeline();
+    ai.learnedSegs = 0;
+    ai.pendingQueue = plan;
+    ai.queue = null;
+    ai.captureActive = false;
+    teardownStemTap();
+    stemAiPump();
+  } catch {
+    if (st.ai === ai) { ai.trackUnavailable = true; st.preloadStatus = "unavailable"; }
+  } finally {
+    if (st.ai === ai) { ai.trackOpening = false; refreshStemsUI(); }
+  }
+}
+function stemAiOnWorkerMessage(msg) {
+  const st = getStemState();
+  const ai = st.ai;
+  if (!ai) return;
+  if (msg.type === "ready") {
+    ai.ready = true;
+    ai.starting = false;
+    ai.ep = msg.ep || "wasm";
+    ai.providerErrors = msg.providerErrors || [];
+    ai.threads = msg.threads || 1;
+    refreshStemsUI();
+    stemAiPump();
+  } else if (msg.type === "progress") {
+    ai.warmProgress = msg.f;
+    refreshStemsUI();
+  } else if (msg.type === "stems") {
+    const entry = ai.pending.get(msg.id);
+    if (entry != null) {
+      ai.inFlight = false;
+      ai.pending.delete(msg.id);
+      try {
+        if (entry.epoch !== ai.epoch) { stemAiPump(); return; }
+        ai.timeline.addSegment(entry.index, msg.data, entry.validLength || YTBMStemTimeline.SEG);
+        ai.lastInferenceMs = msg.inferenceMs || null;
+        ai.consecErrors = 0;
+        ai.lastSegmentError = null;
+        ai.learnedSegs += 1;
+        while (ai.timeline.segments.size > STEM_MAX_SEGMENTS) {
+          let min = Infinity;
+          ai.timeline.segments.forEach((_, k) => { if (k < min) min = k; });
+          ai.timeline.segments.delete(min);
+        }
+      } catch {}
+    }
+    refreshStemsUI();
+    stemAiPump();
+  } else if (msg.type === "error") {
+    if (msg.id !== undefined) {
+      // Single-segment failure: skip that window and keep separating.
+      // Only give up after several consecutive failures.
+      ai.inFlight = false;
+      ai.pending.delete(msg.id);
+      ai.consecErrors = (ai.consecErrors || 0) + 1;
+      ai.lastSegmentError = msg.error || "Separation failed";
+      if (ai.consecErrors >= 5) {
+        if (ai.timer) { clearInterval(ai.timer); ai.timer = null; }
+        ai.captureActive = false;
+        teardownStemTap();
+        try { ai.worker?.terminate(); } catch {}
+        ai.failed = `Separation failed repeatedly: ${ai.lastSegmentError}`;
+      }
+      stemAiSetPath("live");
+      refreshStemsUI();
+      stemAiPump();
+    } else {
+      if (ai.timer) { clearInterval(ai.timer); ai.timer = null; }
+      ai.captureActive = false;
+      teardownStemTap();
+      try { ai.worker?.terminate(); } catch {}
+      ai.failed = msg.error || "engine init failed";
+      ai.starting = false;
+      stemAiSetPath("live");
+      refreshStemsUI();
+    }
+  }
+}
+
+function stemAiPump() {
+  const st = getStemState();
+  const ai = st.ai;
+  if (!ai || !ai.ready || ai.failed || ai.inFlight || !ai.worker) return;
+  const seg = ai.pendingQueue.shift();
+  if (!seg) return;
+  ai.inFlight = true;
+  ai.jobStartedAt = Date.now();
+  const id = ai.nextId++;
+  ai.pending.set(id, { index: seg.index, validLength: seg.validLength, epoch: ai.epoch });
+  try {
+    if (ai.mode === "track") ai.worker.postMessage({ type: "separate-track", id, track: ai.track, index: seg.index });
+    else if (ai.mode === "buffered") ai.worker.postMessage({ type: "separate-buffered", id, track: ai.track, stream: ai.stream, index: seg.index });
+    else ai.worker.postMessage({ type: "separate", id, mix: seg.mix }, [seg.mix.buffer]);
+  } catch {
+    ai.inFlight = false;
+    ai.pending.delete(id);
+  }
+}
+
+function stemAiCaptureFrames(interleaved48, startTime) {
+  const st = getStemState();
+  const ai = st.ai;
+  if (!st.analysisRequested || !ai || ai.mode === "track" || ai.mode === "buffered" || !ai.captureActive || ai.failed) return;
+  if (!Number.isFinite(startTime) || startTime < (ai.captureAfter || 0)) return;
+  const video = getVideoElement();
+  if (!video || video.paused || video.seeking || Math.abs(video.playbackRate - 1) >= 0.02) return;
+  const vt = video.currentTime - Math.max(0, audioContext.currentTime - startTime);
+  if (!ai.anchor) ai.anchor = { vt, cs: ai.captureSamples, csEnd: null };
+  if (typeof YTBMStemTimeline === "undefined") return;
+  const inRate = (audioContext && audioContext.sampleRate) || 48000;
+  const conv = stemsResamplePush(interleaved48, inRate, STEM_SR, ai.rsCarry);
+  const mixed = stemsInterleave(conv.left, conv.right);
+  if (!mixed.length) return;
+  let ready;
+  try {
+    ready = ai.queue.push(mixed);
+  } catch {
+    return;
+  }
+  ai.captureSamples += Math.floor(mixed.length / 2);
+  for (const seg of ready) ai.pendingQueue.push(seg);
+  // Bounded capture backlog: do not retain unbounded audio on slow devices.
+  while (ai.pendingQueue.length > 3) ai.pendingQueue.shift();
+  stemAiPump();
+}
+
+function stemAiAnchors() {
+  const ai = getStemState().ai;
+  if (!ai) return [];
+  if (ai.mode === "track" || ai.mode === "buffered") return [ai.trackAnchor];
+  return ai.anchor ? [...ai.history || [], ai.anchor] : [...ai.history || []];
+}
+
+function stemAiBreakRun() {
+  const ai = getStemState().ai;
+  if (!ai) return;
+  if (ai.mode === "track" || ai.mode === "buffered") { stemAiStopFuture(); return; }
+  ai.captureAfter = audioContext?.currentTime || 0;
+  if (ai.anchor) {
+    for (const segment of ai.queue?.flush?.() || []) ai.pendingQueue.push(segment);
+    while (ai.pendingQueue.length > 3) ai.pendingQueue.shift();
+    ai.anchor.csEnd = ai.captureSamples;
+    ai.history = ai.history || [];
+    ai.history.push(ai.anchor);
+    while (ai.history.length > 50) ai.history.shift();
+    ai.anchor = null;
+    // Never concatenate audio from opposite sides of a seek/pause.
+    const nextIndex = Math.ceil(ai.captureSamples / YTBMStemTimeline.HOP);
+    ai.captureSamples = nextIndex * YTBMStemTimeline.HOP;
+    ai.queue = new YTBMStemTimeline.SegmentQueue(nextIndex);
+    ai.rsCarry = { frac: 0, prevL: 0, prevR: 0 };
+    stemAiPump();
+  }
+  stemAiStopFuture();
+}
+
+function stemAiStopFuture() {
+  const ai = getStemState().ai;
+  if (!ai) return;
+  ai.generation = (ai.generation || 0) + 1;
+  for (const s of ai.sources) {
+    for (const node of s.nodes || []) {
+      try { node.stop(); } catch {}
+      try { node.disconnect(); } catch {}
+    }
+    for (const gain of s.gains || []) { try { gain.disconnect(); } catch {} }
+  }
+  ai.sources = [];
+  ai.schedHorizon = 0;
+}
+
+function stemAiHeld(param, when) {
+  // Same hold-current tracking as loop fades: AudioParam.value ignores
+  // in-flight ramps, so rapid live<->AI flips would otherwise jump.
+  try {
+    const env = loopGainEnvelopes.get(param);
+    if (!env) return Math.max(0, param.value);
+    if (when <= env.start) return env.from;
+    if (when >= env.end) return env.to;
+    const phase = (when - env.start) / Math.max(1e-6, env.end - env.start);
+    return env.from + (env.to - env.from) * phase;
+  } catch { return 0; }
+}
+
+function stemAiSetPath(which) {
+  const st = getStemState();
+  const ai = st.ai;
+  const previousPath = ai?.pathMix || "live";
+  if (!audioContext || audioContext.state === "closed" || !stemBusInput?._direct) return;
+  if (!st.installed || !stemsNeedSplit()) which = "live";
+  else if (STEM_KEYS.every(k => !isStemAudible(k))) which = "silent";
+  else if (which === "live" && (st.seekHold || ai?.hasPlayedSplit)) which = "waiting";
+  if (which === "ai" && ai) { ai.hasPlayedSplit = true; st.seekHold = false; }
+  if (!stemsNeedSplit()) st.seekHold = false;
+  if (ai) ai.pathMix = which;
+  if (previousPath !== which && typeof speedOnlyMode !== "undefined" && speedOnlyMode &&
+      typeof speedHDMode !== "undefined" && !speedHDMode) syncSpeedPlayback();
+  st.engine = which === "ai" ? "ai" : (which === "silent" ? "silent" : (which === "waiting" ? "waiting-for-stems" : "original"));
+  const t = audioContext.currentTime;
+  const liveTarget = which === "live" ? 1 : 0;
+  const video = getVideoElement();
+  const sourceVolume = video?.muted ? 0 : (ai?.mode === "capture" ? 1 : (Number.isFinite(video?.volume) ? video.volume : 1));
+  const aiTarget = which === "ai" ? sourceVolume : 0;
+  const targets = [[stemBusInput._direct, liveTarget], ...STEM_KEYS.map(k => [stemAiGains?.[k], aiTarget])];
+    for (const [node, target] of targets) {
+      if (!node) continue;
+      if (node._stemTarget === target) continue;
+      node._stemTarget = target;
+      try {
+        const held = stemAiHeld(node.gain, t);
+        node.gain.cancelScheduledValues(t);
+        node.gain.setValueAtTime(held, t);
+        node.gain.linearRampToValueAtTime(target, t + 0.003);
+        loopGainEnvelopes.set(node.gain, { from: held, to: target, start: t, end: t + 0.003 });
+      } catch {}
+    }
+  refreshStemsUI();
+}
+
+// True only while a scheduled AI chunk actually covers the render clock.
+// The mixer may NEVER sit on the AI path without audible sources.
+function stemAiAudibleNow() {
+  const ai = getStemState().ai;
+  if (!ai?.ready || ai.failed || !audioContext) return false;
+  const now = audioContext.currentTime;
+  const total = (STEM_SCHED_WINDOW_S * STEM_SR + STEM_SCHED_FADE) / STEM_SR;
+  const video = getVideoElement();
+  const lookahead = Number.isFinite(video?.duration) ? Math.max(0.005, Math.min(0.12, video.duration - video.currentTime - 0.005)) : 0.12;
+  let coveredUntil = now;
+  const spans = ai.sources.filter(s => s.generation === ai.generation).sort((a, b) => a.startAt - b.startAt);
+  for (const source of spans) {
+    const end = source.startAt + (source.duration || total);
+    if (end <= coveredUntil) continue;
+    if (source.startAt > coveredUntil + 0.02) break;
+    coveredUntil = end;
+    if (coveredUntil >= now + lookahead) return true;
+  }
+  return false;
+}
+
+function stemAiExpectedRate() {
+  try {
+    const video = getVideoElement();
+    return Number(video && video.playbackRate) || 1;
+  } catch { return 1; }
+}
+
+function stemAiTick() {
+  const st = getStemState();
+  const ai = st.ai;
+  if (!st.analysisRequested || !ai || ai.failed || !audioContext || audioContext.state === "closed") return;
+  let video = null;
+  try { video = getVideoElement(); } catch {}
+  if (!video) { ai.captureActive = false; stemAiSetPath("live"); return; }
+  if (typeof deckA !== "undefined" && deckA !== video) {
+    try { initTwoDeck(); }
+    catch (error) { ai.failed = `Video audio routing failed: ${error.message}`; stemAiSetPath("live"); return; }
+  }
+  const playing = !video.paused && !video.seeking && video.readyState >= 2;
+  const rate = Number(video.playbackRate) || 1;
+  const vt = Number(video.currentTime) || 0;
+  ai.captureActive = !!((ai.mode === "capture") && playing && Math.abs(rate - 1) < 0.02);
+  if (ai.lastRate != null && Math.abs(rate - ai.lastRate) > 1e-6) stemAiStopFuture();
+  if (ai.lastVt != null && playing && Math.abs((vt - ai.lastVt) - (audioContext.currentTime - ai.lastClock) * (ai.lastRate || rate)) > 0.15) {
+    stemAiBreakRun();
+  }
+  ai.lastVt = vt;
+  ai.lastClock = audioContext.currentTime;
+  ai.lastRate = rate;
+  if (!ai.ready) { stemAiSetPath("live"); return; }
+  const needsPitchPreservation = typeof speedOnlyMode !== "undefined" && speedOnlyMode && Math.abs(rate - 1) > 0.0001;
+  if (!playing || (needsPitchPreservation && !videoSpeedStretchNode) ||
+      (ai.mode === "capture" && Math.abs(rate - 1) >= 0.02)) {
+    ai.pauseReason = !playing ? "paused" : (ai.mode === "capture" ? "capture-speed" : "stretch-loading");
+    stemAiBreakRun();
+    stemAiSetPath("live");
+    return;
+  }
+  ai.pauseReason = null;
+  if (!stemsNeedSplit()) { stemAiSetPath("live"); stemAiStopFuture(); refreshStemsUI(); return; }
+  if (STEM_KEYS.every(k => !isStemAudible(k))) { stemAiSetPath("silent"); stemAiStopFuture(); return; }
+  const TL = YTBMStemTimeline;
+  const need = Math.max(0.005, Math.min((STEM_SCHED_WINDOW_S + STEM_SCHED_FADE / STEM_SR) * rate,
+    Number.isFinite(video.duration) ? video.duration - vt - 0.002 : Infinity));
+  const anchors = stemAiAnchors();
+  const cs = TL.findCoveredCapture(anchors, vt, need, STEM_SR, ai.timeline);
+  if (cs == null) {
+    stemAiSetPath("live");
+    stemAiStopFuture();
+    return;
+  }
+  stemAiSchedule(vt);
+  // The mixer may NEVER sit on the AI path without audible sources queued —
+  // otherwise a scheduling hiccup means total silence with nothing pressed.
+  if (stemAiAudibleNow()) stemAiSetPath("ai");
+  else stemAiSetPath("live");
+}
+
+function stemAiSchedule(vt) {
+  const st = getStemState();
+  const ai = st.ai;
+  if (!ai || !stemAiAnchors().length) return;
+  const now = audioContext.currentTime;
+  const rate = stemAiExpectedRate();
+  if (ai.schedHorizon <= now) ai.schedHorizon = now + 0.005;
+  let guard = 0;
+  const gen = ai.generation;
+  while (ai.schedHorizon < now + STEM_SCHED_AHEAD_S && guard++ < 4) {
+    if (gen !== ai.generation) return;
+    const startAt = ai.schedHorizon;
+    const vtChunk = vt + (startAt - now) * rate;
+    const video = getVideoElement();
+    const remaining = Number.isFinite(video?.duration) ? Math.floor((video.duration - vtChunk) * STEM_SR) : Infinity;
+    const overlap = Math.max(1, Math.round(STEM_SCHED_FADE * rate));
+    const total = Math.min(Math.round(STEM_SCHED_WINDOW_S * STEM_SR * rate) + overlap, remaining);
+    if (total < 64) break;
+    const tail = total === remaining;
+    const n = tail ? total : total - overlap;
+    const csChunk = YTBMStemTimeline.findCoveredCapture(stemAiAnchors(), vtChunk, total / STEM_SR, STEM_SR, ai.timeline);
+    if (csChunk == null) break;
+    if (ai.timeline.coverage(csChunk, csChunk + total) < 0.999) break;
+    const nodes = [];
+    const gains = [];
+    try {
+      for (const key of STEM_KEYS) {
+        const s = STEM_MODEL_INDEX[key];
+        const { left, right } = ai.timeline.readStem(s, csChunk, csChunk + total);
+        const buf = audioContext.createBuffer(2, total, STEM_SR);
+        buf.getChannelData(0).set(left);
+        buf.getChannelData(1).set(right);
+        const src = audioContext.createBufferSource();
+        src.buffer = buf;
+        src.playbackRate.value = rate;
+        const aiG = stemAiGains ? stemAiGains[key] : null;
+        if (!aiG) throw new Error("AI bus missing");
+        const envelope = audioContext.createGain();
+        const fade = Math.min(overlap, total / 4) / (STEM_SR * rate);
+        envelope.gain.setValueAtTime(0, startAt);
+        envelope.gain.linearRampToValueAtTime(1, startAt + fade);
+        envelope.gain.setValueAtTime(1, startAt + (tail ? total / (STEM_SR * rate) - fade : n / (STEM_SR * rate)));
+        envelope.gain.linearRampToValueAtTime(0, startAt + total / (STEM_SR * rate));
+        src.connect(envelope); envelope.connect(aiG);
+        gains.push(envelope);
+        src.start(startAt);
+        nodes.push(src);
+      }
+    } catch {
+      for (const src of nodes) { try { src.stop(); } catch {} }
+      for (const gain of gains) { try { gain.disconnect(); } catch {} }
+      break;
+    }
+    ai.sources.push({ nodes, gains, startAt, duration: total / (STEM_SR * rate), generation: gen, rate });
+    // Retire sources that fully played out (keep the tail overlap readable).
+    ai.sources = ai.sources.filter((s) => {
+      if (s.startAt + (s.duration || total / STEM_SR) < now - 0.1) {
+        for (const src of s.nodes) { try { src.disconnect(); } catch {} }
+        for (const gain of s.gains || []) { try { gain.disconnect(); } catch {} }
+        return false;
+      }
+      return true;
+    });
+    ai.schedHorizon = startAt + n / (STEM_SR * rate);
+  }
+}
+
+function stemAiTeardown(full) {
+  const st = getStemState();
+  const ai = st ? st.ai : null;
+  try {
+    if (ai && ai.timer) clearInterval(ai.timer);
+  } catch {}
+  try { stemAiStopFuture(); } catch {}
+  try { stemAiSetPath("live"); } catch {}
+  if (ai) {
+    ai.timer = null;
+    ai.captureActive = false;
+    ai.anchor = null;
+    ai.history = [];
+    ai.schedHorizon = 0;
+    if (full) {
+      try { ai.worker && ai.worker.terminate(); } catch {}
+      st.ai = null;
+    } else {
+      // Video change: drop song-specific data, keep the warm worker + model.
+      try {
+        ai.queue = new YTBMStemTimeline.SegmentQueue();
+      } catch {}
+      try {
+        ai.timeline = new YTBMStemTimeline.StemTimeline();
+      } catch {}
+      ai.pendingQueue = [];
+      ai.epoch = (ai.epoch || 0) + 1;
+      ai.captureSamples = 0;
+      ai.learnedSegs = 0;
+      ai.lastVt = null;
+      ai.mode = "capture";
+      ai.bufferedOpened = false;
+      ai.stream = null;
+      ai.rsCarry = { frac: 0, prevL: 0, prevR: 0 };
+    }
+  }
+  try { refreshStemsUI(); } catch {}
+}
+
+function stemAiStatusText() {
+  const st = getStemState();
+  const ai = st.ai;
+  if (!st.analysisRequested) {
+    if (st.analysisCancelled) return "Analysis stopped — click a stem to restart";
+    const preload = st.preloadStatus === "ready" ? "whole song preloaded" :
+      (st.preloadStatus === "loading" ? "preloading song audio…" : "original audio");
+    return `Preparing automatic analysis — ${preload}`;
+  }
+  if (!ai) return "Preparing analysis… original audio continues";
+  if (ai.pathMix === "waiting") return ai.failed
+    ? `AI unavailable: ${ai.failed} — release stem mutes to hear original audio`
+    : "Waiting for this section's AI stems — muted stems stay muted";
+  if (ai.pathMix === "silent") return "All stems muted";
+  if (ai.failed) return `AI unavailable: ${ai.failed} — original audio`;
+  if (stemsNeedSplit() && !stemAiHasCurrentCoverage()) return "Mute/solo queued — analysing this section; original audio continues";
+  if (!ai.ready) {
+    if (ai.starting) return "Starting AI engine…";
+    return "AI warming up…";
+  }
+  if (ai.mode === "track" || ai.mode === "buffered") {
+    const done = ai.learnedSegs >= ai.trackTotal && (ai.mode === "track" || ai.trackComplete);
+    const progress = ai.mode === "buffered" && !ai.trackComplete
+      ? `${ai.learnedSegs} sections ready · ${Math.round(ai.trackDuration || 0)}s loaded`
+      : (done ? "Stems ready" : `Separating… ${Math.round(ai.learnedSegs / Math.max(1, ai.trackTotal) * 100)}%`);
+    const playback = ai.pauseReason === "stretch-loading" ? " · loading stretch…" : "";
+    return progress + playback;
+  }
+  if (ai.pathMix === "ai") return "AI separation on";
+  if (ai.pauseReason === "capture-speed") return "Live capture requires 1×; full-source stems support pitch and stretch";
+  if (ai.pauseReason === "stretch-loading") return "Loading pitch-preserving stretch…";
+  if (ai.learnedSegs > 0) {
+    const elapsed = ai.inFlight ? ` · next section processing ${Math.floor((Date.now() - ai.jobStartedAt) / 1000)}s` : "";
+    return `${ai.learnedSegs} AI sections processed${elapsed} — replay an analysed section to hear stem changes`;
+  }
+  if (ai.inFlight) return `Separating the first captured section… ${Math.floor((Date.now() - ai.jobStartedAt) / 1000)}s · original audio continues`;
+  if (ai.pauseReason === "paused") return "Capture paused — play audio to collect a 7.8-second section";
+  return `Capturing first section… ${Math.min(7.8, (ai.captureSamples || 0) / STEM_SR).toFixed(1)} / 7.8s · original audio continues`;
+}
+
+function stemAnalysisIsWorking() {
+  const st = getStemState();
+  const ai = st.ai;
+  if (!st.analysisRequested || ai?.failed) return false;
+  if (!ai?.ready) return true;
+  // Capture can never cover unheard audio ahead of a moving playhead. Once
+  // genuine sections exist, show availability/status rather than an endless
+  // spinner implying that the current live section is about to become ready.
+  if (ai.mode === "track" || ai.mode === "buffered") return ai.learnedSegs < ai.trackTotal;
+  return ai.learnedSegs === 0 && !!(ai.captureActive || ai.inFlight);
+}
+
+function stemAiHasCurrentCoverage() {
+  const ai = getStemState().ai;
+  const video = getVideoElement();
+  const rate = Number(video?.playbackRate) || 1;
+  const speedAvailable = !(typeof speedOnlyMode !== "undefined" && speedOnlyMode && Math.abs(rate - 1) > 0.0001 && !videoSpeedStretchNode);
+  return !!(ai?.ready && !ai.failed && video && speedAvailable && (ai.mode !== "capture" || Math.abs(rate - 1) < 0.02) && YTBMStemTimeline.findCoveredCapture(
+    stemAiAnchors(), video.currentTime, Math.max(0.005, Math.min(0.45 * rate, Number.isFinite(video.duration) ? video.duration - video.currentTime - 0.002 : Infinity)), STEM_SR, ai.timeline
+  ) != null);
+}
+
+function getStemExportRange(seconds = 30) {
+  const ai = getStemState().ai;
+  if (!ai?.ready || ai.failed) return null;
+  if ((ai.mode === "track" || (ai.mode === "buffered" && ai.trackComplete)) && ai.timeline.coverage(0, ai.trackFrames) >= 0.999) return { from: 0, to: ai.trackFrames };
+  const video = getVideoElement();
+  if (!video) return null;
+  const end = Number(video.currentTime) || 0;
+  const start = Math.max(0, end - seconds);
+  if (end - start < 0.05) return null;
+  const from = YTBMStemTimeline.findCoveredCapture(stemAiAnchors(), start, end - start, STEM_SR, ai.timeline);
+  return from == null ? null : { from, to: from + Math.round((end - start) * STEM_SR) };
+}
+
+function getStemAISlice(key, seconds) {
+  // Complete full-song results export the whole song; capture mode exports
+  // only a covered recent range. No frequency-band fallback is permitted.
+  try {
+    const range = getStemExportRange(seconds || 30);
+    if (!range) return null;
+    const { left, right } = getStemState().ai.timeline.readStem(STEM_MODEL_INDEX[key], range.from, range.to);
+    return { left, right, sampleRate: STEM_SR, ai: true };
+  } catch {
+    return null;
+  }
+}
+
+function encodeWAVStereo(left, right, sampleRate) {
+  const n = left.length;
+  const buffer = new ArrayBuffer(44 + n * 2 * 2);
+  const view = new DataView(buffer);
+  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + n * 4, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 2, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 4, true);
+  view.setUint16(32, 4, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, n * 4, true);
+  let off = 44;
+  for (let i = 0; i < n; i++) {
+    const l = Math.max(-1, Math.min(1, left[i]));
+    const r = Math.max(-1, Math.min(1, right[i]));
+    view.setInt16(off, l < 0 ? l * 0x8000 : l * 0x7fff, true); off += 2;
+    view.setInt16(off, r < 0 ? r * 0x8000 : r * 0x7fff, true); off += 2;
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function downloadBlob(blob, filename) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+}
+
+function stemExportFilename(key) {
+  const vid = (getStemState().videoId || "video").replace(/[^a-zA-Z0-9-_]+/g, "_").slice(0, 48);
+  return `ytbm-stem-${key}-${vid}.wav`;
+}
+
+function exportStem(key, seconds) {
+  ensureStemSession();
+  // Export only real model output; unavailable sections never become band cuts.
+  let slice = null;
+  let viaAI = false;
+  try {
+    slice = getStemAISlice(key, seconds || 30);
+    viaAI = !!slice;
+  } catch {}
+  if (stemsStatusMin) stemsStatusMin.textContent = slice ? `Exporting ${STEM_LABELS[key]}…` : "This section has not finished AI analysis yet";
+  if (!slice) return false;
+  const wav = encodeWAVStereo(slice.left, slice.right, slice.sampleRate);
+  downloadBlob(wav, stemExportFilename(key));
+  if (stemsStatusMin) stemsStatusMin.textContent = viaAI ? `${STEM_LABELS[key]} downloaded (AI stem)` : `${STEM_LABELS[key]} downloaded`;
+  return true;
+}
+
+function exportAllStems(seconds) {
+  ensureStemSession();
+  if (!getStemExportRange(seconds || 30)) {
+    if (stemsStatusMin) stemsStatusMin.textContent = "This section has not finished AI analysis yet";
+    return;
+  }
+  let i = 0;
+  const keys = STEM_KEYS.slice();
+  if (stemsStatusMin) stemsStatusMin.textContent = "Exporting all stems…";
+  const step = () => {
+    if (i >= keys.length) {
+      if (stemsStatusMin) stemsStatusMin.textContent = "All stems downloaded";
+      return;
+    }
+    exportStem(keys[i], seconds || 30);
+    i++;
+    setTimeout(step, 700);
+  };
+  step();
+}
+
+function toggleStemMute(key, solo) {
+  const st = ensureStemSession();
+  if (!st.installed) return;
+  requestStemAnalysis();
+  if (solo) {
+    st.solos[key] = !st.solos[key];
+  } else {
+    st.mutes[key] = !st.mutes[key];
+  }
+  if (stemsNeedSplit() && (st.ai?.hasPlayedSplit || stemAiHasCurrentCoverage())) st.seekHold = true;
+  // Mute/solo changes can flip between unity-direct and split bands.
+  try {
+    console.log("[YTBM-Stems] toggle", key, "solo=" + !!solo,
+      "mutes=" + JSON.stringify(st.mutes), "needSplit=" + stemsNeedSplit());
+  } catch {}
+  updateStemBusTopology();
+  if (st.ai?.ready && !st.ai.failed) stemAiTick();
+  refreshStemsUI();
+}
+
+function refreshStemsUI() {
+  const st = getStemState();
+  if (stemsButtonMin) {
+    const activeCount = STEM_KEYS.filter((k) => st.mutes[k] || st.solos[k]).length;
+    stemsButtonMin.textContent = st.installed && activeCount ? `Stems ▾ (${activeCount})` : "Stems ▾";
+    stemsButtonMin.setAttribute("aria-expanded", st.dropdownOpen ? "true" : "false");
+  }
+  if (stemsDropdownMin) stemsDropdownMin.style.display = st.dropdownOpen ? "block" : "none";
+  if (!stemsDropdownMin) return;
+  const showDownload = !st.installed && !st.downloading && st.modelCheckState === "missing";
+  const showRetry = !st.installed && !st.downloading && st.modelCheckState === "error";
+  const showProgress = !st.installed && st.downloading;
+  const showGrid = st.installed;
+  // Pre-install: Stems text + drop-up installer.
+  // Post-install: compact 2x2 grid embedded in the bar replaces the text.
+  if (stemsButtonMin) stemsButtonMin.style.display = showGrid ? "none" : "";
+  if (stemsDownloadBtn) {
+    stemsDownloadBtn.style.display = showDownload || showRetry ? "block" : "none";
+    stemsDownloadBtn.disabled = false;
+    stemsDownloadBtn.textContent = showRetry ? "Retry model check" : "Download stems package";
+    stemsDownloadBtn.title = showRetry ? "Check the extension's existing model again" : "Download the stems package (one-time download)";
+  }
+  if (stemsProgressWrap) {
+    stemsProgressWrap.style.display = showProgress ? "block" : "none";
+    const known = st.downloadProgress >= 0;
+    const pct = known ? Math.round(st.downloadProgress * 100) : 0;
+    const mb = ((st.downloadedBytes || 0) / 1048576).toFixed(1);
+    if (stemsProgressBar) {
+      stemsProgressBar.style.width = known ? `${pct}%` : "100%";
+      stemsProgressBar.classList.toggle("ytbm-stems-progress-bar--busy", !known);
+    }
+    if (stemsProgressLabel) stemsProgressLabel.textContent = known
+      ? `Downloading… ${pct}%`
+      : `Downloading… ${mb} MB`;
+  }
+  if (stemsDownloadAllBtn) stemsDownloadAllBtn.style.display = showGrid ? "block" : "none";
+  if (stemsGridMin) stemsGridMin.style.display = showGrid ? "flex" : "none";
+  if (stemsUninstallBtn) stemsUninstallBtn.style.display = showGrid ? "block" : "none";
+  if (stemsGridMin && showGrid) {
+    const currentReady = stemAiHasCurrentCoverage();
+    for (const btn of stemsGridMin.querySelectorAll("[data-stem]")) {
+      const key = btn.getAttribute("data-stem");
+      btn.classList.toggle("ytbm-stem-muted", !!st.mutes[key]);
+      btn.classList.toggle("ytbm-stem-solo", !!st.solos[key]);
+      btn.disabled = !currentReady && !st.mutes[key] && !st.solos[key];
+      btn.setAttribute("aria-disabled", String(btn.disabled));
+      const working = stemAnalysisIsWorking();
+      btn.classList.toggle("ytbm-stem-working", working);
+      btn.dataset.coverage = currentReady ? "current" : (st.ai?.learnedSegs ? "past-sections" : "none");
+      btn.setAttribute("aria-busy", String(working));
+      btn.setAttribute("aria-pressed", st.mutes[key] ? "true" : "false");
+      btn.removeAttribute("title");
+      const state = st.mutes[key] ? "muted" : (st.solos[key] ? "solo" : "on");
+      btn.dataset.hint = `${STEM_LABELS[key]} · ${state}\nClick: mute · ⇧/⌘/Ctrl-click: solo\nRight-click: options`;
+    }
+  }
+  if (stemsStatusMin) {
+    if (!st.installed) {
+      if (!st.downloading) {
+        const checking = st.modelCheckState === "checking";
+        const error = st.installError || st.modelCheckError;
+        stemsStatusMin.style.display = checking || error ? "" : "none";
+        stemsStatusMin.textContent = checking ? "Checking installed model…" : (error || "");
+      } else {
+        stemsStatusMin.style.display = "";
+        const known = st.downloadProgress >= 0;
+        stemsStatusMin.textContent = known
+          ? `Downloading… ${Math.round(st.downloadProgress * 100)}%`
+          : `Downloading… ${((st.downloadedBytes || 0) / 1048576).toFixed(1)} MB`;
+      }
+    } else {
+      stemsStatusMin.style.display = "";
+      let aiText = null;
+      try { aiText = stemAiStatusText(); } catch {}
+      if (aiText) {
+        stemsStatusMin.textContent = aiText;
+      } else {
+        stemsStatusMin.textContent = "Original audio — starting AI analysis";
+      }
+    }
+  }
+}
+
+function openStemContextMenu(stemKey, x, y) {
+  if (!stemsContextMenu) return;
+  const st = getStemState();
+  if (!st.installed) return;
+  stemsContextMenu._stemKey = stemKey;
+  const oneBtn = stemsContextMenu._buttons && stemsContextMenu._buttons.one;
+  if (oneBtn) {
+    oneBtn.textContent = `Download ${STEM_LABELS[stemKey]} stem`;
+    oneBtn.title = `Download the ${STEM_LABELS[stemKey]} stem as WAV`;
+  }
+  stemsContextMenu.style.display = "block";
+  const w = stemsContextMenu.offsetWidth || 200;
+  const h = stemsContextMenu.offsetHeight || 120;
+  // Drop-up style: prefer opening above the cursor so the bar never covers it.
+  let left = Math.max(8, Math.min(window.innerWidth - w - 8, x));
+  let top = y - h - 6;
+  if (top < 8) top = Math.min(window.innerHeight - h - 8, y + 6);
+  stemsContextMenu.style.left = `${left}px`;
+  stemsContextMenu.style.top = `${Math.max(8, top)}px`;
+}
+
+function closeStemContextMenu() {
+  if (stemsContextMenu) stemsContextMenu.style.display = "none";
+}
+
+function hideStemTooltip() {
+  try { window.YTBMTooltips?.hide(); } catch {}
+}
+
+function setStemsDropdown(open) {
+  const st = getStemState();
+  st.dropdownOpen = !!open;
+  closeStemContextMenu();
+  refreshStemsUI();
+  if (st.dropdownOpen) {
+    // Position after display so offsetWidth is measurable.
+    requestAnimationFrame(() => {
+      try {
+        if (typeof window.__ytbmRepositionStemsDropdown === "function") window.__ytbmRepositionStemsDropdown();
+      } catch {}
+    });
+  }
+}
+
+function buildStemsControl() {
+  const st = getStemState();
+  const wrap = document.createElement("div");
+  wrap.className = "ytbm-stems-wrap";
+  stemsButtonMin = document.createElement("button");
+  stemsButtonMin.type = "button";
+  stemsButtonMin.className = "ytbm-pitch-label ytbm-stems-btn";
+  stemsButtonMin.textContent = "Stems ▾";
+  stemsButtonMin.title = "Optional stem separation (Vocals/Drums/Bass/Other). Right-click for downloads.";
+  stemsButtonMin.setAttribute("aria-haspopup", "true");
+  stemsButtonMin.setAttribute("aria-expanded", "false");
+  stemsButtonMin.addEventListener("click", (e) => {
+    e.stopPropagation();
+    ensureStemSession();
+    setStemsDropdown(!st.dropdownOpen);
+  });
+  stemsButtonMin.addEventListener("contextmenu", (e) => {
+    // Right-click Stems button: download all stems.
+    e.preventDefault();
+    e.stopPropagation();
+    if (!st.installed) return;
+    exportAllStems(30);
+  });
+  wrap.appendChild(stemsButtonMin);
+
+  stemsDropdownMin = document.createElement("div");
+  stemsDropdownMin.className = "ytbm-stems-dropdown";
+  stemsDropdownMin.style.display = "none";
+
+  stemsDownloadBtn = document.createElement("button");
+  stemsDownloadBtn.type = "button";
+  stemsDownloadBtn.className = "ytbm-stems-download";
+  stemsDownloadBtn.addEventListener("click", () => {
+    try {
+      if (st.modelCheckState === "error") { reconcileStemInstallation(); return; }
+      if (st.downloading) { cancelStemDownload(); } else {
+        installStemPack().catch((err) => {
+          try {
+            const s2 = getStemState();
+            s2.downloading = false;
+            if (stemsStatusMin) {
+              stemsStatusMin.style.display = "";
+              stemsStatusMin.textContent = `Download failed — ${String((err && err.message) || err).slice(0, 120)}`;
+            }
+            refreshStemsUI();
+          } catch {}
+        });
+      }
+    } catch (err) {
+      try {
+        if (stemsStatusMin) {
+          stemsStatusMin.style.display = "";
+          stemsStatusMin.textContent = `Download failed — ${String((err && err.message) || err).slice(0, 120)}`;
+        }
+      } catch {}
+    }
+  });
+  stemsDropdownMin.appendChild(stemsDownloadBtn);
+
+
+
+  // Loading indicator: progress bar shown while the model downloads.
+  stemsProgressWrap = document.createElement("div");
+  stemsProgressWrap.className = "ytbm-stems-progress-wrap";
+  stemsProgressWrap.style.display = "none";
+  stemsProgressBar = document.createElement("div");
+  stemsProgressBar.className = "ytbm-stems-progress-bar";
+  stemsProgressWrap.appendChild(stemsProgressBar);
+  stemsProgressLabel = document.createElement("div");
+  stemsProgressLabel.className = "ytbm-stems-progress-label";
+  stemsProgressLabel.textContent = "Downloading… 0%";
+  stemsProgressWrap.appendChild(stemsProgressLabel);
+  stemsCancelBtn = document.createElement("button");
+  stemsCancelBtn.type = "button";
+  stemsCancelBtn.className = "ytbm-stems-uninstall";
+  stemsCancelBtn.textContent = "Cancel download";
+  stemsCancelBtn.title = "Cancel the model download";
+  stemsCancelBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    cancelStemDownload();
+  });
+  stemsProgressWrap.appendChild(stemsCancelBtn);
+  stemsDropdownMin.appendChild(stemsProgressWrap);
+
+  // Post-install the 2x2 mini grid lives embedded in the mini bar, in place
+  // of the Stems text. The drop-up only handles install/loading/menu.
+  stemsGridMin = document.createElement("div");
+  stemsGridMin.className = "ytbm-stems-grid ytbm-stems-grid--inline";
+  stemsGridMin.style.display = "none";
+  stemsGridMin.setAttribute("role", "group");
+  stemsGridMin.setAttribute("aria-label", "Stem mutes");
+  for (const key of STEM_KEYS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "ytbm-stem-btn";
+    b.setAttribute("data-stem", key);
+    b.setAttribute("aria-label", `${STEM_LABELS[key]} stem: mute toggle, modifier-click solo, right-click for download and uninstall options`);
+    b.innerHTML = `<span class="ytbm-stem-icon" aria-hidden="true">${STEM_ICONS[key]}</span>`;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      hideStemTooltip();
+      toggleStemMute(key, e.shiftKey || e.metaKey || e.ctrlKey);
+    });
+    b.addEventListener("contextmenu", (e) => {
+      // Right-click stem button: open mini menu (download that stem,
+      // download all stems, uninstall stems).
+      // Shift+right-click: download all stems immediately.
+      e.preventDefault();
+      e.stopPropagation();
+      if (!st.installed) return;
+      if (e.shiftKey) { exportAllStems(30); return; }
+      openStemContextMenu(key, e.clientX, e.clientY);
+    });
+    stemsGridMin.appendChild(b);
+  }
+  wrap.appendChild(stemsGridMin);
+  // Right-click a gap of the inline grid: open the drop-up menu.
+  stemsGridMin.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    ensureStemSession();
+    setStemsDropdown(true);
+  });
+
+  stemsDownloadAllBtn = document.createElement("button");
+  stemsDownloadAllBtn.type = "button";
+  stemsDownloadAllBtn.className = "ytbm-stems-download";
+  stemsDownloadAllBtn.textContent = "Download all stems";
+  stemsDownloadAllBtn.title = "Download all 4 stems as WAV files";
+  stemsDownloadAllBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    exportAllStems(30);
+  });
+  stemsDropdownMin.appendChild(stemsDownloadAllBtn);
+
+  stemsStatusMin = document.createElement("div");
+  stemsStatusMin.className = "ytbm-stems-status";
+  stemsDropdownMin.appendChild(stemsStatusMin);
+
+  stemsUninstallBtn = document.createElement("button");
+  stemsUninstallBtn.type = "button";
+  stemsUninstallBtn.className = "ytbm-stems-uninstall";
+  stemsUninstallBtn.textContent = "Uninstall";
+  stemsUninstallBtn.title = "Remove the stems package, model and temporary stems";
+  stemsUninstallBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    uninstallStemPack();
+  });
+  stemsDropdownMin.appendChild(stemsUninstallBtn);
+
+  // Drop-up menu: attached to <body> with fixed positioning so it always
+  // renders above the minimal bar, never clipped behind it.
+  document.body.appendChild(stemsDropdownMin);
+  const repositionStemsDropdown = () => {
+    if (!st.dropdownOpen || !stemsButtonMin || !stemsDropdownMin) return;
+    const r = stemsButtonMin.getBoundingClientRect();
+    const w = Math.max(190, Math.min(240, stemsDropdownMin.offsetWidth || 190));
+    let left = r.left + r.width / 2 - w / 2;
+    left = Math.max(8, Math.min(window.innerWidth - w - 8, left));
+    stemsDropdownMin.style.left = `${left}px`;
+    stemsDropdownMin.style.bottom = `${Math.max(8, window.innerHeight - r.top + 10)}px`;
+  };
+  // Right-click mini menu on stem buttons: download / download all / uninstall.
+  stemsContextMenu = document.createElement("div");
+  stemsContextMenu.className = "ytbm-stems-contextmenu";
+  stemsContextMenu.style.display = "none";
+  stemsContextMenu.setAttribute("role", "menu");
+  const ctxItems = [
+    { label: "", action: "one", title: "" },
+    { label: "Download all stems", action: "all", title: "Download all 4 stems as WAV files" },
+    { label: "Stop analysis", action: "stop", title: "Release temporary audio and stop processing; keep the installed model" },
+    { label: "Uninstall stems", action: "uninstall", title: "Remove the stems package, model and temporary stems" },
+  ];
+  stemsContextMenu._buttons = {};
+  for (const item of ctxItems) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ytbm-stems-contextitem" + (item.action === "uninstall" ? " ytbm-stems-contextitem--danger" : "");
+    btn.setAttribute("role", "menuitem");
+    if (item.label) btn.textContent = item.label;
+    if (item.title) btn.title = item.title;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const key = stemsContextMenu._stemKey;
+      closeStemContextMenu();
+      if (item.action === "one" && key) exportStem(key, 30);
+      else if (item.action === "all") exportAllStems(30);
+      else if (item.action === "stop") stopStemAnalysis();
+      else if (item.action === "uninstall") uninstallStemPack();
+    });
+    stemsContextMenu.appendChild(btn);
+    stemsContextMenu._buttons[item.action] = btn;
+  }
+  document.body.appendChild(stemsContextMenu);
+  window.__ytbmRepositionStemsDropdown = repositionStemsDropdown;
+  window.addEventListener("resize", repositionStemsDropdown);
+  window.addEventListener("resize", closeStemContextMenu);
+  document.addEventListener("click", (e) => {
+    if (st.dropdownOpen && !wrap.contains(e.target) && !stemsDropdownMin.contains(e.target)) setStemsDropdown(false);
+    if (stemsContextMenu.style.display !== "none" && !stemsContextMenu.contains(e.target)) closeStemContextMenu();
+    hideStemTooltip();
+  }, true);
+  document.addEventListener("contextmenu", (e) => {
+    if (stemsContextMenu.style.display !== "none" && !stemsContextMenu.contains(e.target)) closeStemContextMenu();
+  }, true);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && st.dropdownOpen) setStemsDropdown(false);
+    if (e.key === "Escape") closeStemContextMenu();
+  }, true);
+  reconcileStemInstallation();
+  refreshStemsUI();
+  return wrap;
+}
+
+function getStemModelSource() {
+  // Single download source for the stems model (owner-hosted). Users only
+  // ever see "Download stems package" — never where it comes from.
+  // Share links are normalized to direct downloads at load time.
+  const direct = stemDriveToDirectUrl(STEM_MODEL_URL) || STEM_MODEL_URL;
+  return { url: direct, bytes: STEM_MODEL_BYTES, sha256: STEM_MODEL_SHA256, custom: false };
+}
+
+async function fetchWithDriveConfirm(url, signal, onHtml) {
+  // Drive serves large files directly from drive.usercontent.google.com with
+  // confirm=t — no cookies and no interstitial parsing needed (verified:
+  // full 165,612,636 bytes, correct SHA-256, zero-cookie request). The
+  // interstitial parse below is only a fallback for unexpected HTML pages.
+  let fileId = null;
+  try { fileId = new URL(url).searchParams.get("id"); } catch {}
+  if (fileId) {
+    const directUrl = `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`;
+    const direct = await fetch(directUrl, { signal });
+    const directType = direct.headers.get("content-type") || "";
+    if (!directType.includes("text/html")) return direct;
+    url = directUrl;
+  }
+  let response = await fetch(url, { signal, credentials: "include" });
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("text/html")) return response;
+  const html = await response.text();
+  const uuid =
+    (html.match(/name="uuid" value="([^"]+)"/) || [])[1] ||
+    (html.match(/"uuid","?([0-9a-f-]{36})"?/) || [])[1] ||
+    null;
+  const confirm =
+    (html.match(/name="confirm" value="([^"]+)"/) || [])[1] ||
+    (html.match(/confirm=([0-9A-Za-z_-]+)/) || [])[1] ||
+    null;
+  if (!uuid && !confirm) {
+    if (onHtml) onHtml();
+    throw new Error("Drive blocked the direct download (scan-confirm page). Try again later.");
+  }
+  // The interstitial form submits to drive.usercontent.google.com/download —
+  // retrying on any other host just re-serves the interstitial (stale loop).
+  let retryFileId = null;
+  try { retryFileId = new URL(url).searchParams.get("id"); } catch {}
+  const base = retryFileId
+    ? `https://drive.usercontent.google.com/download?id=${encodeURIComponent(retryFileId)}&export=download`
+    : url;
+  const sep = base.includes("?") ? "&" : "?";
+  const retryUrl = uuid
+    ? `${base}${sep}confirm=${confirm || "t"}&uuid=${uuid}`
+    : `${base}${sep}confirm=${confirm}`;
+  response = await fetch(retryUrl, { signal, credentials: "include" });
+  return response;
+}
+
+async function installStemPack() {
+  // The model download runs in the background service worker (extension
+  // origin + host permissions): page-context fetches are walled off by the
+  // page CSP, and page-partition OPFS is invisible to the inference worker.
+  const st = ensureStemSession();
+  if (!stemContextAvailable()) return;
+  if (st.installed || st.downloading) return;
+  st.downloading = true;
+  st.installError = null;
+  const generation = st.installGeneration = (st.installGeneration || 0) + 1;
+  st.downloadProgress = 0;
+  st.downloadedBytes = 0;
+  st._downloadResolve = null;
+  st._downloadReject = null;
+  st._downloadPromise = new Promise((resolve, reject) => {
+    st._downloadResolve = resolve;
+    st._downloadReject = reject;
+  });
+  st._downloadPromise.catch(() => {});
+  st._lastDownloadActivity = Date.now();
+  // Stall watchdog: a stuck flag (dead worker, lost messages) used to make
+  // every later press a silent no-op. Fail loudly instead so Cancel/retry work.
+  if (st._stallTimer) { clearInterval(st._stallTimer); st._stallTimer = null; }
+  st._stallTimer = setInterval(() => {
+    try {
+      if (!st.downloading) return;
+      if (Date.now() - (st._lastDownloadActivity || 0) > 90000) {
+        if (typeof st._downloadReject === "function") {
+          st._downloadReject(new Error("Download stalled — no progress for 90 s. Reload the extension in chrome://extensions and retry."));
+        }
+      }
+    } catch {}
+  }, 15000);
+  refreshStemsUI();
+  try {
+    await ensureAudioContext();
+    const source = getStemModelSource();
+    const status = await sendToBackground({ type: "ytbm-stems-model-status" });
+    if (!status?.ok) throw new Error(status?.error || "Could not check the existing model");
+    if (!(status && status.present && source.bytes && status.bytes === source.bytes)) {
+      const started = await sendToBackground({
+        type: "ytbm-stems-download-start",
+        url: source.url,
+        bytes: source.bytes,
+        sha256: source.sha256,
+      });
+      if (!started || !started.ok) throw new Error((started && started.error) || "download did not start");
+      await st._downloadPromise;
+    }
+    if (st.installGeneration !== generation) return;
+    st.downloading = false;
+    st.downloadProgress = 1;
+    st.installed = true;
+    st.modelCheckState = "present";
+    st.modelCheckError = null;
+    st.engine = "original";
+    try { await chrome?.storage?.local?.set?.({ ytbmStemsPackInstalled: true }); } catch {}
+    ensureStemBus();
+    updateStemBusTopology();
+    try { applyAllFXRouting(); } catch {}
+    preloadStemSong();
+    requestStemAnalysis();
+    refreshStemsUI();
+  } catch (err) {
+    if (st.contextInvalidated || isStemContextError(err)) { stopStemsForInvalidContext(); return; }
+    const cancelled = /cancel|abort/i.test(String((err && err.message) || err));
+    st.downloading = false;
+    st.downloadProgress = 0;
+    st.installError = cancelled ? "Download cancelled" : `Download failed — ${String((err && err.message) || err).slice(0, 180)}`;
+    refreshStemsUI();
+  } finally {
+    if (st._stallTimer) { clearInterval(st._stallTimer); st._stallTimer = null; }
+    st._downloadResolve = null;
+    st._downloadReject = null;
+    st._downloadPromise = null;
+  }
+}
+
+function cancelStemDownload() {
+  const st = getStemState();
+  try {
+    chrome.runtime.sendMessage({ type: "ytbm-stems-download-cancel" }, () => {
+      if (chrome.runtime.lastError) {}
+    });
+  } catch {}
+  try { st._downloadReject && st._downloadReject(new Error("Download cancelled")); } catch {}
+}
+
+async function uninstallStemPack() {
+  const st = getStemState();
+  disableStemPackLocally("checking");
+  try {
+    const result = await sendToBackground({ type: "ytbm-stems-model-remove" });
+    if (!result?.ok || !result.verified) throw new Error(result?.error || "Model removal could not be verified");
+    st.modelCheckState = "missing";
+    st.installError = null;
+  } catch (error) {
+    st.modelCheckState = "error";
+    st.installError = `Uninstall failed — ${error.message}`;
+    setStemsDropdown(true);
+  }
+  refreshStemsUI();
+}
+
+function disableStemPackLocally(modelState = "missing") {
+  const st = getStemState();
+  st.installGeneration = (st.installGeneration || 0) + 1;
+  try { st._downloadReject?.(new Error("Download cancelled")); } catch {}
+  try { if (typeof closeStemContextMenu === "function") closeStemContextMenu(); } catch {}
+  try { st.downloadAbort?.abort(); } catch {}
+  st.downloading = false;
+  st.downloadProgress = 0;
+  st.installed = false;
+  try { st._resourcePort?.disconnect(); } catch {}
+  st._resourcePort = null;
+  clearInterval(st._resourceHeartbeat); st._resourceHeartbeat = null;
+  st.modelCheckState = modelState;
+  st.modelCheckError = null;
+  st.engine = "original";
+  resetStemAnalysisSession();
+  for (const k of STEM_KEYS) { st.mutes[k] = false; st.solos[k] = false; st.analyzing[k] = false; st.ringBuffers[k] = null; }
+  st.ringWritePos = 0;
+  teardownStemTap();
+  try {
+    if (stemWorker) { stemWorker.terminate(); }
+  } catch {}
+  stemWorker = null;
+  // Full AI teardown: terminate inference worker, stop scheduler, drop
+  // timeline/anchors/sources, return playback to the live path.
+  try { stemAiTeardown(true); } catch {}
+  try { applyAllFXRouting(); } catch {}
+  updateStemGains();
+  setStemsDropdown(false);
+  refreshStemsUI();
+}
+
+async function reconcileStemInstallation() {
+  const st = getStemState();
+  if (!stemContextAvailable()) return;
+  if (st.downloading) return;
+  if (st._modelCheckPromise) return st._modelCheckPromise;
+  const generation = st.installGeneration || 0;
+  st.modelCheckState = "checking";
+  st.modelCheckError = null;
+  refreshStemsUI();
+  const check = (async () => {
+    let timeout;
+    try {
+      const status = await Promise.race([
+        sendToBackground({ type: "ytbm-stems-model-status" }),
+        new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("Model check timed out — retry the check")), 30000); }),
+      ]);
+      if (generation !== (st.installGeneration || 0) || st.downloading) return;
+      if (!status?.ok) throw new Error(status?.error || "Model status unavailable");
+      if (status.downloading && !status.present) {
+        st.downloading = true;
+        st.downloadProgress = status.progress?.f || 0;
+        st.downloadedBytes = status.progress?.received || 0;
+        return;
+      }
+      const present = status.present && status.source === "opfs" && status.bytes === STEM_MODEL_BYTES;
+      st.modelCheckState = present ? "present" : "missing";
+      if (!present) {
+        if (st.installed) disableStemPackLocally();
+        // Keep the bounded document-start compressed prefix for a first
+        // install in this tab. Explicit removal still clears the subscription.
+        await chrome.storage.local.remove("ytbmStemsPackInstalled");
+        return;
+      }
+      st.installed = true;
+      st.installError = null;
+      try { await chrome.storage.local.set({ ytbmStemsPackInstalled: true }); } catch {}
+      if (generation !== (st.installGeneration || 0)) return;
+      ensureStemSession();
+      if (audioContext) { ensureStemBus(); applyAllFXRouting(); }
+      preloadStemSong();
+      requestStemAnalysis();
+    } catch (error) {
+      if (generation === (st.installGeneration || 0) && !st.downloading) {
+        st.modelCheckState = "error";
+        st.modelCheckError = `Could not verify installed model: ${error.message}`;
+        console.warn("Stems startup:", error);
+      }
+    } finally {
+      clearTimeout(timeout);
+      refreshStemsUI();
+    }
+  })();
+  st._modelCheckPromise = check;
+  try { await check; } finally { if (st._modelCheckPromise === check) st._modelCheckPromise = null; }
+}
+
+function clearStemSession(reason) {
+  const st = getStemState();
+  if (!st.installed && !st.downloading) return;
+  // Session-only cache: drop captured audio for this video, keep model + mutes.
+  st.ringWritePos = 0;
+  for (const k of STEM_KEYS) { st.ringBuffers[k] = null; st.analyzing[k] = false; }
+  try { stemWorker?.postMessage?.({ type: "clear-cache" }); } catch {}
+  resetStemAnalysisSession();
+  st.videoId = null;
+  if (st.installed && reason === "video changed") {
+    ensureStemSession();
+    preloadStemSong();
+    requestStemAnalysis();
+  }
+  if (reason) console.log("Stems session cleared:", reason);
+  refreshStemsUI();
+}
+
 function getPitchSliderTitle() {
   if (speedOnlyMode) {
     const mode = speedHDMode ? "Speed HD" : "Speed";
@@ -12551,10 +14894,20 @@ function updatePitch(v) {
   const rate = getCurrentPitchRate();
 
   // Apply pitch even while the video-looper is recording.
-  if (pitchTarget === "loop") {
+  {
+    const now = (typeof audioContext !== "undefined" && audioContext) ? audioContext.currentTime : 0;
     loopSources.forEach((src, i) => {
-      if (src) src.playbackRate.value = rate * (audioLoopRates[i] || 1);
+      if (!src) return;
+      const target = (pitchTarget === "loop" ? rate : 1) * (audioLoopRates[i] || 1);
+      // Smooth the rate change so dragging the fader never zipper-clicks.
+      try {
+        if (src.playbackRate.setTargetAtTime) src.playbackRate.setTargetAtTime(target, now, 0.015);
+        else src.playbackRate.value = target;
+      } catch { try { src.playbackRate.value = target; } catch {} }
     });
+    if (typeof loopers !== "undefined") {
+      for (const looper of loopers.audio || []) looper?.applyTempoChange?.();
+    }
   }
   syncSpeedPlayback();
 
@@ -15436,6 +17789,168 @@ function injectCustomCSS() {
       opacity: 0.35;
       cursor: default;
     }
+    .ytbm-stems-wrap { position: relative; flex: 0 0 auto; }
+    .ytbm-stems-btn { white-space: nowrap; }
+    .ytbm-stems-dropdown {
+      position: fixed;
+      min-width: 190px;
+      max-width: 240px;
+      background: rgba(18,18,18,0.94);
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 14px;
+      padding: 10px;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.5);
+      z-index: 2147483647;
+    }
+    .ytbm-stems-download {
+      width: 100%;
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 10px;
+      padding: 8px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .ytbm-stems-download:disabled { opacity: 0.7; cursor: default; }
+    .ytbm-stems-download + .ytbm-stems-download { margin-top: 6px; }
+    .ytbm-stems-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 2px 0 8px;
+    }
+    .ytbm-stems-grid--inline {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 4px;
+      margin: 0;
+      padding: 0;
+    }
+    .ytbm-stems-grid--inline .ytbm-stem-btn {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      font-size: 0;
+      padding: 0;
+    }
+    .ytbm-stems-grid--inline .ytbm-stem-icon,
+    .ytbm-stems-grid--inline .ytbm-stem-icon svg {
+      display: block;
+      width: 17px;
+      height: 17px;
+      margin: auto;
+    }
+    .ytbm-stem-icon svg { display: block; margin: auto; }
+    .ytbm-stem-btn {
+      width: 52px;
+      height: 52px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      font-size: 22px;
+      cursor: pointer;
+      position: relative;
+      color: #fff;
+    }
+    .ytbm-stems-progress-wrap { margin: 2px 0 6px; }
+    .ytbm-stems-progress-bar {
+      height: 8px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #7db4ff, #ffd479);
+      width: 0%;
+      transition: width 0.2s ease;
+    }
+    .ytbm-stems-progress-wrap::before {
+      content: "";
+      display: block;
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.15);
+      margin-bottom: -8px;
+    }
+    .ytbm-stems-progress-label {
+      font-size: 10px;
+      color: rgba(255,255,255,0.8);
+      margin-top: 6px;
+      line-height: 1.35;
+    }
+    .ytbm-stems-progress-bar--busy { animation: ytbm-stem-busy 1.1s ease-in-out infinite alternate; }
+    @keyframes ytbm-stem-busy { from { opacity: 0.45; } to { opacity: 1; } }
+
+    .ytbm-stem-btn:hover { background: rgba(255,255,255,0.18); }
+    .ytbm-stem-btn.ytbm-stem-muted { opacity: 0.45; }
+    .ytbm-stem-btn.ytbm-stem-muted::after {
+      content: "";
+      position: absolute;
+      left: 6px; right: 6px; top: 50%;
+      height: 2px;
+      background: #ff5a5a;
+      transform: rotate(-24deg);
+      border-radius: 2px;
+    }
+    .ytbm-stem-btn.ytbm-stem-solo {
+      outline: 2px solid #ffd479;
+      outline-offset: 1px;
+    }
+    .ytbm-stem-btn.ytbm-stem-working::before {
+      content: "";
+      position: absolute;
+      top: 4px; right: 4px;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.35);
+      border-top-color: #fff;
+      animation: ytbm-stem-spin 0.9s linear infinite;
+    }
+    @keyframes ytbm-stem-spin { to { transform: rotate(360deg); } }
+    .ytbm-stems-status {
+      font-size: 10px;
+      line-height: 1.35;
+      color: rgba(255,255,255,0.75);
+      margin: 2px 0 6px;
+      min-height: 14px;
+    }
+    .ytbm-stems-uninstall {
+      display: block;
+      margin-left: auto;
+      background: transparent;
+      border: 0;
+      color: rgba(255,255,255,0.55);
+      font-size: 10px;
+      text-decoration: underline;
+      cursor: pointer;
+      font-family: inherit;
+      padding: 2px;
+    }
+    .ytbm-stems-uninstall:hover { color: #fff; }
+    .ytbm-stems-contextmenu {
+      position: fixed;
+      min-width: 200px;
+      background: rgba(18,18,18,0.96);
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 12px;
+      padding: 6px;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.55);
+      z-index: 2147483647;
+    }
+    .ytbm-stems-contextitem {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 12px;
+      padding: 8px 10px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .ytbm-stems-contextitem:hover { background: rgba(255,255,255,0.14); }
+    .ytbm-stems-contextitem--danger { color: #ff8a8a; }
     .ytbm-pitch-value {
       font-size: 11px;
       font-weight: 600;
@@ -15907,6 +18422,7 @@ function attachVideoMetadataListener() {
 function onNewVideoLoaded() {
   cancelCueSeek();
   rampCueGain(1);
+  try { if (typeof clearStemSession === "function") clearStemSession("video changed"); } catch {}
   console.log("New video loaded => resetting pitch to 0%");
   ensureMinimalToggleButton();
 

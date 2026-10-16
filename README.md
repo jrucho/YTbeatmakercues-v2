@@ -16,6 +16,13 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.4
+- Optional browser-only **AI Stems**: Vocals, Drums, Bass and Other, using a separately downloaded, verified HT-Demucs model. Click to mute, Shift/Cmd/Ctrl-click to solo, and right-click to export WAVs or uninstall.
+- Automatic analysis of accessible whole-song or native-buffered audio. With no stem mutes/solos, playback uses the original audio; all four muted means silence. Pitch, Speed and Speed HD work with separated buffered/full-source audio.
+- Cached cue jumps wake stem playback immediately when the seek is ready, without waiting for the 150 ms scheduler poll. Unanalysed cue targets still require processing; Speed HD retains its engine latency.
+- Consistent black tooltips, shorter stem hints and compact download percentages. Improved extension-reload recovery, temporary-source cleanup, loop fades and Touch Tap BPM.
+- No model is bundled. Full-song retrieval remains best effort: SABR-only YouTube videos may only supply the player's loaded buffer. See **[STEMS-2.4-EXPORT.md](STEMS-2.4-EXPORT.md)** for installation, verification and limitations.
+
 ## New in 2.3.8
 - Added **Speed HD latency** profiles in Advanced: **Quality ~168 ms**, **Balanced ~104 ms**, and **Live ~68 ms**. Quality keeps the previous 160 ms analysis window and processes more frequently; this uses more CPU. The shorter-window profiles may add artifacts, especially on bass, drums and extreme stretching.
 - Replaced normal YouTube cross-tab bitmap transport with **local, video-only WebRTC feeds**. Signaling stays local and uses no STUN/TURN service. Source tabs do not need a JavaScript timer to deliver each frame.

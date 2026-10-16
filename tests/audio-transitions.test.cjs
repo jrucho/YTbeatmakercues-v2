@@ -148,6 +148,28 @@ test('cue uses the existing 2 ms fade and remains muted until decoder readiness'
   assert.equal(env.timers.size, 0);
 });
 
+test('a ready cue wakes the stem scheduler immediately, without a polling delay or stale callbacks', () => {
+  const { env, c, video, listeners } = fixture();
+  const calls = [];
+  c.stemsNeedSplit = () => true;
+  c.getStemState = () => ({ ai: { hasPlayedSplit: true } });
+  c.stemAiSetPath = () => {};
+  c.stemAiBreakRun = () => {};
+  c.stemAiTick = () => calls.push({ time: env.now, target: video.currentTime });
+  c.jumpToCue(10);
+  env.advance(2);
+  const obsolete = [...listeners.get('seeked')][0];
+  assert.equal(calls.length, 0, 'must not schedule against a decoder still seeking');
+  c.jumpToCue(20);
+  env.advance(2);
+  obsolete();
+  assert.equal(calls.length, 0, 'obsolete cue readiness must not wake playback');
+  env.ready();
+  assert.deepEqual(calls, [{ time: 4, target: 20 }]);
+  video.emit('playing');
+  assert.equal(calls.length, 1, 'readiness events must not schedule twice');
+});
+
 for (const nativeHold of [true, false]) {
   test(`rapid cue retriggers hold the current gain and only seek the newest cue (native hold: ${nativeHold})`, () => {
     const { env, c, cueGain } = fixture(nativeHold);
@@ -300,4 +322,50 @@ test('cue and sidechain gain envelopes bound sample-to-sample discontinuities wi
   // envelopes start at the trigger time and bring that discontinuity below 1%.
   assert.ok(peakStep < 0.015, `unexpected transition step ${peakStep}`);
   assert.ok(env.seeks[0].time <= 2.001, 'must retain the existing 2 ms seek timing');
+});
+
+test('looper playback fades bound start/stop discontinuities across rapid retriggers', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../content.js'), 'utf8');
+  const start = source.indexOf('const LOOP_FADE_SECONDS');
+  const end = source.indexOf('function playLoop');
+  assert.ok(start > 0 && end > start, 'looper fade helpers present');
+  const context = { WeakMap, Math };
+  vm.createContext(context);
+  vm.runInContext(source.slice(start, end), context);
+  assert.equal(vm.runInContext('LOOP_FADE_SECONDS', context), 0.008);
+  // Model a gain with sample-time automation like GainParam above.
+  const events = [];
+  let current = 0;
+  const param = {
+    get value() { return current; },
+    cancelScheduledValues(t) { for (let i = events.length - 1; i >= 0; i--) if (events[i].time > t) events.splice(i, 1); },
+    setValueAtTime(v, t) { events.push({ type: 'set', time: t, value: v }); },
+    linearRampToValueAtTime(v, t) { events.push({ type: 'ramp', time: t, value: v }); },
+  };
+  const valueAt = (time) => {
+    let prev = { time: 0, value: 0 };
+    for (const e of events) {
+      if (e.time > time) {
+        if (e.type === 'ramp' && e.time > prev.time) {
+          const phase = (time - prev.time) / (e.time - prev.time);
+          return prev.value + (e.value - prev.value) * phase;
+        }
+        return prev.value;
+      }
+      prev = e;
+    }
+    return prev.value;
+  };
+  // Play starts from silence: 0 -> 1 over 8 ms.
+  context.rampLoopGain(param, 1, 1.0, 0);
+  assert.equal(valueAt(1.004), 0.5);
+  // Rapid stop 3 ms into the fade-in: must continue from ~0.375, not jump.
+  current = 0; // intrinsic .value stays where the node was created
+  context.rampLoopGain(param, 0, 1.003);
+  assert.ok(Math.abs(valueAt(1.003) - 0.375) < 1e-9, 'retrigger must hold the in-flight level');
+  assert.equal(valueAt(1.011), 0);
+  // Immediate replay starts from silence again without a step.
+  context.rampLoopGain(param, 1, 1.011, 0);
+  assert.equal(valueAt(1.011), 0);
+  assert.equal(valueAt(1.019), 1);
 });

@@ -1,7 +1,9 @@
 {
   "manifest_version": 3,
   "name": "YouTube Beatmaker Extension",
-  "version": "2.3.8",
+  "version": "2.4",
+  "version_name": "2.4",
+  "minimum_chrome_version": "116",
   "description": "Mark cue points, play drum sounds, and customize your experience on YouTube.",
   "permissions": [
     "activeTab",
@@ -9,18 +11,36 @@
     "storage",
     "tabs",
     "unlimitedStorage",
-    "power"
+    "power",
+    "offscreen"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://www.youtube-nocookie.com/*",
-    "https://samplette.io/*"
+    "https://samplette.io/*",
+    "https://*.googlevideo.com/*",
+    "https://huggingface.co/*",
+    "https://*.huggingface.co/*",
+    "https://*.hf.co/*"
   ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": "icon.png"
   },
   "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*", "https://www.youtube-nocookie.com/*", "https://samplette.io/*"],
+      "all_frames": true,
+      "run_at": "document_start",
+      "world": "MAIN",
+      "js": ["addons/stems/media-observer.js"]
+    },
+    {
+      "matches": ["https://www.youtube.com/*", "https://www.youtube-nocookie.com/*", "https://samplette.io/*"],
+      "all_frames": true,
+      "run_at": "document_start",
+      "js": ["addons/stems/media-bridge.js"]
+    },
     {
       "matches": [
         "https://www.youtube.com/*",
@@ -30,6 +50,8 @@
       "all_frames": true,
       "js": [
         "vj-live.js",
+        "ui-tooltips.js",
+        "addons/stems/stem-timeline.js",
         "content.js"
       ],
       "css": [
@@ -51,7 +73,9 @@
         "worklets/stutter-proc-worklet.js",
         "worklets/phaser-proc-worklet.js",
         "worklets/bit-dec-worklet.js",
-        "worklets/bit12-proc-worklet.js"
+        "worklets/bit12-proc-worklet.js",
+        "worklets/stems-tap-worklet.js",
+        "addons/stems/*"
       ],
       "matches": [
         "<all_urls>"
@@ -62,6 +86,8 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
+  "cross_origin_opener_policy": { "value": "same-origin" },
+  "cross_origin_embedder_policy": { "value": "require-corp" },
   "background": {
     "service_worker": "background.js"
   }

@@ -222,6 +222,40 @@ function controls() {
   return context;
 }
 
+test('loop pitch updates live rates and restores base rates when returning to video target', () => {
+  const c = controls();
+  const changes = [];
+  c.audioContext = { currentTime: 5 };
+  c.audioLoopRates = [0.5];
+  c.loopSources = [{ playbackRate: { setTargetAtTime: (...args) => changes.push(args) } }];
+  let classUpdates = 0;
+  c.loopers = { audio: [{ applyTempoChange: () => classUpdates++ }] };
+  c.pitchTarget = 'loop';
+  c.updatePitch(100);
+  assert.equal(changes.at(-1)[0], 1);
+  assert.equal(changes.at(-1)[1], 5);
+  c.pitchTarget = 'video';
+  c.updatePitch(50);
+  assert.equal(changes.at(-1)[0], 0.5);
+  assert.equal(classUpdates, 2);
+});
+
+test('basic Speed compensates raw AI playback without double-stretching the preview or original', () => {
+  const c = controls();
+  c.stemState = { ai: { pathMix: 'ai' } };
+  c.speedOnlyMode = true; c.speedHDMode = false;
+  c.pitchPercentage = -50;
+  c.syncSpeedPlayback();
+  assert.equal(c.messages.at(-2).active, true, 'raw stem sources use the HQ correction at half speed');
+  assert.equal(c.messages.at(-2).rate, 0.5);
+  assert.equal(c.messages.at(-1).active, false, 'loop preview remains on browser pitch preservation');
+  assert.equal(c.deckA.preservesPitch, false);
+  assert.equal(c.videoPreviewElement.preservesPitch, true);
+  c.stemState.ai.pathMix = 'live'; c.syncSpeedPlayback();
+  assert.equal(c.messages.at(-2).active, false);
+  assert.equal(c.deckA.preservesPitch, true);
+});
+
 test('Pitch / Speed / Speed HD cycles preserve units, range and rate and select exactly one stretch engine', () => {
   const c = controls();
   c.togglePitchMode(true);
@@ -491,10 +525,10 @@ test('three-step label is stable and HD engine readiness/fallback is reported in
   assert.equal(c.deckA.preservesPitch, false);
 });
 
-test('release exposes the worklet and declares version 2.3.8', () => {
+test('release exposes the worklet and declares version 2.4', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '2.3.8');
-  assert.equal(manifest.content_scripts[0].js[0], 'vj-live.js');
+  assert.equal(manifest.version, '2.4');
+  assert.ok(manifest.content_scripts.some((entry) => entry.js[0] === 'vj-live.js'));
   assert.ok(manifest.permissions.includes('power'));
   assert.ok(manifest.web_accessible_resources.some((entry) => entry.resources.includes('worklets/speed-stretch-worklet.js')));
   assert.ok(manifest.web_accessible_resources.some((entry) => entry.resources.includes('node_modules/signalsmith-stretch/SignalsmithStretch.mjs')));

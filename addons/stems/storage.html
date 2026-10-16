@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>YTBM Stems storage</title>
+  <script src="storage.js" defer></script>
+  <style>
+    body { color-scheme: dark; background: #151515; color: #eee; font: 15px/1.6 system-ui, sans-serif; margin: 32px auto; padding: 0 24px; max-width: 1000px; }
+    h1, h2 { line-height: 1.3; } code, pre { background: #242424; border-radius: 5px; padding: 2px 6px; overflow-wrap: anywhere; }
+    pre { padding: 16px; white-space: pre-wrap; font-size: 13px; } button { padding: 8px 16px; cursor: pointer; }
+    table { border-collapse: collapse; width: 100%; } th, td { border-bottom: 1px solid #444; padding: 8px; text-align: left; }
+    .muted { color: #bbb; } .good { color: #99dfb0; } .bad { color: #ffbc99; }
+  </style>
+</head>
+<body>
+  <h1>Stems storage and diagnostics</h1>
+  <p><button id="refresh" type="button">Refresh checks</button> <span id="status" role="status">Checking storage…</span></p>
+  <h2>This installation</h2>
+  <p>Extension ID: <code id="extension-id"></code><br>Storage origin: <code id="extension-origin"></code></p>
+  <p class="muted">This is the actual extension and Chrome profile serving this page. A different unpacked-folder path or Chrome profile can use a different installation/storage area.</p>
+  <h2>Persistent model — disk</h2>
+  <p>Logical OPFS path: <code id="model-path">ytbm-stems/htdemucs-fp16.onnx</code></p>
+  <p id="model-status">Checking model size and SHA-256…</p>
+  <p id="storage-count"></p>
+  <p><button id="remove" type="button">Remove downloaded stems resources</button></p>
+  <pre id="removal-report" hidden></pre>
+  <p>While downloading, the temporary file is <code>ytbm-stems/htdemucs-fp16.onnx.part</code>. It is replaced by the verified model when installation completes.</p>
+  <p>Chrome manages the backing files inside your browser profile; the model is not in the unpacked extension folder or your Downloads folder. To identify the exact profile folder, open <code>chrome://version</code> in this same Chrome window and read <strong>Profile Path</strong>.</p>
+  <p>Reloading or disabling/re-enabling this installation should retain the model. Removing the extension can delete its private storage. The in-app <strong>Uninstall stems</strong> command deliberately erases the model.</p>
+  <p>Removal deletes only this feature's owned model/temp folders and legacy stores. Saved WAV exports and unrelated settings/audio are preserved. The ONNX runtime ships as extension code; Chrome cannot delete those installed code files through this button. Browser-managed HTTP, compiled-WASM, GPU and filesystem metadata may remain.</p>
+  <h2>Temporary song audio and stems — RAM</h2>
+  <p>Separated stem windows live in each video frame's RAM. Temporary source downloads are stored in extension OPFS under <code>ytbm-stems/videos/&lt;video-id&gt;-&lt;safe-title&gt;-&lt;session&gt;/</code> with <code>video.json</code> and either <code>source.audio</code> (complete retrieval) or <code>source.audio.part</code> (native buffered prefix). They are deleted on session cleanup and on the next extension-host start after an interruption. Manually exported WAV files are preserved.</p>
+  <div id="sessions"></div>
+  <h2>Exported WAV files — disk</h2>
+  <p>Only an explicit stem export creates WAV files. Look in <code>chrome://downloads</code> and use <strong>Show in Finder</strong> for the exact saved location. The usual macOS default is <code>~/Downloads/</code>; a custom download setting can change it.</p>
+  <h2>Raw report</h2>
+  <pre id="report">Waiting for the extension storage check…</pre>
+  <h2>Direct OPFS check</h2>
+  <p>Open DevTools on <em>this extension page</em> and run the following in its Console. A valid installed model has <strong>165612636 bytes</strong>.</p>
+  <pre>const root = await navigator.storage.getDirectory();
+const folder = await root.getDirectoryHandle('ytbm-stems');
+const file = await (await folder.getFileHandle('htdemucs-fp16.onnx')).getFile();
+({ name: file.name, bytes: file.size, modified: new Date(file.lastModified) });</pre>
+</body>
+</html>

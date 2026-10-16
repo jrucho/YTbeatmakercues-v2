@@ -1,3 +1,22 @@
+# ONNX Runtime Web and optional HT-Demucs
+
+The optional stem engine includes official ONNX Runtime Web **1.22.0**
+WebGPU JavaScript and WASM/JSEP distributions under `addons/stems/vendor/`.
+The WebGPU JS distribution is stored as `ort.min.js` without modifying its bytes.
+
+Project: https://github.com/microsoft/onnxruntime
+
+Copyright (c) Microsoft Corporation. Licensed under the MIT License; the full
+upstream license and third-party notices are included in
+`addons/stems/vendor/LICENSE` and `addons/stems/vendor/ThirdPartyNotices.txt`.
+
+The **model is not distributed in this extension**. Optional installation
+downloads StemSplitio's public HT-Demucs ONNX export, which declares MIT licensing:
+https://huggingface.co/StemSplitio/htdemucs-onnx
+
+Demucs upstream: https://github.com/facebookresearch/demucs (MIT).
+No proprietary reference-extension or desktop-app code is included.
+
 # Signalsmith Stretch
 
 This release includes the unmodified official `signalsmith-stretch` 1.3.2

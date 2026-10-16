@@ -1,0 +1,17 @@
+{
+  "id": "ytbm-stems-pack",
+  "name": "YT Beatmaker Stems Pack (optional)",
+  "version": "0.1.0-local",
+  "description": "Optional local stem separation. Dormant unless installed via the Stems menu. Browser-only; works on macOS and Windows.",
+  "runtime": "onnxruntime-web (MIT, vendored separately) + public HT-Demucs ONNX export (MIT)",
+  "model": {
+    "id": "htdemucs-fp16",
+    "url": "https://huggingface.co/StemSplitio/htdemucs-onnx/resolve/d54ed9eb60e258ea82131c6ee14578628816456a/htdemucs_fp16weights.onnx",
+    "bytes": 165612636,
+    "sha256": "d05c269d0178d2a72ad484b10b11dd370193fc923201c3b27a99f848745db70a",
+    "input": { "name": "mix", "shape": [1, 2, 343980], "sampleRate": 44100 },
+    "output": { "stems": ["drums", "bass", "other", "vocals"], "shape": [1, 4, 2, 343980] }
+  },
+  "cache": { "store": "extension-origin OPFS", "dir": "ytbm-stems", "file": "htdemucs-fp16.onnx", "session": "memory-only (cleared on tab close / video change)" },
+  "notes": "Model is downloaded only on installation, detected by verified bytes after reload, and erased on uninstall. Analysis starts automatically when an installed model and video are available. Whole-audio preloading is attempted on launch (64 MB / ten-minute limit), with automatic capture fallback. Capture results require replay of processed sections; unavailable sections and non-1x playback use original audio, never frequency-band substitutes."
+}

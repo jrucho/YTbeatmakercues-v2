@@ -1,3 +1,30 @@
+# Release 2.4
+
+## Summary
+Release **2.4** adds the optional browser-only Stems pack (Pitch/Speed/Speed HD untouched when not installed), click-free audio looper start/stop, plus reliability fixes for packaged-asset loading.
+
+## Changes
+- Wake cached stem playback on cue seek readiness instead of waiting up to 150 ms for the scheduler poll. Keep coverage gating and unavailable-target silent holds.
+- Use shared black tooltips across extension controls, compact stem hints and short download percentages. Display the version as **2.4**.
+- Stop orphaned stem processing after extension-context invalidation, fence late worklet loads and restore original audio. Verified actual extension Reload followed by tab refresh without invalid-context warnings. Standard release asset: `ytbeatmakercues-2.4.zip`; full-track SABR retrieval remains a documented limitation.
+- Browser-only update: preserve stem mute/solo states in Pitch, Speed and Speed HD using rate-aware scheduling and the existing Signalsmith correction for raw stem audio. Add independent-rate cancellation and preview/original double-stretch protection.
+- Automatically store retrieved source audio in named temporary OPFS video folders with explicit complete/prefix metadata. Remove temporary source files on video/frame close, resource removal and next host startup after interruption. No native helper/server or experimental SABR package is shipped; complete retrieval of SABR-only songs remains unverified.
+- Fix growing native-player buffers being ignored after the first decode; wait for complete model windows and serialize initialization/media packets. Preserve requested stem mutes across cues with a silent wait for unavailable AI sections, rather than leaking original audio then fading. Use a 3 ms path ramp. Enable isolated four-thread WASM fallback where supported.
+- New **Stems ▾** button on the minimal bar (before Cues). Without the pack it only offers the one-time model download; the extension otherwise behaves exactly as before.
+- After install, a compact row of 4 stem buttons (Vocals/Drums/Bass/Other) sits embedded in the bar. Click = mute, modifier-click = solo, right-click = download stem(s) / uninstall.
+- Original-audio bypass with no stem mutes/solos, including immediately after install. No frequency-band substitutes; unavailable AI sections keep original audio during initial analysis and wait silently after split playback has started. Session-only stem cache (cleared on tab close / video change, kept for background tabs).
+- Fixed stem-bus teardown muting video audio on FX re-routing; guard against stale AudioContext nodes.
+- Packaged sounds now load via the background worker (base64) with direct fetch as fallback — no more "Unsafe attempt to load URL" spam and no alert storms.
+- Model downloaded on demand from a pinned public HT-Demucs export into extension-origin OPFS; full byte-count and SHA-256 verification before publication. No bundled development model or model in the ZIP. Uninstall aborts downloads, closes workers across tabs, erases the model folder and verifies absence.
+- Extension-owned offscreen workers run actual ONNX inference automatically when a verified model and video are available. Capture mode stops the initial spinner after its first real result and identifies replay-only processed sections. Worker requests time out visibly after 120 seconds; diagnostics include backend selection and per-window inference time.
+- Best-effort whole-song audio preload on video launch (64 MB / ten minutes). Automatic conversion prioritizes the current segment and then processes the accessible full song, even while paused. Completed results export whole-song WAVs. Non-downloadable/segmented sources use native buffered audio or automatic capture; raw capture requires 1× and cannot process unheard audio at the live playhead.
+- Hide Download until actual model verification confirms absence; restore the installed flag from verified OPFS bytes. Options now links to a storage inspector with extension ID/origin, model SHA verification and live sample-buffer allocations.
+- Download the model in resumable 4 MiB ranges to recover from CDN HTTP/2 stream failures; verify the entire SHA-256 before publishing it. Flush partial captured windows on pauses/seeks so short clips and the final tail are analysed.
+- Loop playback uses 8 ms start/stop fades. Retiring gains/sources are released even during rapid retriggers. Touch Tap BPM switches to Internal clock, and loop pitch updates both legacy and class playback sources.
+- Updated manifest/package versions to **2.4**.
+
+---
+
 # Release 2.3.8
 
 ## Summary
