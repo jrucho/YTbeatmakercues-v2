@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const { webcrypto } = require('node:crypto');
 const { ModelStore } = require('../addons/stems/model-store.js');
 const TL = require('../addons/stems/stem-timeline.js');
+const { RegionLoop } = require('../video-region-loop.js');
 const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
 
@@ -60,6 +61,7 @@ test('default installed graph connects original input to output at unity, withou
   ctx.disconnectStemBus(); ctx.ensureStemBus();
   assert.ok(ctx.stemBusInput.connections.has(ctx.stemBusInput._direct), 'FX rerouting preserves internal bypass');
 });
+
 
 test('invalidated extension context stops stems once and restores original audio without another worklet request', async () => {
   const { ctx } = graphFixture(); const st = ctx.getStemState();
@@ -177,6 +179,7 @@ test('model installation shows only the first download line', () => {
   assert.equal(ctx.stemsStatusMin.style.display, 'none');
   assert.equal(ctx.stemsStatusMin.textContent, '');
 });
+
 
 test('separation percentage counts unique output against the whole song, not the loaded prefix', () => {
   const { ctx, video } = graphFixture();
@@ -524,6 +527,53 @@ test('audibility guard joins adjacent chunks instead of pulsing back to original
   assert.equal(ctx.stemAiAudibleNow(), true, 'combined sources cover the current clock and lookahead');
   ctx.getStemState().ai.sources[1].startAt = 10.3;
   assert.equal(ctx.stemAiAudibleNow(), false, 'a real gap must still fall back');
+});
+
+test('raw loop buffers wrap OUT to IN instead of leaking samples outside the selected region', () => {
+  const { ctx } = graphFixture();
+  const data = new Float32Array(TL.SEG * 8);
+  for (let i = 0; i < TL.SEG; i++) data[i] = data[TL.SEG + i] = i / 44100;
+  ctx.getStemState().ai = { timeline: new TL.StemTimeline() };
+  ctx.getStemState().ai.timeline.addSegment(0, data);
+  const result = ctx.stemReadRegion(0, 1.9, 8820, { in: 1, out: 2 });
+  assert.ok(Math.abs(result.left[0] - 1.9) < 1e-5);
+  assert.equal(result.left[4410], 0, 'loop boundary has a short click-suppression fade');
+  assert.ok(Math.abs(result.left[4410 + 150] - (1 + 150 / 44100)) < 1e-5);
+  assert.ok(result.left.every(x => x >= 0 && x < 2));
+});
+
+test('prepared loop buffers wrap their rendered sample positions at the selected speed', () => {
+  const { ctx } = graphFixture();
+  const channel = Float32Array.from({ length: 8 * 44100 }, (_, i) => i / 44100 * 0.5);
+  const tile = { from: 0, coreEnd: 4, end: 4, channels: [channel] };
+  ctx.YTBMPreparedStretch = { TILE_SECONDS: 4 };
+  ctx.getStemState().ai = { preparedKeys: new Map([['speed/0', 'tile']]), preparedCache: { get: () => tile } };
+  const result = ctx.stemReadPreparedRegion(0, 1.9, 17640, { rate: 0.5, tag: 'speed' }, { in: 1, out: 2 });
+  assert.ok(Math.abs(result[0] - 1.9) < 1e-5);
+  assert.ok(Math.abs(result[8820]) < 1e-6, 'prepared loop boundary is faded rather than spliced');
+  assert.ok(Math.abs(result[8820 + 150] - (1 + 75 / 44100)) < 1e-5);
+  assert.ok(result.every(x => x >= 0 && x < 2));
+});
+
+test('stem loop scheduling survives a visual seek at OUT without resetting the audio generation', () => {
+  const { ctx, video } = graphFixture(), st = ctx.getStemState();
+  st.analysisRequested = true; st.mutes.vocals = true; video.currentTime = 1.8; video.duration = 7.8;
+  ctx.videoSpeedStretchNode = null;
+  const ai = st.ai = { ready: true, mode: 'track', sources: [], generation: 0, schedHorizon: 0,
+    timeline: new TL.StemTimeline(), trackAnchor: { vt: 0, cs: 0, csEnd: TL.SEG } };
+  ai.timeline.addSegment(0, new Float32Array(TL.SEG * 8).fill(0.1));
+  const loop = ctx.regionLoopController = new RegionLoop({ getVideo: () => video, getVideoId: () => 'test',
+    setInterval: () => 1, clearInterval() {}, seek() {}, audioTime: () => ctx.audioContext.currentTime });
+  loop.change({ in: 1, out: 2, enabled: true });
+  ctx.stemAiTick();
+  assert.ok(loop.clock); assert.equal(ai.pathMix, 'ai');
+  assert.ok(ai.sources.some(s => s.mediaStart < 1.01), 'the next loop head must already be queued');
+  const generation = ai.generation;
+  ctx.audioContext.currentTime = 10.25; video.currentTime = 1.01; video.seeking = true;
+  ctx.stemAiTick();
+  assert.equal(ai.generation, generation); assert.equal(ai.pathMix, 'ai');
+  assert.ok(ai.sources.every(s => s.region?.in === 1 && s.region?.out === 2));
+  loop.dispose();
 });
 
 test('live tick with buffered coverage schedules AI audio and gates the muted stem', () => {

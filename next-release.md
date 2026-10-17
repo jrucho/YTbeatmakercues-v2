@@ -1,3 +1,15 @@
+# Release 2.4.3
+
+- Replace mini-bar Import with rounded IN/OUT/clear controls. Match idle colors, use teal/amber for marked boundaries and light the centered SVG clear/repeat symbol red while looping.
+- I marks IN, O marks OUT and starts repeating; ↻ or I+O together clears both marks. Retire I/Cmd-I import shortcuts while retaining Advanced import actions.
+- Add colored draggable timeline boundaries, double-click erasure, exact-time context menu and per-video extension-storage persistence.
+- Integrate marking, dragging, erasing and clearing with the existing U / Cmd-Ctrl-U undo/redo history.
+- Match the Advanced Speed HD latency dropdown to the dark rounded UI with compact labels, chevron and hover/focus states.
+- Use player-driven looping with original audio and no model. With fully covered ready stems, schedule audio-clock wraps while the video follows; preserve mute/solo and prepared speed/tuning.
+- Version/display name **2.4.3**. See `REGION-LOOP-2.4.3.md` for controls, timing limits and verification.
+
+---
+
 # Release 2.4.2
 
 - Restore direct Speed/Speed HD at 1× with zero tuning, even with a stem selection.

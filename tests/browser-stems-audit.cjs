@@ -81,7 +81,10 @@ async function start() {
     if (url.pathname === '/audit.webm') return route.fulfill({ contentType: 'audio/webm', body: recordedWebM });
     if (url.pathname === '/sample.wav') {
       const kind = url.searchParams.get('kind') || 'normal';
-      return route.fulfill({ contentType: 'audio/wav', body: samples[kind] });
+      const audio=samples[kind],range=route.request().headers().range?.match(/bytes=(\d+)-(\d*)/);
+      const from=range?Number(range[1]):0,end=range?.[2]?Math.min(audio.length-1,Number(range[2])):audio.length-1;
+      return route.fulfill({ status:range?206:200, contentType: 'audio/wav',
+        headers:{'accept-ranges':'bytes','content-length':String(end-from+1),...(range?{'content-range':`bytes ${from}-${end}/${audio.length}`}:{})},body:audio.subarray(from,end+1) });
     }
     const kind = url.searchParams.get('kind') || 'normal';
     if (kind.startsWith('mse')) return route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body><div id="movie_player"><video class="html5-main-video" controls></video></div><script>
@@ -177,7 +180,7 @@ async function hooks(e = env) {
   const trigger = e.cdp.send('Runtime.evaluate', { expression: '__ytbmStemDiag()', contextId: e.world() });
   const event = await paused;
   const hookResult = await e.cdp.send('Debugger.evaluateOnCallFrame', { callFrameId: event.callFrames[0].callFrameId,
-    expression: `window.__test={getStemState,getStemAISlice,stopStemAnalysis,jumpToCue,stemAiTick,refreshStemsUI,audioContext,stemBusOutput,requestStemAnalysis,getVideoElement,videoSpeedStretchNode,buildTouchPopup,setCueAtKey,
+    expression: `window.__test={getStemState,getStemAISlice,stopStemAnalysis,jumpToCue,stemAiTick,refreshStemsUI,audioContext,stemBusOutput,requestStemAnalysis,getVideoElement,videoSpeedStretchNode,buildTouchPopup,setCueAtKey,getRegionLoopController,goAdvancedUI,goMinimalUI,
       setMode:(mode,rate,tune=0)=>{pitchTarget='video';speedOnlyMode=mode!=='Pitch';speedHDMode=mode==='Speed HD';pitchSemitoneMode=false;updatePitch((rate-1)*100);if(speedHDMode)updateSpeedHDTune(tune);},
       stretchReady:()=>!!videoSpeedStretchNode}` });
   await e.cdp.send('Debugger.removeBreakpoint', { breakpointId }); await e.cdp.send('Debugger.resume'); await trigger;
@@ -189,6 +192,176 @@ async function separated(e = env) {
 async function scenario(name, fn) {
   try { const details = await fn(); report.tests.push({ name, result: 'PASS', details }); console.log('PASS', name); }
   catch (error) { report.tests.push({ name, result: 'FAIL', error: error.message }); console.error('FAIL', name, error); throw error; }
+}
+async function regionControls(e) {
+  e.page.on('pageerror', error => console.log('REGION PAGE ERROR',error.stack));
+  await e.page.locator('[data-region-action="in"]').waitFor();
+  await hooks(e);
+  await e.run('__test.goAdvancedUI()');
+  const latency=e.page.getByRole('combobox',{name:'Speed HD latency',exact:true});
+  await latency.waitFor({state:'visible'});
+  const latencyStyle=await latency.evaluate(el=>({round:getComputedStyle(el).borderRadius,appearance:getComputedStyle(el).appearance,color:getComputedStyle(el).color,options:[...el.options].map(o=>o.textContent)}));
+  assert.equal(latencyStyle.round,'999px');assert.equal(latencyStyle.appearance,'none');assert.equal(latencyStyle.color,'rgb(255, 255, 255)');
+  await latency.selectOption('live');
+  await wait(()=>e.run('Math.abs(__test.videoSpeedStretchNode.latencySeconds-.068)<.001'));
+  await wait(()=>latency.isEnabled());await latency.selectOption('quality');
+  await wait(()=>e.run('Math.abs(__test.videoSpeedStretchNode.latencySeconds-.168)<.001'));
+  await wait(()=>latency.isEnabled());await e.run('__test.goMinimalUI()');
+  await e.run('__test.getRegionLoopController().clear()');
+  await e.page.locator('video.html5-main-video').first().evaluate(v=>v.play());
+  await sleep(250);
+  const state = () => e.run('__test.getRegionLoopController().snapshot()');
+  const seek = async time => {
+    await e.page.waitForFunction(() => document.querySelector('video.html5-main-video').readyState >= 2);
+    await e.page.locator('video.html5-main-video').first().evaluate((v, time) => { v.pause(); v.currentTime=time; }, time);
+    await e.page.waitForFunction(time => {const v=document.querySelector('video.html5-main-video');return !v.seeking&&Math.abs(v.currentTime-time)<0.02;},time);
+  };
+  assert.equal(await e.page.locator('.ytbm-minimal-bar').getByText('Import', { exact: true }).count(), 0);
+  const buttonStyle = await e.page.locator('[data-region-action="in"]').evaluate(el => ({
+    background: getComputedStyle(el).backgroundColor, round: getComputedStyle(el).borderRadius }));
+  assert.equal(buttonStyle.background, 'rgba(255, 255, 255, 0.08)'); assert.equal(buttonStyle.round, '999px');
+  const iconAlignment=await e.page.locator('[data-region-action="clear"]').evaluate(el=>{
+    const b=el.getBoundingClientRect(),i=el.querySelector('svg').getBoundingClientRect();
+    return {dx:(i.left+i.width/2)-(b.left+b.width/2),dy:(i.top+i.height/2)-(b.top+b.height/2)};
+  });
+  assert.ok(Math.abs(iconAlignment.dx)<0.5&&Math.abs(iconAlignment.dy)<0.5,'region loop SVG must be centered in both axes');
+  await seek(1); await e.page.keyboard.press('i');
+  assert.ok(Math.abs((await state()).in - 1) < 0.02);
+  await seek(3); await e.page.keyboard.press('o'); assert.ok(Math.abs((await state()).out - 3) < 0.02);
+  assert.equal((await state()).enabled, true);
+  assert.equal(await e.page.locator('[data-region-action="in"]').evaluate(el=>el.classList.contains('ytbm-region-set')),true);
+  assert.equal(await e.page.locator('[data-region-action="out"]').evaluate(el=>el.classList.contains('ytbm-region-set')),true);
+  assert.equal(await e.page.locator('[data-region-action="clear"]').evaluate(el=>el.classList.contains('ytbm-region-enabled')),true);
+  await wait(async()=>await e.page.locator('[data-region-action="clear"]').evaluate(el=>getComputedStyle(el).backgroundColor)==='rgba(255, 80, 80, 0.3)',3000);
+  let chooser = false; const onChooser = () => chooser = true; e.page.on('filechooser', onChooser);
+  await e.page.keyboard.press('Meta+i'); assert.equal(chooser, false); e.page.off('filechooser', onChooser);
+  assert.ok(Math.abs((await state()).in - 1) < 0.02, 'Cmd-I must not import or mark IN');
+  await e.page.locator('.ytp-progress-bar').evaluate(el => { el.style.width='600px';el.style.height='10px';el.style.marginTop='30px'; });
+  await e.run('__test.getRegionLoopController().render()');
+  const marker = e.page.locator('.ytbm-region-in'); await marker.scrollIntoViewIfNeeded();
+  const bar = await e.page.locator('.ytp-progress-bar').boundingBox(), start = await marker.boundingBox();
+  const duration = await e.page.locator('video.html5-main-video').first().evaluate(v => v.duration);
+  await e.page.mouse.move(start.x + 4, start.y + 6); await e.page.mouse.down();
+  await e.page.mouse.move(bar.x + 2 / duration * bar.width, start.y + 6, { steps: 5 }); await e.page.mouse.up();
+  assert.ok(Math.abs((await state()).in - 2) < 0.04);
+  await e.page.keyboard.press('u'); assert.ok(Math.abs((await state()).in - 1) < 0.02);
+  await e.page.keyboard.press('Meta+u'); assert.ok(Math.abs((await state()).in - 2) < 0.04);
+  await e.page.locator('.ytbm-region-out').dblclick(); assert.equal((await state()).out, null);
+  assert.equal((await state()).enabled, false);
+  await e.page.keyboard.press('u'); assert.ok(Math.abs((await state()).out - 3) < 0.02);
+  await e.page.locator('[data-region-action="clear"]').click();
+  assert.equal((await state()).in, null); assert.equal((await state()).out, null);
+  assert.equal(await e.page.locator('[data-region-action="clear"]').evaluate(el=>el.classList.contains('ytbm-region-enabled')),false);
+  await e.page.keyboard.press('u'); assert.ok(Math.abs((await state()).in - 2) < 0.04);
+  await e.page.keyboard.down('i');await e.page.keyboard.down('o');
+  await e.page.keyboard.up('o');await e.page.keyboard.up('i');
+  assert.equal((await state()).in,null);assert.equal((await state()).out,null);
+  await e.page.keyboard.press('u');assert.ok(Math.abs((await state()).in-2)<0.04);
+  await e.page.locator('[data-region-action="in"]').click({ button: 'right' });
+  await e.page.locator('.ytbm-region-menu input[name="regionIn"]').fill('1.1');
+  await e.page.locator('.ytbm-region-menu input[name="regionOut"]').fill('2.4');
+  await e.page.locator('.ytbm-region-menu button[type="submit"]').click();
+  assert.equal((await state()).in, 1.1); assert.equal((await state()).out, 2.4);
+  await seek(1.1); await e.page.locator('video.html5-main-video').first().evaluate(v => v.play());
+  await wait(() => e.run('__test.getRegionLoopController().nativeRepeats >= 2'), 10000);
+  const native = await e.run('({state:__test.getRegionLoopController().snapshot(),repeats:__test.getRegionLoopController().nativeRepeats,time:__test.getVideoElement().currentTime})');
+  await e.page.locator('video.html5-main-video').first().evaluate(v => v.pause());
+  const beforeEndLoop=await e.run('__test.getRegionLoopController().nativeRepeats');
+  await e.run(`__test.getRegionLoopController().change({in:${duration-0.6},out:${duration},enabled:true})`);
+  await seek(duration-0.6);await e.page.locator('video.html5-main-video').first().evaluate(v=>v.play());
+  await wait(async()=>await e.run('__test.getRegionLoopController().nativeRepeats')>beforeEndLoop,5000);
+  assert.equal((await state()).enabled,true);
+  await e.page.locator('video.html5-main-video').first().evaluate(v=>v.pause());
+  await e.run('__test.getRegionLoopController().change({in:1.1,out:2.4,enabled:true})');
+  await e.page.reload();
+  await e.page.locator('[data-region-action="in"]').waitFor(); await hooks(e);
+  await wait(async () => (await state()).in === 1.1);
+  assert.equal((await state()).out, 2.4); assert.equal((await state()).enabled, true);
+  const currentURL=e.page.url();
+  await e.page.evaluate(()=>history.pushState({},'','/watch?v=region-next-video'));
+  await wait(async()=> (await state()).videoId==='youtube:region-next-video');
+  assert.equal((await state()).in,null); assert.equal((await state()).enabled,false);
+  await e.page.evaluate(url=>history.pushState({},'',url),currentURL);
+  await wait(async()=>{const s=await state();return s.videoId==='youtube:audit-1'&&s.in===1.1;});
+  assert.equal((await state()).out,2.4);
+  await e.run('window.__send=msg=>new Promise(resolve=>chrome.runtime.sendMessage(msg,resolve));__test.getRegionLoopController().clear()');
+  return { native, persistence: true, dragUndoRedo: true, doubleClickErase: true, miniBarStyle: buttonStyle };
+}
+
+async function regionStemPlayback(e) {
+  await hooks(e);
+  await e.page.locator('video.html5-main-video').first().evaluate(v => {v.pause();v.currentTime=1;});
+  await e.page.waitForFunction(() => !document.querySelector('video.html5-main-video').seeking);
+  await e.page.locator('[data-stem="vocals"]').click();
+  const metrics = [];
+  for (const [mode, rate, tune] of [['Pitch',1,0],['Speed',0.5,0],['Speed HD',0.75,3]]) {
+    await e.run(`__test.setMode(${JSON.stringify(mode)},${rate},${tune});__test.getRegionLoopController().change({in:1,out:1.6,enabled:true})`);
+    await e.page.locator('video.html5-main-video').first().evaluate(v => v.play());
+    await wait(async () => {
+      const s=await e.run('__ytbmStemDiag()');
+      if(s.preparedError)throw new Error(s.preparedError);
+      return s.regionLoop?.audioClock&&s.pathMix==='ai'&&(mode==='Pitch'||s.preparedRate===rate&&s.preparedTune===tune);
+    });
+    const sample = await e.run(`(async()=>{
+      const c=__test.audioContext,ai=__test.getStemState().ai,loop=__test.getRegionLoopController();
+      const generation=ai.generation, before=loop.audioRepeats,a=c.createAnalyser();a.fftSize=256;
+      __test.videoSpeedStretchNode.output.connect(a);
+      let min=Infinity,max=0;const d=new Float32Array(256);
+      for(let i=0;i<${Math.ceil(0.6 / rate * 2.5 / 0.015)};i++){
+        a.getFloatTimeDomainData(d);const rms=Math.sqrt(d.reduce((s,x)=>s+x*x,0)/d.length);
+        if(i>3){min=Math.min(min,rms);max=Math.max(max,rms);}await new Promise(r=>setTimeout(r,15));
+      }
+      __test.videoSpeedStretchNode.output.disconnect(a);
+      return {minRms:min,maxRms:max,generationUnchanged:generation===ai.generation,visualSeeks:loop.audioRepeats-before,
+        mutes:__test.getStemState().mutes,state:__ytbmStemDiag(),loopedSources:ai.sources.filter(s=>s.region).length};
+    })()`);
+    assert.equal(sample.generationUnchanged, true, 'visual looping must not stop/restart the stem queue');
+    assert.ok(sample.visualSeeks >= 1); assert.ok(sample.loopedSources > 0);
+    assert.ok(sample.minRms > 0.0001, 'ready stem loops must not have a decoder-seek silence');
+    assert.equal(sample.mutes.vocals, true); assert.equal(sample.state.liveStretchActive, false);
+    metrics.push({ mode, rate, tune, ...sample });
+    await e.page.locator('video.html5-main-video').first().evaluate(v => v.pause());
+  }
+  await e.page.locator('video.html5-main-video').first().evaluate(v=>v.play());
+  await e.run('__test.jumpToCue(5)');
+  assert.equal(await e.run('__test.getRegionLoopController().state.enabled'),true,'cues must not disable an active region');
+  await wait(()=>e.run('__test.getVideoElement().currentTime>=1&&__test.getVideoElement().currentTime<1.7'),5000);
+  await e.page.locator('video.html5-main-video').first().evaluate(v=>v.pause());
+  await e.run('__test.getRegionLoopController().clear();__test.setMode("Pitch",1)');
+  await e.page.locator('[data-stem="vocals"]').click();
+  console.log('REGION STEM LOOPS',JSON.stringify(metrics)); return metrics;
+}
+async function verifyInstalledStemUI(e) {
+  const state=await e.run('__ytbmStemDiag()');
+  assert.equal(state.contextInvalidated,false);
+  assert.equal(state.stemsInstalled,true,'a mute must not change model installation');
+  assert.equal(await e.page.locator('.ytbm-minimal-bar').count(),1,'one current mini bar');
+  assert.equal(await e.page.locator('.ytbm-stems-grid--inline').isVisible(),true);
+  assert.equal(await e.page.locator('.ytbm-stems-grid--inline [data-stem]').count(),4);
+  assert.equal(await e.page.locator('.ytbm-stems-btn').isVisible(),false,'the pre-install text button must stay hidden');
+  assert.equal(await e.page.getByText('Download stems package',{exact:true}).evaluateAll(els=>els.some(el=>el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden')),false);
+}
+async function normalStemUI(e) {
+  await hooks(e);
+  await e.page.locator('video.html5-main-video').first().evaluate(v=>{v.pause();v.currentTime=1;});
+  await wait(()=>e.run('__ytbmStemDiag().hasCurrentCoverage'));
+  let clicks=0;
+  for(const mode of ['Pitch','Speed','Speed HD']) {
+    await e.run(`__test.setMode(${JSON.stringify(mode)},1)`);
+    for(let round=0;round<3;round++) {
+      for(const key of ['vocals','drums','bass','other']) {
+        const button=e.page.locator(`[data-stem="${key}"]`);
+        await button.click();await verifyInstalledStemUI(e);clicks++;
+        await button.click();await verifyInstalledStemUI(e);clicks++;
+        await button.click({modifiers:['Shift']});await verifyInstalledStemUI(e);clicks++;
+        await button.click({modifiers:['Shift']});await verifyInstalledStemUI(e);clicks++;
+      }
+      await e.run('__test.goAdvancedUI();__test.goMinimalUI()');
+      await verifyInstalledStemUI(e);
+    }
+  }
+  console.log('INSTALLED STEM UI CHECK',{clicks,modes:['Pitch','Speed','Speed HD'],viewSwitches:9,result:'PASS'});
+  return {clicks,viewSwitches:9,installerReappeared:false};
 }
 async function playbackButtons(e, label) {
   await hooks(e);
@@ -204,7 +377,7 @@ async function playbackButtons(e, label) {
   const singles = {};
   for (const key of keys) {
     assert.equal(await e.page.locator(`[data-stem="${key}"]`).isEnabled(), true);
-    await e.page.locator(`[data-stem="${key}"]`).click(); singles[key] = await measure();
+    await e.page.locator(`[data-stem="${key}"]`).click(); await verifyInstalledStemUI(e); singles[key] = await measure();
     assert.equal(singles[key].path, 'ai');
     assert.ok(singles[key].rms > 0.0001, `muting ${key} must not silence all other instruments`);
     await e.page.locator(`[data-stem="${key}"]`).click();
@@ -532,7 +705,8 @@ async function liveYouTubeTest() {
       }
       console.log('LIVE YOUTUBE RATES',rateStates);
     }
-    await page.close();
+     if(process.env.YTBM_REGION_LIVE) await regionStemPlayback(e);
+     await page.close();
     return { url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw', state, measured, rateStates };
 }
 (async () => {
@@ -542,6 +716,7 @@ async function liveYouTubeTest() {
     if (!process.env.YTBM_RELEASE_ONLY && (await inspect()).model.present) await remove();
     const existingModel = (await inspect()).model.present;
     if (process.env.YTBM_LOCAL_MODEL) await useFixtureModel();
+    if (process.env.YTBM_REGION_ONLY) await scenario('region controls, markers, shortcuts and global undo/redo without stems', () => regionControls(env));
     await snapshot(existingModel ? 'existing verified model baseline' : 'fresh baseline');
     await scenario(existingModel ? 'reuse installed model and separate without another download' : 'fresh remote installation and first separation', async () => {
       await install(); const state = await separated(); await hooks();
@@ -549,6 +724,14 @@ async function liveYouTubeTest() {
       assert.equal(slice.frames, N); assert.equal(slice.finite, true);
       await snapshot('installed and separated'); return { state, slice };
     });
+    if (process.env.YTBM_REGION_ONLY) {
+      await scenario('region loops preserve audio-clock stem playback in Pitch, Speed and HD', () => regionStemPlayback(env));
+      return;
+    }
+    if (process.env.YTBM_UI_ONLY) {
+      await scenario('repeated stem mute/solo and Advanced/minimal switches never restore the installer',()=>normalStemUI(env));
+      return;
+    }
     if (process.env.YTBM_STARTUP_ONLY) {
       await scenario('fresh UI installation starts working in the same document without refresh', () => playbackButtons(env, 'fresh UI install'));
       return;

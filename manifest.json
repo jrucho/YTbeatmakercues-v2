@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "YouTube Beatmaker Extension",
-  "version": "2.4.2",
-  "version_name": "2.4.2",
+  "version": "2.4.3",
+  "version_name": "2.4.3",
   "minimum_chrome_version": "116",
   "description": "Mark cue points, play drum sounds, and customize your experience on YouTube.",
   "permissions": [
@@ -51,6 +51,7 @@
       "js": [
         "vj-live.js",
         "ui-tooltips.js",
+        "video-region-loop.js",
         "addons/stems/stem-timeline.js",
         "addons/stems/prepared-stretch.js",
         "content.js"

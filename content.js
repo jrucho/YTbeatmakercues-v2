@@ -908,6 +908,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       minimalPitchSlider = null,
       minimalPitchLabel = null,
       minimalPitchModeButton = null,
+      regionLoopController = null,
       stemsButtonMin = null,
       stemsDropdownMin = null,
       stemsGridMin = null,
@@ -927,7 +928,6 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       cuesButtonMin = null,
       minimalCuesLabel = null,
       loopButtonMin = null,
-      importLoopButtonMin = null,
       advancedButtonMin = null,
       manualButton = null,
       keyMapButton = null,
@@ -3781,6 +3781,7 @@ function addTrackedListener(target, type, listener, options) {
   cleanupFunctions.push(() => target.removeEventListener(type, listener, options));
 }
 function cleanupResources() {
+  regionLoopController?.dispose(); regionLoopController = null;
   cancelCueSeek();
   stopVJRenderer();
   [mediaRecorder, videoMediaRecorder].forEach(mr => {
@@ -3860,6 +3861,7 @@ function captureAppState() {
     loopsBPM,
     activeLoopIndex,
     cuePoints: JSON.parse(JSON.stringify(cuePoints)), // copy
+    regionLoop: regionLoopController?.snapshot() || null,
     currentSampleIndex: { ...currentSampleIndex },
 
     eqFilterActive,
@@ -3869,7 +3871,7 @@ function captureAppState() {
     eqFilterGain: eqFilterNode ? eqFilterNode.gain.value : 0,
 
     loFiCompActive,
-    postCompGainValue: postCompGain.gain.value,
+    postCompGainValue: postCompGain?.gain.value ?? 1,
 
     // reverb + cassette
     reverbActive,
@@ -3925,7 +3927,7 @@ function restoreAppState(st) {
   }
 
   loFiCompActive = st.loFiCompActive;
-  postCompGain.gain.value = st.postCompGainValue;
+  if (postCompGain) postCompGain.gain.value = st.postCompGainValue;
 
   // reverb / cassette
   reverbActive = st.reverbActive;
@@ -3958,6 +3960,7 @@ function restoreAppState(st) {
   midiOverdubStartTimeouts.forEach((t,i)=>{ if(t) clearTimeout(t); midiOverdubStartTimeouts[i]=null; });
   midiStopTimeouts.forEach((t,i)=>{ if(t) clearTimeout(t); midiStopTimeouts[i]=null; });
   activeMidiLoopIndex = st.activeMidiLoopIndex || 0;
+  if (st.regionLoop) getRegionLoopController().restore(st.regionLoop);
 
   // Re-apply everything
   saveCuePointsToURL();
@@ -4981,12 +4984,7 @@ function onMinimalPointerUp(e) {
   loopButtonMin.appendChild(loopMeter);
   minimalUIContainer.appendChild(loopGroup);
 
-  const importPieces = createIconButton(YTBM_ICON_PATHS.import, "Import");
-  importLoopButtonMin = importPieces.button;
-  importLoopButtonMin.classList.add("ytbm-minimal-btn");
-  importLoopButtonMin.title = "Import an audio loop";
-  importLoopButtonMin.addEventListener("click", onImportAudioClicked);
-  minimalUIContainer.appendChild(importLoopButtonMin);
+  minimalUIContainer.appendChild(getRegionLoopController().createControls());
 
   const advancedPieces = createIconButton(YTBM_ICON_PATHS.advanced, "Advanced");
   advancedButtonMin = advancedPieces.button;
@@ -5003,6 +5001,7 @@ function onMinimalPointerUp(e) {
       minimalUIContainer.style.display = (minimalActive && minimalVisible && !blindMode) ? "flex" : "none";
     }
     refreshPitchUI();
+    regionLoopController?.render();
 
     if (minimalCuesLabel && cuesButtonMin) {
       const cc = Object.keys(cuePoints).length;
@@ -5017,6 +5016,30 @@ function onMinimalPointerUp(e) {
 
   window.refreshMinimalState = refreshMinimalState;
   refreshMinimalState();
+}
+
+function getRegionLoopController() {
+  if (!regionLoopController) {
+    regionLoopController = new YTBMRegionLoop.RegionLoop({
+      getVideo: getVideoElement,
+      getVideoId: getStemVideoId,
+      getProgressBar: getProgressBarElement,
+      bindPress: bindPadPress,
+      beforeChange: pushUndoState,
+      storage: chrome.storage.local,
+      audioTime: () => audioContext?.state === 'running' ? audioContext.currentTime : null,
+      isEligible: () => !document.getElementById('movie_player')?.classList.contains('ad-showing'),
+      seek: target => jumpToCue(target),
+      onChange: () => {
+        cancelCueSeek(); rampCueGain(1);
+        if (stemState?.ai) { stemAiStopFuture(0.003); stemState.ai.lastVt = null; }
+      },
+      onClockReset: () => {
+        if (stemState?.ai) { stemAiStopFuture(0.003); stemState.ai.lastVt = null; }
+      },
+    });
+  }
+  return regionLoopController;
 }
 
 
@@ -5360,6 +5383,7 @@ function jumpToCue(targetTime) {
   if (!video || !Number.isFinite(targetTime)) return false;
   const end = Number.isFinite(video.duration) ? Math.max(0, video.duration) : Infinity;
   const target = Math.max(0, Math.min(end, targetTime));
+  if (typeof regionLoopController !== 'undefined') regionLoopController?.userSeek(target);
   // Stop old scheduled stems before moving the player. Never reopen the
   // unseparated mix while a requested stem mute waits for the cue target.
   if (typeof stemsNeedSplit === "function" && stemsNeedSplit()) {
@@ -5436,6 +5460,7 @@ function jumpToCue(targetTime) {
 }
 
 let videoCheckInterval = setInterval(() => {
+  regionLoopController?.sync();
   if (stemState?.installed && stemState.videoId !== getStemVideoId()) clearStemSession("video changed");
   if (stemState?.installed && !stemState.analysisRequested && !stemState.analysisCancelled && getVideoElement()?.readyState >= 1) requestStemAnalysis();
   if (audioContext) {
@@ -10201,6 +10226,7 @@ function observeProgressBar() {
 }
 
 function updateCueMarkers() {
+  regionLoopController?.renderMarkers();
   const bar = getProgressBarElement();
   if (!bar) return;
 
@@ -10840,6 +10866,26 @@ function onKeyDown(e) {
 
   const k = e.key.toLowerCase();
 
+  if (k === 'i' || k === 'o') {
+    if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+      if (!e.repeat) getRegionLoopController().keyDown(k);
+      return;
+    }
+    // The former Cmd/Ctrl-I import shortcut is retired.
+    if (k === 'i' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); return;
+    }
+  }
+
+  if (k === extensionKeys.undo.toLowerCase()) {
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    if (e.repeat) return;
+    if (e.ctrlKey || e.metaKey) redoAction();
+    else undoAction();
+    return;
+  }
+
   // Cmd/Ctrl+Y toggles the VJ module window.
   if ((e.metaKey || e.ctrlKey) && !e.altKey && k === 'y') {
     e.preventDefault();
@@ -10983,12 +11029,6 @@ function onKeyDown(e) {
     return;
   }
   
-  if (e.key.toLowerCase() === "i") {
-  e.preventDefault();
-  importMedia();
-  return;
-}
-
   
   // NEW: If "p" is pressed, randomize all samples.
   if (k === "p") {
@@ -11068,14 +11108,6 @@ function onKeyDown(e) {
     onVideoLooperButtonMouseDown();
     return;
   }
-  if (k === extensionKeys.undo.toLowerCase()) {
-    if (e.ctrlKey || e.metaKey) {
-      redoAction();
-    } else {
-      undoAction();
-    }
-    return;
-  }
   if (k === extensionKeys.pitchDown) {
     stepPitch(-1);
     return;
@@ -11125,6 +11157,8 @@ function onKeyDown(e) {
 }
 
 function onKeyUp(e) {
+  const regionKey = e.key.toLowerCase();
+  if (regionKey === 'i' || regionKey === 'o') regionLoopController?.keyUp(regionKey);
   if (e.key === "Shift") {
     isShiftKeyDown = false;
     const holdMs = Date.now() - shiftDownTime;
@@ -12136,14 +12170,20 @@ function addControls() {
   });
   pitchWrap.appendChild(pitchTargetButton);
   const hdLatencyRow = document.createElement('div');
-  hdLatencyRow.className = 'ytbm-panel-row';
+  hdLatencyRow.className = 'ytbm-panel-row ytbm-hd-latency-row';
   const hdLatencyLabel = document.createElement('label');
-  hdLatencyLabel.textContent = 'Speed HD latency: ';
+  hdLatencyLabel.className = 'ytbm-hd-latency-label';
+  const hdLatencyCaption = document.createElement('span');
+  hdLatencyCaption.className = 'ytbm-panel-label';
+  hdLatencyCaption.textContent = 'Speed HD latency';
+  hdLatencyLabel.appendChild(hdLatencyCaption);
   speedHDLatencySelect = document.createElement('select');
+  speedHDLatencySelect.className = 'looper-btn ytbm-hd-latency-select';
+  speedHDLatencySelect.setAttribute('aria-label', 'Speed HD latency');
   for (const [value, text] of [
-    ['quality', 'Quality ~168 ms — same 160 ms analysis window'],
-    ['balanced', 'Balanced ~104 ms — shorter window'],
-    ['live', 'Live ~68 ms — lowest delay, possible extra artifacts']
+    ['quality', 'Quality · ~168 ms'],
+    ['balanced', 'Balanced · ~104 ms'],
+    ['live', 'Live · ~68 ms']
   ]) {
     const option = document.createElement('option');
     option.value = value;
@@ -12151,7 +12191,7 @@ function addControls() {
     speedHDLatencySelect.appendChild(option);
   }
   speedHDLatencySelect.value = speedHDLatencyProfile;
-  speedHDLatencySelect.title = 'Engine latency only. Quality retains the long window with more CPU/overlap; shorter windows can reduce bass/transient quality. Profile changes reset the analysis buffer.';
+  speedHDLatencySelect.title = 'Live-engine latency: Quality keeps a 160 ms analysis window; Balanced and Live use shorter windows with possible bass/transient artifacts. Prepared stems bypass the live delay; 1× with zero tuning is direct. Changing profiles resets the analysis buffer.';
   speedHDLatencySelect.addEventListener('change', () => setSpeedHDLatencyProfile(speedHDLatencySelect.value));
   hdLatencyLabel.appendChild(speedHDLatencySelect);
   hdLatencyRow.appendChild(hdLatencyLabel);
@@ -12437,7 +12477,7 @@ function addControls() {
   importMediaAdvBtn.className = "looper-btn";
   importMediaAdvBtn.innerText = "Import Media";
   importMediaAdvBtn.style.flex = '1 1 calc(50% - 4px)';
-  importMediaAdvBtn.title = "Import a local video or audio file (Cmd+I)";
+  importMediaAdvBtn.title = "Import a local video or audio file";
   importMediaAdvBtn.addEventListener("click", importMedia);
   actionWrap.appendChild(importMediaAdvBtn);
 
@@ -13311,7 +13351,7 @@ function getStemBusOutput() { return stemBusOutput; }
 
 // Build stamp: verify in console that the loaded copy is current.
 // If this is missing or stale, the extension was loaded from an old folder.
-window.__ytbmBuild = { version: "2.4.2", flavor: "prepared-stems-speed", built: "2026-10-17" };
+window.__ytbmBuild = { version: "2.4.3", flavor: "video-region-loop", built: "2026-10-17" };
 
 // Live diagnostic for console checks: samples, loopers, audio graph.
 window.__ytbmAudioDiag = function () {
@@ -13336,7 +13376,7 @@ window.__ytbmStemDiag = function () {
   try {
     const st = getStemState();
     return {
-      extVersion: st.contextInvalidated ? window.__ytbmBuild?.version || "2.4.2" : chrome?.runtime?.getManifest?.().version || null,
+      extVersion: st.contextInvalidated ? window.__ytbmBuild?.version || "2.4.3" : chrome?.runtime?.getManifest?.().version || null,
       contextInvalidated: !!st.contextInvalidated,
       audioRunning: !!audioContext && audioContext.state === "running",
       videoGainConnected: !!videoGain,
@@ -13362,6 +13402,8 @@ window.__ytbmStemDiag = function () {
       liveStretchActive: !!videoSpeedStretchNode?.isActive?.(),
       preparedBytes: st.ai?.preparedCache?.bytes || 0,
       preparedError: st.ai?.preparedError || null,
+      regionLoop: regionLoopController ? { ...regionLoopController.state, audioClock: !!regionLoopController.clock,
+        nativeRepeats: regionLoopController.nativeRepeats, audioSeeks: regionLoopController.audioRepeats } : null,
       pathMix: st.ai?.pathMix || "live",
       hasCurrentCoverage: (() => { try { return stemAiHasCurrentCoverage(); } catch { return false; } })(),
       trackPreload: st.preloadStatus,
@@ -13975,6 +14017,91 @@ function stemAiExpectedRate() {
   } catch { return 1; }
 }
 
+function stemAudioRegion(ai, video) {
+  const control = typeof regionLoopController !== 'undefined' ? regionLoopController : null;
+  const range = control?.range();
+  if (!range || !ai || !['track', 'buffered'].includes(ai.mode) || !stemsNeedSplit() ||
+      video.paused || audioContext?.state !== 'running' || videoSpeedStretchNode?.isActive?.() ||
+      (control.options.isEligible && !control.options.isEligible())) {
+    control?.dropClock(); return null;
+  }
+  if (control.clock && (control.clock.owner !== ai || control.clock.epoch !== ai.epoch)) control.dropClock();
+  const start = Math.round(range.in * STEM_SR), end = Math.round(range.out * STEM_SR);
+  if (ai.timeline.coverage(start, end) < 0.999) { control.dropClock(); return null; }
+  if (stemPreparedParameters()) {
+    const applied = ai.preparedApplied;
+    if (!applied) return null;
+    const size = YTBMPreparedStretch.TILE_SECONDS;
+    const head = stemPreparedTile(Math.floor(range.in / size), applied);
+    const tail = stemPreparedTile(Math.floor((range.out - 1e-7) / size), applied);
+    if (!control.clock && (!head || !tail || head.end <= range.in || tail.end < range.out - 1e-6)) return null;
+  }
+  if (!control.clock && (video.seeking || video.readyState < 2)) return null;
+  const previous = control.clock;
+  const clock = control.alignAudioClock(audioContext.currentTime, Number(video.playbackRate) || 1, video.currentTime);
+  if (!clock) return null;
+  clock.owner = ai; clock.epoch = ai.epoch;
+  if (!previous) { stemAiStopFuture(0.003); ai.lastVt = null; }
+  return range;
+}
+
+function stemRegionPosition(time, fallback) {
+  const control = typeof regionLoopController !== 'undefined' ? regionLoopController : null;
+  const position = control?.positionAt(time), range = control?.range();
+  if (position != null && range && range.out - position <= 2 * Math.max(1, control.clock?.rate || 1) / STEM_SR) return range.in;
+  return position ?? fallback;
+}
+
+function stemReadRegion(stem, media, frames, range) {
+  const ai = getStemState().ai;
+  if (!range) {
+    const capture = YTBMStemTimeline.findCoveredCapture(stemAiAnchors(), media, frames / STEM_SR, STEM_SR, ai.timeline);
+    return capture == null ? null : ai.timeline.readStem(stem, capture, capture + frames);
+  }
+  const start = Math.round(range.in * STEM_SR), end = Math.round(range.out * STEM_SR);
+  const left = new Float32Array(frames), right = new Float32Array(frames);
+  let cursor = Math.max(start, Math.min(end, Math.round(media * STEM_SR))), written = 0;
+  while (written < frames) {
+    if (cursor >= end) cursor = start;
+    const count = Math.min(frames - written, end - cursor);
+    if (count <= 0) return null;
+    const part = ai.timeline.readStem(stem, cursor, cursor + count);
+    const fade = Math.max(1, Math.round(Math.min(0.003 * stemAiExpectedRate() * STEM_SR, (end - start) / 4)));
+    for (let i = 0; i < count; i++) {
+      const gain = Math.min(1, (cursor + i - start) / fade, (end - cursor - i) / fade);
+      left[written + i] = part.left[i] * gain;
+      right[written + i] = part.right[i] * gain;
+    }
+    cursor += count; written += count;
+  }
+  return { left, right };
+}
+
+function stemReadPreparedRegion(channel, media, frames, parameters, range) {
+  const result = new Float32Array(frames);
+  let written = 0;
+  while (written < frames) {
+    if (range && range.out - media < 2 / STEM_SR) media = range.in;
+    const index = Math.floor((media + 1e-7) / YTBMPreparedStretch.TILE_SECONDS);
+    const tile = stemPreparedTile(index, parameters);
+    if (!tile) return null;
+    const offset = Math.max(0, Math.round((media - tile.from) / parameters.rate * STEM_SR));
+    const limit = range ? Math.min(tile.end, range.out) : tile.end;
+    const count = Math.min(frames - written, tile.channels[channel].length - offset,
+      Math.round((limit - media) / parameters.rate * STEM_SR));
+    if (count <= 0) return null;
+    const data = tile.channels[channel];
+    for (let i = 0; i < count; i++) {
+      const position = media + i / STEM_SR * parameters.rate;
+      const width = range ? Math.min(0.003 * parameters.rate, (range.out - range.in) / 4) : 0;
+      const gain = range ? Math.max(0, Math.min(1, (position - range.in) / width, (range.out - position) / width)) : 1;
+      result[written + i] = data[offset + i] * gain;
+    }
+    written += count; media += count / STEM_SR * parameters.rate;
+  }
+  return result;
+}
+
 function stemPreparedParameters() {
   const ai = getStemState().ai;
   if (typeof YTBMPreparedStretch === "undefined" || typeof speedOnlyMode === "undefined" || !speedOnlyMode ||
@@ -14053,6 +14180,12 @@ function stemPrepareAhead() {
   }
   stemRequestPreparedTile(index, parameters);
   stemRequestPreparedTile(index + 1, parameters);
+  const loop = typeof regionLoopController !== 'undefined' ? regionLoopController?.range() : null;
+  if (loop) {
+    const size = YTBMPreparedStretch.TILE_SECONDS;
+    stemRequestPreparedTile(Math.floor(loop.in / size), parameters);
+    stemRequestPreparedTile(Math.floor((loop.out - 1e-7) / size), parameters);
+  }
   const tile = stemPreparedTile(index, parameters);
   if (tile && tile.end >= vt + Math.min(0.12 * parameters.rate, Math.max(0, ai.trackFrames / STEM_SR - vt - 0.002)) &&
       stemsNeedSplit() && ai.preparedApplied?.tag !== parameters.tag) {
@@ -14067,27 +14200,36 @@ function stemAiSchedulePrepared(vt) {
   const ai = getStemState().ai, parameters = ai.preparedApplied;
   if (!parameters) return;
   const now = audioContext.currentTime, rate = parameters.rate;
+  const region = typeof regionLoopController !== 'undefined' && regionLoopController?.clock ? regionLoopController.range() : null;
   if (ai.schedHorizon <= now) ai.schedHorizon = now + 0.005;
   let guard = 0;
-  while (ai.schedHorizon < now + STEM_SCHED_AHEAD_S && guard++ < 8) {
+  while (ai.schedHorizon < now + (region ? 0.5 : STEM_SCHED_AHEAD_S) && guard++ < (region ? 32 : 8)) {
     const startAt = ai.schedHorizon;
-    const media = vt + (startAt - now) * rate;
+    const media = region ? stemRegionPosition(startAt, vt) : vt + (startAt - now) * rate;
     const index = Math.floor((media + 1e-7) / YTBMPreparedStretch.TILE_SECONDS);
     const tile = stemPreparedTile(index, parameters);
     if (!tile) break;
-    const core = Math.min(STEM_SCHED_WINDOW_S, (tile.coreEnd - media) / rate);
+    const core = Math.min(STEM_SCHED_WINDOW_S, (tile.coreEnd - media) / rate, region ? (region.out - media) / rate : Infinity);
     if (core < 1 / STEM_SR) break;
     const offset = Math.round((media - tile.from) / rate * STEM_SR);
-    const count = Math.min(Math.round(core * STEM_SR) + STEM_SCHED_FADE, tile.channels[0].length - offset);
+    const count = region ? Math.round(core * STEM_SR) + STEM_SCHED_FADE :
+      Math.min(Math.round(core * STEM_SR) + STEM_SCHED_FADE, tile.channels[0].length - offset);
     if (count < 1) break;
     const duration = count / STEM_SR, fade = Math.min(STEM_SCHED_FADE / STEM_SR, duration / 4);
     const fadeOutAt = duration > core ? core : Math.max(fade, duration - fade);
     const nodes = [], gains = [];
+    const prepared = [];
     for (const key of STEM_KEYS) {
       const channel = STEM_MODEL_INDEX[key] * 2;
+      const left = region ? stemReadPreparedRegion(channel, media, count, parameters, region) : tile.channels[channel].subarray(offset, offset + count);
+      const right = region ? stemReadPreparedRegion(channel + 1, media, count, parameters, region) : tile.channels[channel + 1].subarray(offset, offset + count);
+      if (!left || !right) return;
+      prepared.push({ key, left, right });
+    }
+    for (const { key, left, right } of prepared) {
       const buffer = audioContext.createBuffer(2, count, STEM_SR);
-      buffer.copyToChannel(tile.channels[channel].subarray(offset, offset + count), 0);
-      buffer.copyToChannel(tile.channels[channel + 1].subarray(offset, offset + count), 1);
+      buffer.copyToChannel(left, 0);
+      buffer.copyToChannel(right, 1);
       const source = audioContext.createBufferSource(), envelope = audioContext.createGain();
       source.buffer = buffer;
       envelope.gain.setValueAtTime(0, startAt);
@@ -14097,8 +14239,8 @@ function stemAiSchedulePrepared(vt) {
       source.connect(envelope); envelope.connect(stemAiGains[key]); source.start(startAt);
       nodes.push(source); gains.push(envelope);
     }
-    ai.sources.push({ nodes, gains, startAt, duration, generation: ai.generation, rate, prepared: true });
-    ai.schedHorizon = startAt + core;
+    ai.sources.push({ nodes, gains, startAt, duration, generation: ai.generation, rate, prepared: true, mediaStart: media, region });
+    ai.schedHorizon = startAt + Math.round(core * STEM_SR) / STEM_SR;
   }
   ai.sources = ai.sources.filter(source => {
     if (source.startAt + source.duration >= now - 0.1) return true;
@@ -14168,9 +14310,10 @@ function stemAiTick() {
     try { initTwoDeck(); }
     catch (error) { ai.failed = `Video audio routing failed: ${error.message}`; stemAiSetPath("live"); return; }
   }
-  const playing = !video.paused && !video.seeking && video.readyState >= 2;
+  const region = stemAudioRegion(ai, video);
+  const playing = !video.paused && (region || (!video.seeking && video.readyState >= 2));
   const rate = Number(video.playbackRate) || 1;
-  const vt = Number(video.currentTime) || 0;
+  const vt = region ? stemRegionPosition(audioContext.currentTime, video.currentTime) : Number(video.currentTime) || 0;
   ai.captureActive = !!((ai.mode === "capture") && playing && Math.abs(rate - 1) < 0.02);
   const rateChanged = ai.lastRate != null && Math.abs(rate - ai.lastRate) > 1e-6;
   if (rateChanged) {
@@ -14178,7 +14321,7 @@ function stemAiTick() {
     else stemAiRetuneSources(rate);
     ai.rateChangingUntil = audioContext.currentTime + 0.15;
   }
-  if (!rateChanged && ai.lastVt != null && playing && Math.abs((vt - ai.lastVt) - (audioContext.currentTime - ai.lastClock) * (ai.lastRate || rate)) > 0.15) {
+  if (!region && !rateChanged && ai.lastVt != null && playing && Math.abs((vt - ai.lastVt) - (audioContext.currentTime - ai.lastClock) * (ai.lastRate || rate)) > 0.15) {
     stemAiBreakRun();
   }
   ai.lastVt = vt;
@@ -14206,7 +14349,7 @@ function stemAiTick() {
   const need = Math.max(0.005, Math.min((STEM_SCHED_WINDOW_S + STEM_SCHED_FADE / STEM_SR) * rate,
     Number.isFinite(video.duration) ? video.duration - vt - 0.002 : Infinity));
   const anchors = stemAiAnchors();
-  const cs = TL.findCoveredCapture(anchors, vt, need, STEM_SR, ai.timeline);
+  const cs = region ? 0 : TL.findCoveredCapture(anchors, vt, need, STEM_SR, ai.timeline);
   if (cs == null) {
     stemAiSetPath("live");
     stemAiStopFuture();
@@ -14225,26 +14368,28 @@ function stemAiSchedule(vt) {
   if (!ai || !stemAiAnchors().length) return;
   const now = audioContext.currentTime;
   const rate = stemAiExpectedRate();
+  const region = typeof regionLoopController !== 'undefined' && regionLoopController?.clock ? regionLoopController.range() : null;
   if (ai.schedHorizon <= now) ai.schedHorizon = now + 0.005;
   let guard = 0;
   const gen = ai.generation;
   // During a drag, don't allocate/copy 1.5 seconds of future PCM only to cancel
   // it again on the next pointer event. Keep enough ahead for the 150 ms poll.
-  const ahead = ai.rateChangingUntil > now ? 0.3 : STEM_SCHED_AHEAD_S;
-  while (ai.schedHorizon < now + ahead && guard++ < 4) {
+  const ahead = region ? 0.5 : (ai.rateChangingUntil > now ? 0.3 : STEM_SCHED_AHEAD_S);
+  while (ai.schedHorizon < now + ahead && guard++ < (region ? 32 : 4)) {
     if (gen !== ai.generation) return;
     const startAt = ai.schedHorizon;
-    const vtChunk = vt + (startAt - now) * rate;
+    const vtChunk = region ? stemRegionPosition(startAt, vt) : vt + (startAt - now) * rate;
     const video = getVideoElement();
-    const remaining = Number.isFinite(video?.duration) ? Math.floor((video.duration - vtChunk) * STEM_SR) : Infinity;
+    const remaining = !region && Number.isFinite(video?.duration) ? Math.floor((video.duration - vtChunk) * STEM_SR) : Infinity;
     const overlap = Math.max(1, Math.round(STEM_SCHED_FADE * rate));
-    const total = Math.min(Math.round(STEM_SCHED_WINDOW_S * STEM_SR * rate) + overlap, remaining);
+    const coreFrames = Math.round(Math.min(STEM_SCHED_WINDOW_S * rate, region ? region.out - vtChunk : Infinity) * STEM_SR);
+    const total = Math.min(coreFrames + overlap, remaining);
     if (total < 64) break;
     const tail = total === remaining;
     const n = tail ? total : total - overlap;
-    const csChunk = YTBMStemTimeline.findCoveredCapture(stemAiAnchors(), vtChunk, total / STEM_SR, STEM_SR, ai.timeline);
+    const csChunk = region ? 0 : YTBMStemTimeline.findCoveredCapture(stemAiAnchors(), vtChunk, total / STEM_SR, STEM_SR, ai.timeline);
     if (csChunk == null) break;
-    if (ai.timeline.coverage(csChunk, csChunk + total) < 0.999) break;
+    if (!region && ai.timeline.coverage(csChunk, csChunk + total) < 0.999) break;
     const nodes = [];
     const gains = [];
     const fade = Math.min(overlap, total / 4) / (STEM_SR * rate);
@@ -14252,7 +14397,9 @@ function stemAiSchedule(vt) {
     try {
       for (const key of STEM_KEYS) {
         const s = STEM_MODEL_INDEX[key];
-        const { left, right } = ai.timeline.readStem(s, csChunk, csChunk + total);
+        const slice = region ? stemReadRegion(s, vtChunk, total, region) : ai.timeline.readStem(s, csChunk, csChunk + total);
+        if (!slice) throw new Error('Loop section is not ready');
+        const { left, right } = slice;
         const buf = audioContext.createBuffer(2, total, STEM_SR);
         buf.getChannelData(0).set(left);
         buf.getChannelData(1).set(right);
@@ -14278,7 +14425,7 @@ function stemAiSchedule(vt) {
     }
     ai.nextFadeInSeconds = null;
     ai.sources.push({ nodes, gains, startAt, duration: total / (STEM_SR * rate), generation: gen, rate,
-      mediaStart: vtChunk, mediaAtClock: vtChunk, rateAtClock: startAt,
+      mediaStart: vtChunk, mediaAtClock: vtChunk, rateAtClock: startAt, region,
       mediaEnd: vtChunk + total / STEM_SR, mediaFadeInEnd: vtChunk + fadeIn * rate,
       mediaFadeOut: vtChunk + (tail ? total / STEM_SR - fade * rate : n / STEM_SR) });
     // Retire sources that fully played out (keep the tail overlap readable).
@@ -18771,6 +18918,7 @@ function detectVideoChanges() {
       lastUrl = currentUrl;
       console.log("Video changed! Re-attaching loadedmetadata listener.");
       attachVideoMetadataListener();
+      regionLoopController?.sync();
       if (stemState?.installed && stemState.videoId !== getStemVideoId()) clearStemSession("video changed");
     }
   }, 1000);

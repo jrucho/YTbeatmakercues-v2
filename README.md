@@ -16,6 +16,12 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.4.3
+- **IN / OUT / ↻** replace Import in the mini bar. **I** marks IN, **O** marks OUT and enables continuous repeating; **↻** or **I+O together** clears the region. Works without the Stems pack and with selected stems.
+- Rounded controls match the mini bar. Set IN is teal, OUT amber, and ↻ is red while looping (press to clear), unlit otherwise. Colored timeline marks support drag-to-move and double-click-to-delete.
+- Region edits use shared **U undo / Cmd/Ctrl-U redo**. Right-click for precise time adjustment or pause/enable; boundaries are saved per video.
+- I and Cmd/Ctrl-I no longer import. Import actions remain in Advanced. See **[REGION-LOOP-2.4.3.md](REGION-LOOP-2.4.3.md)** for audio paths and limits.
+
 ## New in 2.4.2
 - Restore direct playback at **0% / 1× with zero HD tuning**, including selected stem mutes/solos.
 - Prepare cached stems ahead at the selected speed/tuning, then play ready results without the live HD stretch buffer. New settings need preparation; the previous committed speed continues until ready.
