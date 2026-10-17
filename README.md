@@ -16,6 +16,12 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.4.1
+- One model-download status line and a compact **song separation percentage** beside the stem controls. Partial player-buffer completion is measured against the full song.
+- Fixed early-audio handoffs and first-metadata resets that could require refreshing newly opened videos. Same-tab video changes initialize their own stem session.
+- Right-click a stem → **Reanalyse song** to discard old AI results and analyse the available song audio again, reusing the installed model.
+- See **[STEMS-2.4.1-EXPORT.md](STEMS-2.4.1-EXPORT.md)** for update instructions and limits.
+
 ## New in 2.4
 - Optional browser-only **AI Stems**: Vocals, Drums, Bass and Other, using a separately downloaded, verified HT-Demucs model. Click to mute, Shift/Cmd/Ctrl-click to solo, and right-click to export WAVs or uninstall.
 - Automatic analysis of accessible whole-song or native-buffered audio. With no stem mutes/solos, playback uses the original audio; all four muted means silence. Pitch, Speed and Speed HD work with separated buffered/full-source audio.

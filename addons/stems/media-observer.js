@@ -5,7 +5,7 @@
   globalThis.__ytbmMediaObserver = true;
   const MAX_CACHE = 8 * 1024 * 1024;
   const sources = new WeakMap(), records = new Set();
-  let port = null, enabled = false, caching = true, cached = 0, serial = 0;
+  let port = null, enabled = false, caching = true, cached = 0, serial = 0, activeVideoId = null;
   const sourceId = () => `${Date.now()}-${++serial}`;
   const videoId = () => {
     const url = new URL(location.href);
@@ -13,7 +13,8 @@
     return id ? `youtube:${id}` : location.href;
   };
   function metadata(record) {
-    const video = [...document.querySelectorAll('video')].find(v => (v.currentSrc || v.src) === record.source.url);
+    const video = [...document.querySelectorAll('video')].find(v => !v.classList?.contains('ytbm-cue-deck') &&
+      !v.classList?.contains('ytbm-native-vj-feed') && (v.currentSrc || v.src) === record.source.url);
     if (!video) return null;
     let start = 0, end = 0, gap = false;
     try {
@@ -34,20 +35,39 @@
     // Initialization bytes can arrive before the MediaSource is attached to
     // its video element. Losing those bytes makes every later decode fail.
     if (!meta) {
+      if (!data) return;
       if ((record.deferredBytes || 0) + data.byteLength <= MAX_CACHE) {
         record.deferred.push(data); record.deferredBytes = (record.deferredBytes || 0) + data.byteLength;
       } else record.dropped = true;
       return;
     }
-    const chunks = [...record.deferred.splice(0), data];
+    const chunks = [...record.deferred.splice(0), ...(data ? [data] : [])];
     record.deferredBytes = 0;
     for (const chunk of chunks) {
       const packet = { ...meta, sequence: record.sequence++, buffer: chunk.buffer };
-      if (enabled && port) port.postMessage(packet, [chunk.buffer]);
+      if (enabled && port && (!activeVideoId || meta.videoId === activeVideoId)) port.postMessage(packet, [chunk.buffer]);
       else if (caching && cached + chunk.byteLength <= MAX_CACHE) {
         record.cache.push(packet); cached += chunk.byteLength;
       } else record.dropped = true;
     }
+  }
+  function flush(record) {
+    const current = metadata(record);
+    if (!current || (activeVideoId && current.videoId !== activeVideoId)) return;
+    if (record.cache.length && record.cache[0].videoId !== current.videoId) {
+      for (const packet of record.cache) cached = Math.max(0, cached - packet.buffer.byteLength);
+      record.cache = []; record.dropped = true;
+    }
+    for (const packet of record.cache.splice(0)) {
+      cached = Math.max(0, cached - packet.buffer.byteLength);
+      port.postMessage({ ...packet, ...current, gap: packet.gap || current.gap || !!record.dropped }, [packet.buffer]);
+    }
+    send(record); // Flush headers retained before attachment, even without another append.
+  }
+  for (const type of ['loadedmetadata', 'loadeddata', 'durationchange', 'canplay']) {
+    document.addEventListener?.(type, () => {
+      if (enabled && port) for (const record of records) flush(record);
+    }, true);
   }
   const createURL = URL.createObjectURL;
   URL.createObjectURL = function (object) {
@@ -95,25 +115,23 @@
   };
   window.addEventListener('message', event => {
     if (event.source !== window || event.data?.type !== 'ytbm-buffered-audio-connect' || !event.ports[0]) return;
-    if (port) return;
+    port?.close?.();
     port = event.ports[0];
+    port.postMessage({ type: 'connected' });
     port.onmessage = ({ data }) => {
       if (data?.type !== 'active') return;
       enabled = !!data.enabled;
+      activeVideoId = data.videoId || null;
+      // A normal subscription handoff must keep the next video's early headers.
+      // Explicit removal still clears owned cached bytes.
+      if (!data.clear) caching = true;
       if (data.clear) {
         caching = false;
         for (const record of records) { record.cache = []; record.pending = []; record.deferred = []; record.deferredBytes = 0; }
         cached = 0;
       }
       if (enabled) {
-        caching = false;
-        for (const record of records) {
-          // Only forward the source currently attached to the visible player.
-          const current = metadata(record);
-          if (!current || current.videoId !== record.cache[0]?.videoId) { record.cache = []; continue; }
-          for (const packet of record.cache.splice(0)) port.postMessage({ ...packet, gap: packet.gap || !!record.dropped }, [packet.buffer]);
-        }
-        cached = 0;
+        for (const record of records) flush(record);
       }
     };
   });

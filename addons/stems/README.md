@@ -1,4 +1,4 @@
-# Optional YTBM Stems — 2.4
+# Optional YTBM Stems — 2.4.1
 
 ## Installation and removal
 
@@ -24,7 +24,11 @@ folder, verifies absence, and restores normal playback in every open tab.
 ## Audio behavior
 
 - Four inline buttons: Vocals / Drums / Bass / Other. Click mutes; modifier-click
-  solos. Right-click opens genuine-stem exports and Uninstall.
+  solos. Right-click opens genuine-stem exports, Reanalyse song and Uninstall.
+- A compact percentage beside the controls measures actual separated audio
+  against the whole song. A processed partial player buffer is not 100%.
+  Reanalyse song discards AI results and reruns available source audio, keeping
+  the installed model, original audio store and selected mute/solo controls.
 - With no mutes/solos, the original audio has a unity bypass. With no model,
   the Stems graph is omitted entirely. All four explicitly muted means silence.
 - Controls remain loading/disabled until separated audio for the current
@@ -93,7 +97,8 @@ folder, verifies absence, and restores normal playback in every open tab.
 
 Run `npm test` for routing, lifecycle, timeline, cue, sidechain, HD speed and
 VJ checks. `bash build_release.sh` builds a fresh allowlisted, model-free ZIP.
-See `STEMS-2.4-EXPORT.md` in the package root for the verified 2.4 export,
+See `STEMS-2.4.1-EXPORT.md` in the package root for the latest update and
+`STEMS-2.4-EXPORT.md` for the underlying 2.4 export,
 measured browser button tests, and installation instructions.
 
 ## Where to inspect storage

@@ -911,6 +911,7 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       stemsButtonMin = null,
       stemsDropdownMin = null,
       stemsGridMin = null,
+      stemsAnalysisProgressMin = null,
       stemsStatusMin = null,
       stemsDownloadBtn = null,
       stemsDownloadAllBtn = null,
@@ -5433,6 +5434,7 @@ function jumpToCue(targetTime) {
 }
 
 let videoCheckInterval = setInterval(() => {
+  if (stemState?.installed && stemState.videoId !== getStemVideoId()) clearStemSession("video changed");
   if (stemState?.installed && !stemState.analysisRequested && !stemState.analysisCancelled && getVideoElement()?.readyState >= 1) requestStemAnalysis();
   if (audioContext) {
     let vid = getVideoElement();
@@ -12975,6 +12977,7 @@ function ensureBufferedSubscription() {
   if (!st.bufferedId) st.bufferedId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const track = st.bufferedId;
   const videoId = st.videoId;
+  const sourceVideoId = videoId?.startsWith("youtube:") ? videoId : null;
   let bridge = null;
   try { bridge = globalThis.YTBMBufferedAudio || null; } catch { bridge = null; }
   if (!bridge || typeof bridge.subscribe !== "function") {
@@ -12986,7 +12989,7 @@ function ensureBufferedSubscription() {
       try {
         const cur = getStemState();
         if (!cur.installed || !cur.analysisRequested || cur.videoId !== videoId || track !== cur.bufferedId) return;
-        if (!packet || !(packet.buffer instanceof ArrayBuffer)) return;
+        if (!packet || (sourceVideoId && packet.videoId && packet.videoId !== sourceVideoId) || !(packet.buffer instanceof ArrayBuffer)) return;
         const dataB64 = arrayBufferToBase64(packet.buffer);
         // Chrome messages are independent promises. Serialize appends so a
         // slow initial model check cannot reorder the WebM initialization
@@ -13004,7 +13007,7 @@ function ensureBufferedSubscription() {
           if (track === s.bufferedId) s.bufferedError = String((err && err.message) || err);
         });
       } catch {}
-    });
+    }, { videoId: sourceVideoId });
   } catch (err) {
     st._bufferedUnsub = null;
     if (track === st.bufferedId) st.bufferedError = String((err && err.message) || err);
@@ -13027,6 +13030,7 @@ async function stemMaybeOpenBuffered(ai) {
   if (ai.mode === "buffered" && ai.stream === info.stream) {
     ai.trackFrames = frames;
     ai.trackDuration = Number(info.duration) || 0;
+    ai.songDuration = Number(info.songDuration) || 0;
     ai.trackComplete = !!info.complete;
     ai.trackAnchor.csEnd = frames;
     ai.trackTotal = plan.length;
@@ -13047,6 +13051,7 @@ async function stemMaybeOpenBuffered(ai) {
     ai.stream = info.stream;
     ai.trackFrames = frames;
     ai.trackDuration = Number(info.duration) || 0;
+    ai.songDuration = Number(info.songDuration) || 0;
     ai.trackComplete = !!info.complete;
     ai.trackTotal = plan.length;
     ai.trackAnchor = { vt: 0, cs: 0, csEnd: frames };
@@ -13141,10 +13146,26 @@ function ensureStemResourcePort() {
   } catch {}
 }
 
-function stopStemAnalysis() {
+function stopStemAnalysis({ keepSource = false } = {}) {
   const st = getStemState();
-  resetStemAnalysisSession();
+  if (keepSource) { teardownStemTap(); stemAiTeardown(true); }
+  else resetStemAnalysisSession();
   st.analysisCancelled = true;
+  refreshStemsUI();
+}
+
+function restartStemAnalysis() {
+  const st = ensureStemSession();
+  if (!st.installed || !stemContextAvailable()) return;
+  // Keep the current song's original audio stores/subscription. Clearing those
+  // would lose the MSE initialization header and make a retry require refresh.
+  st.seekHold = !!(st.seekHold || (st.ai?.hasPlayedSplit && stemsNeedSplit()));
+  stopStemAnalysis({ keepSource: true });
+  st.analysisRequested = true;
+  st.analysisCancelled = false;
+  st.analysisStartTime = 0;
+  if (st.preloadStatus === "unavailable") st.preloadAttempts = 0;
+  requestStemAnalysis();
   refreshStemsUI();
 }
 
@@ -13204,7 +13225,7 @@ function getStemBusOutput() { return stemBusOutput; }
 
 // Build stamp: verify in console that the loaded copy is current.
 // If this is missing or stale, the extension was loaded from an old folder.
-window.__ytbmBuild = { version: "2.4", flavor: "stems-browser-only-pitch-stretch", built: "2026-10-16" };
+window.__ytbmBuild = { version: "2.4.1", flavor: "stems-browser-only-pitch-stretch", built: "2026-10-17" };
 
 // Live diagnostic for console checks: samples, loopers, audio graph.
 window.__ytbmAudioDiag = function () {
@@ -13229,7 +13250,7 @@ window.__ytbmStemDiag = function () {
   try {
     const st = getStemState();
     return {
-      extVersion: st.contextInvalidated ? window.__ytbmBuild?.version || "2.4" : chrome?.runtime?.getManifest?.().version || null,
+      extVersion: st.contextInvalidated ? window.__ytbmBuild?.version || "2.4.1" : chrome?.runtime?.getManifest?.().version || null,
       contextInvalidated: !!st.contextInvalidated,
       audioRunning: !!audioContext && audioContext.state === "running",
       videoGainConnected: !!videoGain,
@@ -14004,6 +14025,24 @@ function stemAiTeardown(full) {
   try { refreshStemsUI(); } catch {}
 }
 
+function stemAiSeparationProgress() {
+  const ai = getStemState().ai;
+  if (!ai || !["track", "buffered"].includes(ai.mode)) return null;
+  const seconds = ai.songDuration || Number(getVideoElement()?.duration) || ai.trackDuration;
+  const frames = ai.mode === "track" || ai.trackComplete ? ai.trackFrames : Math.round(seconds * STEM_SR);
+  if (!(frames > 0) || !Number.isFinite(frames)) return null;
+  // Sum the union of real output windows, including out-of-order results.
+  // Overlap must not count twice and a finished prefix is not a finished song.
+  let end = 0, separated = 0;
+  for (const [index, segment] of [...(ai.timeline?.segments || [])].sort((a, b) => a[0] - b[0])) {
+    const from = index * YTBMStemTimeline.HOP;
+    const to = Math.min(frames, from + segment.validLength);
+    separated += Math.max(0, to - Math.max(end, from));
+    end = Math.max(end, to);
+  }
+  return Math.min(100, Math.floor(separated / frames * 100));
+}
+
 function stemAiStatusText() {
   const st = getStemState();
   const ai = st.ai;
@@ -14025,12 +14064,12 @@ function stemAiStatusText() {
     return "AI warming up…";
   }
   if (ai.mode === "track" || ai.mode === "buffered") {
-    const done = ai.learnedSegs >= ai.trackTotal && (ai.mode === "track" || ai.trackComplete);
-    const progress = ai.mode === "buffered" && !ai.trackComplete
-      ? `${ai.learnedSegs} sections ready · ${Math.round(ai.trackDuration || 0)}s loaded`
-      : (done ? "Stems ready" : `Separating… ${Math.round(ai.learnedSegs / Math.max(1, ai.trackTotal) * 100)}%`);
+    const percent = stemAiSeparationProgress();
+    const progress = percent === 100 ? "Stems ready · 100%" :
+      (percent != null ? `${percent}% separated` : `${ai.learnedSegs} sections ready`);
+    const loaded = ai.mode === "buffered" && !ai.trackComplete ? ` · ${Math.round(ai.trackDuration || 0)}s loaded` : "";
     const playback = ai.pauseReason === "stretch-loading" ? " · loading stretch…" : "";
-    return progress + playback;
+    return progress + loaded + playback;
   }
   if (ai.pathMix === "ai") return "AI separation on";
   if (ai.pauseReason === "capture-speed") return "Live capture requires 1×; full-source stems support pitch and stretch";
@@ -14229,6 +14268,15 @@ function refreshStemsUI() {
   }
   if (stemsDownloadAllBtn) stemsDownloadAllBtn.style.display = showGrid ? "block" : "none";
   if (stemsGridMin) stemsGridMin.style.display = showGrid ? "flex" : "none";
+  if (stemsAnalysisProgressMin) {
+    const percent = st.installed ? stemAiSeparationProgress() : null;
+    stemsAnalysisProgressMin.style.display = percent == null ? "none" : "";
+    if (percent != null) {
+      stemsAnalysisProgressMin.textContent = `${percent}%`;
+      stemsAnalysisProgressMin.setAttribute("aria-valuenow", String(percent));
+      stemsAnalysisProgressMin.dataset.hint = `${percent}% of song separated`;
+    }
+  }
   if (stemsUninstallBtn) stemsUninstallBtn.style.display = showGrid ? "block" : "none";
   if (stemsGridMin && showGrid) {
     const currentReady = stemAiHasCurrentCoverage();
@@ -14256,11 +14304,8 @@ function refreshStemsUI() {
         stemsStatusMin.style.display = checking || error ? "" : "none";
         stemsStatusMin.textContent = checking ? "Checking installed model…" : (error || "");
       } else {
-        stemsStatusMin.style.display = "";
-        const known = st.downloadProgress >= 0;
-        stemsStatusMin.textContent = known
-          ? `Downloading… ${Math.round(st.downloadProgress * 100)}%`
-          : `Downloading… ${((st.downloadedBytes || 0) / 1048576).toFixed(1)} MB`;
+        stemsStatusMin.style.display = "none";
+        stemsStatusMin.textContent = "";
       }
     } else {
       stemsStatusMin.style.display = "";
@@ -14435,6 +14480,14 @@ function buildStemsControl() {
     stemsGridMin.appendChild(b);
   }
   wrap.appendChild(stemsGridMin);
+  stemsAnalysisProgressMin = document.createElement("span");
+  stemsAnalysisProgressMin.className = "ytbm-stems-analysis-progress";
+  stemsAnalysisProgressMin.style.cssText = "display:none;font-size:10px;color:#bbb;font-variant-numeric:tabular-nums;";
+  stemsAnalysisProgressMin.setAttribute("role", "progressbar");
+  stemsAnalysisProgressMin.setAttribute("aria-label", "Song separated");
+  stemsAnalysisProgressMin.setAttribute("aria-valuemin", "0");
+  stemsAnalysisProgressMin.setAttribute("aria-valuemax", "100");
+  wrap.appendChild(stemsAnalysisProgressMin);
   // Right-click a gap of the inline grid: open the drop-up menu.
   stemsGridMin.addEventListener("contextmenu", (e) => {
     e.preventDefault();
@@ -14489,7 +14542,7 @@ function buildStemsControl() {
   const ctxItems = [
     { label: "", action: "one", title: "" },
     { label: "Download all stems", action: "all", title: "Download all 4 stems as WAV files" },
-    { label: "Stop analysis", action: "stop", title: "Release temporary audio and stop processing; keep the installed model" },
+    { label: "Reanalyse song", action: "reanalyse", title: "Clear separated results and analyse available song audio again" },
     { label: "Uninstall stems", action: "uninstall", title: "Remove the stems package, model and temporary stems" },
   ];
   stemsContextMenu._buttons = {};
@@ -14506,7 +14559,7 @@ function buildStemsControl() {
       closeStemContextMenu();
       if (item.action === "one" && key) exportStem(key, 30);
       else if (item.action === "all") exportAllStems(30);
-      else if (item.action === "stop") stopStemAnalysis();
+      else if (item.action === "reanalyse") restartStemAnalysis();
       else if (item.action === "uninstall") uninstallStemPack();
     });
     stemsContextMenu.appendChild(btn);
@@ -14706,6 +14759,7 @@ function disableStemPackLocally(modelState = "missing") {
   st.modelCheckError = null;
   st.engine = "original";
   resetStemAnalysisSession();
+  try { globalThis.YTBMBufferedAudio?.clear(); } catch {}
   for (const k of STEM_KEYS) { st.mutes[k] = false; st.solos[k] = false; st.analyzing[k] = false; st.ringBuffers[k] = null; }
   st.ringWritePos = 0;
   teardownStemTap();
@@ -18403,6 +18457,7 @@ function detectVideoChanges() {
       lastUrl = currentUrl;
       console.log("Video changed! Re-attaching loadedmetadata listener.");
       attachVideoMetadataListener();
+      if (stemState?.installed && stemState.videoId !== getStemVideoId()) clearStemSession("video changed");
     }
   }, 1000);
 }
@@ -18422,7 +18477,11 @@ function attachVideoMetadataListener() {
 function onNewVideoLoaded() {
   cancelCueSeek();
   rampCueGain(1);
-  try { if (typeof clearStemSession === "function") clearStemSession("video changed"); } catch {}
+  // The first metadata event often trails model verification. Do not tear down
+  // the same song's just-started subscription and discard its initial packets.
+  try {
+    if (stemState?.installed && stemState.videoId !== getStemVideoId()) clearStemSession("video changed");
+  } catch {}
   console.log("New video loaded => resetting pitch to 0%");
   ensureMinimalToggleButton();
 

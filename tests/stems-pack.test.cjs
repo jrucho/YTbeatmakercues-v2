@@ -39,7 +39,7 @@ function graphFixture() {
     stemBranchGains: null, stemBranchFilters: null, stemLiveGains: null, stemAiGains: null, stemBusContext: null,
     stemTap: null, stemWorker: null,
     stemsButtonMin: null, stemsDropdownMin: null, stemsStatusMin: null,
-    stemsGridMin: null, loopGainEnvelopes: new WeakMap(),
+    stemsGridMin: null, stemsAnalysisProgressMin: null, loopGainEnvelopes: new WeakMap(),
     getVideoElement: () => video, YTBMStemTimeline: TL,
     Float32Array, Map, URL, setTimeout, clearTimeout, setInterval, clearInterval,
   };
@@ -161,6 +161,81 @@ test('stem buttons wait for current-section audio and always allow releasing a s
   ctx.refreshStemsUI(); assert.equal(button.disabled, false);
   st.mutes.vocals = false; ctx.stemAiHasCurrentCoverage = () => true;
   ctx.refreshStemsUI(); assert.equal(button.disabled, false);
+});
+
+test('model installation shows only the first download line', () => {
+  const { ctx } = graphFixture();
+  const element = () => ({ style: {}, classList: { toggle() {} }, setAttribute() {} });
+  ctx.stemsDropdownMin = element();
+  ctx.stemsStatusMin = element();
+  ctx.stemsProgressWrap = element(); ctx.stemsProgressBar = element(); ctx.stemsProgressLabel = element();
+  for (const name of ['stemsDownloadBtn', 'stemsDownloadAllBtn', 'stemsUninstallBtn']) ctx[name] = null;
+  const st = ctx.getStemState(); st.installed = false; st.downloading = true; st.downloadProgress = 0.42;
+  ctx.refreshStemsUI();
+  assert.equal(ctx.stemsProgressLabel.textContent, 'Downloading… 42%');
+  assert.equal(ctx.stemsProgressWrap.style.display, 'block');
+  assert.equal(ctx.stemsStatusMin.style.display, 'none');
+  assert.equal(ctx.stemsStatusMin.textContent, '');
+});
+
+test('separation percentage counts unique output against the whole song, not the loaded prefix', () => {
+  const { ctx, video } = graphFixture();
+  const st = ctx.getStemState(); st.analysisRequested = true;
+  video.duration = 30;
+  st.ai = { ready: true, mode: 'buffered', songDuration: 30, trackDuration: 15, trackFrames: 15 * TL.SR,
+    learnedSegs: 2, trackTotal: 2, timeline: new TL.StemTimeline() };
+  st.ai.timeline.addSegment(0, new Float32Array(TL.SEG * 8));
+  st.ai.timeline.addSegment(1, new Float32Array(TL.SEG * 8));
+  assert.equal(ctx.stemAiSeparationProgress(), Math.floor((TL.HOP + TL.SEG) / (30 * 44100) * 100));
+  assert.match(ctx.stemAiStatusText(), /% separated · 15s loaded/);
+  assert.doesNotMatch(ctx.stemAiStatusText(), /100%|Stems ready/);
+  // A non-contiguous window must count, but overlap with an existing one must not.
+  st.ai.timeline.addSegment(3, new Float32Array(TL.SEG * 8), 1000);
+  assert.equal(ctx.stemAiSeparationProgress(), Math.floor((TL.HOP + TL.SEG + 1000) / (30 * 44100) * 100));
+});
+
+test('reanalyse drops AI results and starts fresh without clearing the original song or subscription', async () => {
+  const { ctx } = graphFixture();
+  const st = ctx.ensureStemSession(); st.analysisRequested = true;
+  st.bufferedId = 'retained-buffer';
+  st.bufferedInfo = { track: st.bufferedId, stream: 'retained-stream', frames: TL.SEG, duration: 7.8, complete: true };
+  st.preloadId = 'retained-track'; st.preloadStatus = 'unavailable'; st.preloadAttempts = 6;
+  const info = st.bufferedInfo;
+  let unsubscribed = 0, terminated = 0, initialized = 0;
+  st._bufferedUnsub = () => unsubscribed++;
+  st.mutes.vocals = true;
+  const oldAI = st.ai = { ready: true, hasPlayedSplit: true, sources: [], timeline: new TL.StemTimeline(), worker: { terminate: () => terminated++ } };
+  oldAI.timeline.addSegment(0, new Float32Array(TL.SEG * 8));
+  ctx.ensureAudioContext = async () => ctx.audioContext;
+  ctx.applyAllFXRouting = ctx.preloadStemSong = () => {};
+  ctx.setInterval = () => 1;
+  ctx.createStemEngineClient = () => ({ postMessage: () => initialized++, terminate() {} });
+  ctx.chrome.runtime.getURL = p => p;
+  ctx.restartStemAnalysis();
+  await Promise.resolve(); await Promise.resolve();
+  assert.notEqual(st.ai, oldAI);
+  assert.equal(st.ai.timeline.segments.size, 0);
+  assert.equal(st.ai.mode, 'buffered');
+  assert.equal(st.ai.requestedAt, 0);
+  assert.equal(st.bufferedInfo, info);
+  assert.equal(st.bufferedId, 'retained-buffer'); assert.equal(st.preloadId, 'retained-track');
+  assert.equal(st.preloadAttempts, 0);
+  assert.equal(st.mutes.vocals, true); assert.equal(st.seekHold, true);
+  assert.equal(unsubscribed, 0); assert.equal(terminated, 1); assert.equal(initialized, 1);
+});
+
+test('late first metadata does not reset an already started song session', () => {
+  const { ctx } = graphFixture();
+  const st = ctx.ensureStemSession(); st.analysisRequested = true;
+  let resets = 0;
+  ctx.clearStemSession = () => resets++;
+  ctx.cancelCueSeek = ctx.rampCueGain = ctx.ensureMinimalToggleButton = ctx.updatePitch = () => {};
+  ctx.videoSpeedStretchNode = null;
+  vm.runInContext(source.slice(source.indexOf('function onNewVideoLoaded()'), source.indexOf('// Finally, start it once')), ctx);
+  ctx.onNewVideoLoaded();
+  assert.equal(resets, 0);
+  ctx.location.href = 'https://www.youtube.com/watch?v=next';
+  ctx.onNewVideoLoaded(); assert.equal(resets, 1);
 });
 
 test('captured stems clear the spinner even when the live playhead is ahead of processed audio', () => {

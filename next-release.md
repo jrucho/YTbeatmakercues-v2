@@ -1,3 +1,14 @@
+# Release 2.4.1
+
+- Remove the duplicate model-install download line, keeping the first progress label.
+- Restore compact song-separation percentage beside the inline stem controls and in the menu. Count actual non-overlapping output against the entire song, including partial buffers and out-of-order results.
+- Preserve initial audio packets during same-tab navigation, flush pre-attachment headers on media readiness, and retry the MAIN/isolated-world connection if startup is delayed.
+- Keep an already-started session on its first metadata event; initialize new video URLs even if their initial metadata event was missed.
+- Replace **Stop analysis** with **Reanalyse song**. Clear AI results and start again from available original audio, without redownloading the model or losing selected mute/solo states.
+- Set extension/package versions and display name to **2.4.1**.
+
+---
+
 # Release 2.4
 
 ## Summary

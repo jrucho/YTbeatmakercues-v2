@@ -84,8 +84,9 @@ async function start() {
       return route.fulfill({ contentType: 'audio/wav', body: samples[kind] });
     }
     const kind = url.searchParams.get('kind') || 'normal';
-    if (kind === 'mse') return route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body><div id="movie_player"><video class="html5-main-video" controls></video></div><script>
-      (async()=>{const v=document.querySelector('video'),m=new MediaSource();v.src=URL.createObjectURL(m);await new Promise(r=>m.addEventListener('sourceopen',r,{once:true}));const s=m.addSourceBuffer('audio/webm;codecs=opus');m.duration=8.2;const data=await(await fetch('/audit.webm')).arrayBuffer();s.appendBuffer(data);await new Promise(r=>s.addEventListener('updateend',r,{once:true}));m.endOfStream();})();
+    if (kind.startsWith('mse')) return route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body><div id="movie_player"><video class="html5-main-video" controls></video></div><script>
+      window.__loadNativeSource=async(id,delay=0)=>{if(id)history.pushState({},'', '/watch?v='+id+'&kind=mse');if(delay)await new Promise(r=>setTimeout(r,delay));const v=document.querySelector('video.html5-main-video'),m=new MediaSource();v.pause();v.src=URL.createObjectURL(m);await new Promise(r=>m.addEventListener('sourceopen',r,{once:true}));const s=m.addSourceBuffer('audio/webm;codecs=opus');m.duration=8.2;const data=await(await fetch('/audit.webm')).arrayBuffer();s.appendBuffer(data);await new Promise(r=>s.addEventListener('updateend',r,{once:true}));m.endOfStream();};
+      __loadNativeSource(null,${kind === 'mse-late' ? 1200 : 0});
     </script></body></html>` });
     const seconds = kind === 'short' ? 0.5 : kind === 'overlimit' ? 601 : kind === 'long' ? 30 : 7.8;
     const metadata = { videoDetails: { videoId: url.searchParams.get('v'), lengthSeconds: String(seconds) }, streamingData: { adaptiveFormats: [
@@ -149,10 +150,18 @@ async function useFixtureModel() {
   await hostEval(`modelStore.spec={...modelStore.spec,url:'https://rr1---sn-test.googlevideo.com:${server.address().port}/model.onnx'}`);
 }
 async function install(e = env) {
-  const response = await e.run('__send({type:"ytbm-stems-download-start"})'); assert.equal(response.ok, true);
+  const documentStarted = await e.page.evaluate(() => performance.timeOrigin);
+  if (process.env.YTBM_UI_INSTALL && !(await inspect()).model.present) {
+    await wait(() => e.run('__ytbmStemDiag().modelCheckState === "missing"'));
+    await e.page.locator('.ytbm-stems-btn').click();
+    await e.page.getByText('Download stems package', { exact: true }).click();
+    assert.equal(await e.page.locator('.ytbm-stems-progress-wrap').isVisible(), true);
+    assert.equal(await e.page.locator('.ytbm-stems-status').isVisible(), false);
+  } else {
+    const response = await e.run('__send({type:"ytbm-stems-download-start"})'); assert.equal(response.ok, true);
+  }
   await wait(async () => { const s = await inspect(); if (s.lastDownloadError && !s.downloading) throw new Error(s.lastDownloadError); return s.model.present && !s.downloading; }, 240000);
-  await e.page.reload(); await sleep(750);
-  await e.run('window.__send=msg=>new Promise(resolve=>chrome.runtime.sendMessage(msg,resolve))');
+  assert.equal(await e.page.evaluate(() => performance.timeOrigin), documentStarted, 'installation must work without refreshing');
 }
 async function remove(e = env) {
   const result = await e.run('__send({type:"ytbm-stems-model-remove"})');
@@ -167,11 +176,12 @@ async function hooks(e = env) {
   const paused = new Promise(resolve => e.cdp.once('Debugger.paused', resolve));
   const trigger = e.cdp.send('Runtime.evaluate', { expression: '__ytbmStemDiag()', contextId: e.world() });
   const event = await paused;
-  await e.cdp.send('Debugger.evaluateOnCallFrame', { callFrameId: event.callFrames[0].callFrameId,
+  const hookResult = await e.cdp.send('Debugger.evaluateOnCallFrame', { callFrameId: event.callFrames[0].callFrameId,
     expression: `window.__test={getStemState,getStemAISlice,stopStemAnalysis,jumpToCue,stemAiTick,refreshStemsUI,audioContext,stemBusOutput,requestStemAnalysis,getVideoElement,videoSpeedStretchNode,
       setMode:(mode,rate,tune=0)=>{pitchTarget='video';speedOnlyMode=mode!=='Pitch';speedHDMode=mode==='Speed HD';pitchSemitoneMode=false;updatePitch((rate-1)*100);if(speedHDMode)updateSpeedHDTune(tune);},
       stretchReady:()=>!!videoSpeedStretchNode}` });
   await e.cdp.send('Debugger.removeBreakpoint', { breakpointId }); await e.cdp.send('Debugger.resume'); await trigger;
+  if (hookResult.exceptionDetails) throw new Error(hookResult.exceptionDetails.exception?.description || hookResult.exceptionDetails.text);
 }
 async function separated(e = env) {
   return wait(async () => { const s = await e.run('__ytbmStemDiag()'); if (s.aiError) throw new Error(s.aiError); return s.learnedSegments ? s : false; });
@@ -229,9 +239,28 @@ async function nativePlayerTest() {
     let binary = ''; for (let i = 0; i < data.length; i += 8192) binary += String.fromCharCode(...data.subarray(i, i + 8192));
     return btoa(binary);
   }, samples.normal.toString('base64')), 'base64');
-  const e = await video('mse'); await separated(e);
+  const e = await video('mse-late'); await separated(e);
   await wait(async () => { const s = await e.run('__ytbmStemDiag()'); if (s.bufferedError) console.log('BUFFER ERROR', s.bufferedError); return s.analysisMode === 'buffered' && s.learnedSegments >= s.trackSegments; });
-  const result = await playbackButtons(e, 'native player WebM'); await e.page.close(); return result;
+  const result = await playbackButtons(e, 'native player WebM with delayed first metadata');
+  const origin = await e.page.evaluate(() => performance.timeOrigin);
+  assert.equal(await e.page.locator('.ytbm-stems-analysis-progress').textContent(), '100%');
+  await e.run('window.__beforeReanalyse=__test.getStemState().ai');
+  const downloads = report.modelNetwork.length;
+  await e.page.locator('[data-stem="vocals"]').click({ button: 'right' });
+  assert.equal(await e.page.getByText('Stop analysis', { exact: true }).count(), 0);
+  await e.page.getByText('Reanalyse song', { exact: true }).click();
+  assert.equal(await e.run('__test.getStemState().ai !== __beforeReanalyse'), true);
+  await wait(async () => { const s = await e.run('__ytbmStemDiag()'); return s.analysisMode === 'buffered' && s.learnedSegments >= s.trackSegments; });
+  assert.equal(report.modelNetwork.length, downloads, 'reanalysis must reuse the installed model');
+  const repeated = await playbackButtons(e, 'reanalysed native song');
+  const navigated = [];
+  for (const id of ['same-tab-next', 'same-tab-third']) {
+    await e.page.evaluate(id => window.__loadNativeSource(id), id);
+    await wait(async () => { const s = await e.run('__ytbmStemDiag()'); return s.stemVideoId === 'youtube:' + id && s.analysisMode === 'buffered' && s.learnedSegments > 0 && s.learnedSegments >= s.trackSegments; });
+    assert.equal(await e.page.evaluate(() => performance.timeOrigin), origin);
+    navigated.push(await playbackButtons(e, id));
+  }
+  await e.page.close(); return { initial: result, reanalysed: repeated, navigated, refreshRequired: false };
 }
 async function playbackRates(e, label) {
   await hooks(e);
@@ -332,8 +361,10 @@ async function darkTooltips(e) {
   await e.run(`(()=>{const st=__test.getStemState();const previous={installed:st.installed,downloading:st.downloading,downloadProgress:st.downloadProgress};
     st.installed=false;st.downloading=true;st.downloadProgress=.42;__test.refreshStemsUI();
     window.__downloadLabel=document.querySelector('.ytbm-stems-progress-label').textContent;
+    window.__duplicateDownloadVisible=document.querySelector('.ytbm-stems-status').style.display!=='none';
     Object.assign(st,previous);__test.refreshStemsUI();})()`);
   assert.equal(await e.run('__downloadLabel'), 'Downloading… 42%');
+  assert.equal(await e.run('__duplicateDownloadVisible'), false);
   await e.page.locator('#host-title-test').evaluate(el => el.remove());
   return { background: 'rgb(16, 16, 16)', download: 'Downloading… 42%', nativeHostTitlePreserved: true, keyboardAccessible: true };
 }
@@ -403,6 +434,10 @@ async function liveYouTubeTest() {
       assert.equal(slice.frames, N); assert.equal(slice.finite, true);
       await snapshot('installed and separated'); return { state, slice };
     });
+    if (process.env.YTBM_STARTUP_ONLY) {
+      await scenario('fresh UI installation starts working in the same document without refresh', () => playbackButtons(env, 'fresh UI install'));
+      return;
+    }
     if (process.env.YTBM_RELEASE_ONLY) {
       await scenario('all buttons and cues on actual direct-source audio', () => playbackButtons(env, 'direct source'));
       await scenario('cached cues schedule on decoder readiness with the 150 ms poll disabled', () => cachedCueReadiness(env));
