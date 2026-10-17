@@ -4,6 +4,23 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../content.js'), 'utf8');
 
+test('pads prime audio and trigger on press, with no duplicate on release or synthetic click', () => {
+  const events = {}, calls = [];
+  const button = { style: {}, addEventListener: (name, fn) => events[name] = fn };
+  const context = { audioContext: { state: 'suspended', resume() { calls.push('resume'); return Promise.resolve(); } },
+    ensureAudioContext: async () => calls.push('setup') };
+  vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf('function bindPadPress('), source.indexOf('function isTypingInTextField(')), context);
+  context.bindPadPress(button, () => calls.push('cue'));
+  events.pointerdown({ button: 0, preventDefault() {} });
+  assert.deepEqual(calls, ['resume', 'cue']);
+  assert.equal(events.pointerup, undefined); assert.equal(events.mouseup, undefined);
+  events.click({ detail: 1 }); assert.equal(calls.length, 2);
+  events.pointerdown({ button: 2 }); assert.equal(calls.length, 2);
+  events.keydown({ key: ' ', repeat: false, preventDefault() {}, stopPropagation() {} });
+  assert.deepEqual(calls, ['resume', 'cue', 'resume', 'cue']);
+});
+
 test('Touch Tap BPM accepts first click, takes over MIDI clock, suppresses synthetic clicks and resets stale taps', () => {
   let now = 100;
   const handlers = {};

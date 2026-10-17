@@ -1,7 +1,18 @@
+# Release 2.4.2
+
+- Restore direct Speed/Speed HD at 1× with zero tuning, even with a stem selection.
+- Prepare cached full/native-buffered stems with offline Signalsmith rendering. Ready playback bypasses the live HD buffer; new speeds/tunings hold the previous committed rate until ready.
+- Bound the prepared PCM cache to 96 MiB per video, serialize rendering, drop obsolete targets and retain the currently audible rate's lookahead.
+- Prime audio and trigger pads on pointer-down, suppress release duplicates and support key-down/assistive activation.
+- Preserve genuine-stem gating, reanalysis, source-download cleanup and existing separation model/downloader behavior.
+- Version/display name **2.4.2**. See `STEMS-2.4.2-EXPORT.md` for scope and timing limits.
+
+---
+
 # Release 2.4.1
 
 - Remove the duplicate model-install download line, keeping the first progress label.
-- Restore compact song-separation percentage beside the inline stem controls and in the menu. Count actual non-overlapping output against the entire song, including partial buffers and out-of-order results.
+- Restore compact song-separation percentage in the black stem info box and menu. Count actual non-overlapping output against the entire song, including partial buffers and out-of-order results.
 - Preserve initial audio packets during same-tab navigation, flush pre-attachment headers on media readiness, and retry the MAIN/isolated-world connection if startup is delayed.
 - Keep an already-started session on its first metadata event; initialize new video URLs even if their initial metadata event was missed.
 - Replace **Stop analysis** with **Reanalyse song**. Clear AI results and start again from available original audio, without redownloading the model or losing selected mute/solo states.

@@ -5,7 +5,7 @@ Package: **ytbeatmakercues-2.4.1.zip**. Chrome version/display name: **2.4.1**.
 ## Changes
 
 - Keep just one model-install download line, above Cancel.
-- Show the percentage of the song separated beside the four stem controls.
+- Show the percentage of the song separated in the black stem info box.
   The menu also reports progress and loaded audio duration. Actual output
   windows count once, including overlap and out-of-order results. Processing
   all of a partial player buffer does not count as separating the whole song.

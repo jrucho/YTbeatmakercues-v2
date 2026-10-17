@@ -911,7 +911,6 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       stemsButtonMin = null,
       stemsDropdownMin = null,
       stemsGridMin = null,
-      stemsAnalysisProgressMin = null,
       stemsStatusMin = null,
       stemsDownloadBtn = null,
       stemsDownloadAllBtn = null,
@@ -2722,8 +2721,7 @@ function toggleBlindMode() {
         updateSequencerUI();
         refreshSequencerControls();
       };
-      padBtn.addEventListener("mousedown", onPadPress);
-      padBtn.addEventListener("touchstart", (e) => { e.preventDefault(); onPadPress(); }, { passive: false });
+      bindPadPress(padBtn, onPadPress);
       padGrid.appendChild(padBtn);
     }
 
@@ -5402,7 +5400,10 @@ function jumpToCue(targetTime) {
     };
     const recover = () => {
       cleanup();
-      if (generation === cueSeekGeneration) rampCueGain(1);
+      if (generation === cueSeekGeneration) {
+        if (typeof videoSpeedStretchNode !== "undefined") videoSpeedStretchNode?.endSeek?.();
+        rampCueGain(1);
+      }
     };
     const ready = () => {
       if (generation !== cueSeekGeneration) { cleanup(); return; }
@@ -5422,6 +5423,7 @@ function jumpToCue(targetTime) {
     // Recovery for a failed/stalled seek; this never delays a ready cue.
     watchdog = setTimeout(recover, 2000);
     try {
+      if (typeof videoSpeedStretchNode !== "undefined") videoSpeedStretchNode?.beginSeek?.();
       video.currentTime = target;
       ready(); // Same-position seeks may not emit seeked.
     } catch (err) {
@@ -5638,8 +5640,10 @@ async function createHighQualitySpeedNode(ctx, profile = 'quality') {
   input.connect(dry).connect(output);
   input.connect(processor).connect(wet).connect(output);
   let messageId = 0;
+  let disposed = false;
   const pending = new Map();
   const dispose = () => {
+    disposed = true;
     input.disconnect();
     processor.disconnect();
     dry.disconnect();
@@ -5691,8 +5695,10 @@ async function createHighQualitySpeedNode(ctx, profile = 'quality') {
   let lastActive = false;
   let lastRate = 1;
   let lastTuneSemitones = 0;
+  let seeking = false;
+  let seekGeneration = 0;
   const gainRamps = new Map();
-  const ramp = (gain, value) => {
+  const ramp = (gain, value, seconds = 0.025) => {
     const now = ctx.currentTime;
     let held = gain.value;
     const previous = gainRamps.get(gain);
@@ -5703,8 +5709,8 @@ async function createHighQualitySpeedNode(ctx, profile = 'quality') {
     if (gain.cancelAndHoldAtTime) gain.cancelAndHoldAtTime(now);
     else gain.cancelScheduledValues(now);
     gain.setValueAtTime(held, now);
-    gain.linearRampToValueAtTime(value, now + 0.025);
-    gainRamps.set(gain, { start: now, end: now + 0.025, from: held, to: value });
+    gain.linearRampToValueAtTime(value, now + seconds);
+    gainRamps.set(gain, { start: now, end: now + seconds, from: held, to: value });
   };
   const schedule = (active, rate, tuneSemitones) => {
     // Live-input processing always consumes and produces the same frame count.
@@ -5721,6 +5727,38 @@ async function createHighQualitySpeedNode(ctx, profile = 'quality') {
   };
   const node = {
     input, output, processor, latencySeconds, dispose,
+    isActive: () => lastActive,
+    beginSeek() {
+      seeking = true;
+      seekGeneration++;
+      // The input's 2 ms cue fade cannot silence audio already in the FFT
+      // history. Gate the wet output too, then discard that old history.
+      ramp(wet.gain, 0, 0.002);
+    },
+    endSeek() {
+      if (!seeking) return;
+      seeking = false;
+      const generation = ++seekGeneration;
+      if (!lastActive) return;
+      call('configure', config).then(() => {
+        if (disposed || generation !== seekGeneration) return;
+        schedule(lastActive, lastRate, lastTuneSemitones);
+        if (!lastActive) return;
+        // Reopen only when fresh input can reach the output. This uses the
+        // existing processor latency, not a longer analysis window or timer.
+        const now = ctx.currentTime;
+        const freshAt = now + node.latencySeconds;
+        wet.gain.cancelScheduledValues(now);
+        wet.gain.setValueAtTime(0, now);
+        wet.gain.setValueAtTime(0, freshAt);
+        wet.gain.linearRampToValueAtTime(1, freshAt + 0.008);
+        gainRamps.set(wet.gain, { start: freshAt, end: freshAt + 0.008, from: 0, to: 1 });
+      }).catch(err => {
+        if (disposed) return;
+        console.warn('Could not reset the stretch processor after seeking.', err);
+        processor.onprocessorerror?.();
+      });
+    },
     async setProfile(profile) {
       config = getSpeedHDLatencyConfig(profile);
       await call('configure', config);
@@ -5742,8 +5780,22 @@ async function createHighQualitySpeedNode(ctx, profile = 'quality') {
         if (message.active === lastActive && rate === lastRate && tuneSemitones === lastTuneSemitones) return;
         schedule(message.active, rate, tuneSemitones);
         if (message.active !== lastActive) {
-          ramp(dry.gain, message.active ? 0 : 1);
-          ramp(wet.gain, message.active ? 1 : 0);
+          if (message.prepared) {
+            const now = ctx.currentTime;
+            for (const [gain, value] of [[wet.gain, 0], [dry.gain, 1]]) {
+              gain.cancelScheduledValues(now); gain.setValueAtTime(value, now); gainRamps.delete(gain);
+            }
+          } else if (!message.active) {
+            // Restore unity without mixing differently delayed versions.
+            ramp(wet.gain, 0, 0.002);
+            const now = ctx.currentTime;
+            dry.gain.cancelScheduledValues(now); dry.gain.setValueAtTime(0, now);
+            dry.gain.setValueAtTime(0, now + 0.002); dry.gain.linearRampToValueAtTime(1, now + 0.005);
+            gainRamps.set(dry.gain, { start: now + 0.002, end: now + 0.005, from: 0, to: 1 });
+          } else {
+            ramp(dry.gain, 0);
+            if (!seeking) ramp(wet.gain, 1);
+          }
         }
         lastActive = message.active;
         lastRate = rate;
@@ -5755,28 +5807,34 @@ async function createHighQualitySpeedNode(ctx, profile = 'quality') {
 }
 
 function syncSpeedPlayback() {
-  const rate = pitchTarget === "video" ? getCurrentPitchRate() : 1;
+  let rate = pitchTarget === "video" ? getCurrentPitchRate() : 1;
   const active = speedOnlyMode && pitchTarget === "video";
   const hdActive = active && speedHDMode;
   const stemsSpeedActive = active && !hdActive && !!videoSpeedStretchNode &&
-    typeof stemState !== "undefined" && stemState?.ai?.pathMix === "ai";
+    typeof stemState !== "undefined" && ["ai", "waiting", "silent"].includes(stemState?.ai?.pathMix);
   const tuneSemitones = hdActive ? speedHDTuneSemitone : 0;
+  const prepared = typeof stemPreparedParameters === "function" ? stemPreparedParameters() : null;
+  const preparedPath = !!prepared && typeof stemsNeedSplit === "function" && stemsNeedSplit();
+  if (typeof stemPrepareAhead === "function") stemPrepareAhead();
+  if (preparedPath) rate = getStemState().ai.preparedApplied?.rate || Number(getVideoElement()?.playbackRate) || 1;
+  const needsProcessing = Math.abs(rate - 1) > 1e-8 || tuneSemitones !== 0;
   const message = {
-    active: (hdActive || stemsSpeedActive) && (Math.abs(rate - 1) > 1e-8 || tuneSemitones !== 0),
+    active: !preparedPath && (hdActive || stemsSpeedActive) && needsProcessing,
+    prepared: preparedPath,
     rate,
     tuneSemitones
   };
   videoSpeedStretchNode?.port.postMessage(message);
   previewSpeedStretchNode?.port.postMessage({ ...message,
-    active: hdActive && (Math.abs(rate - 1) > 1e-8 || tuneSemitones !== 0) });
+    active: hdActive && needsProcessing });
   // Include the hidden cue deck so cue crossfades keep the same speed/pitch.
   for (const vid of new Set([getVideoElement(), deckA, deckB])) {
     if (!vid) continue;
-    vid.preservesPitch = active && !((hdActive || stemsSpeedActive) && videoSpeedStretchNode && vid._mediaSource);
+    vid.preservesPitch = active && !(message.active && videoSpeedStretchNode && vid._mediaSource);
     vid.playbackRate = rate;
   }
   if (videoPreviewElement) {
-    videoPreviewElement.preservesPitch = active && !(hdActive && previewSpeedStretchNode && videoPreviewElement._mediaSource);
+    videoPreviewElement.preservesPitch = active && !(hdActive && needsProcessing && previewSpeedStretchNode && videoPreviewElement._mediaSource);
     videoPreviewElement.playbackRate = rate;
   }
 }
@@ -10705,6 +10763,33 @@ function sequencerTriggerCue(cueKey, opts = {}) {
   console.log(`Sequencer triggered cue ${cueKey} at time ${cueTime}`);
 }
 
+function bindPadPress(button, trigger) {
+  const press = () => {
+    // Resume inside the press gesture, rather than relying on document click
+    // (which arrives on release). Do not defer the cue behind unrelated setup.
+    if (typeof audioContext !== "undefined" && audioContext) {
+      if (audioContext.state === "suspended") audioContext.resume().catch(() => {});
+    } else ensureAudioContext().catch(() => {});
+    trigger();
+  };
+  button.style.touchAction = "none";
+  button.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    press();
+  });
+  button.addEventListener("keydown", event => {
+    if (event.key !== " " && event.key !== "Enter") return;
+    event.preventDefault(); event.stopPropagation();
+    if (!event.repeat) press();
+  });
+  button.addEventListener("click", event => {
+    // Assistive activation has no pointer press. Real pointer clicks must not
+    // fire a second cue when the pointer is released.
+    if (event.detail === 0) press();
+  });
+}
+
 function isTypingInTextField(e) {
   // Skip entirely if it's a range input
   if (e.target.tagName.toLowerCase() === "input") {
@@ -13044,6 +13129,7 @@ async function stemMaybeOpenBuffered(ai) {
   ai.trackAttempted = true;
   const track = st.bufferedId;
   try {
+    ai.preparedCache?.close(); ai.preparedCache = null; ai.preparedApplied = null;
     stemAiStopFuture();
     ai.epoch++;
     ai.mode = "buffered";
@@ -13225,7 +13311,7 @@ function getStemBusOutput() { return stemBusOutput; }
 
 // Build stamp: verify in console that the loaded copy is current.
 // If this is missing or stale, the extension was loaded from an old folder.
-window.__ytbmBuild = { version: "2.4.1", flavor: "stems-browser-only-pitch-stretch", built: "2026-10-17" };
+window.__ytbmBuild = { version: "2.4.2", flavor: "prepared-stems-speed", built: "2026-10-17" };
 
 // Live diagnostic for console checks: samples, loopers, audio graph.
 window.__ytbmAudioDiag = function () {
@@ -13250,7 +13336,7 @@ window.__ytbmStemDiag = function () {
   try {
     const st = getStemState();
     return {
-      extVersion: st.contextInvalidated ? window.__ytbmBuild?.version || "2.4.1" : chrome?.runtime?.getManifest?.().version || null,
+      extVersion: st.contextInvalidated ? window.__ytbmBuild?.version || "2.4.2" : chrome?.runtime?.getManifest?.().version || null,
       contextInvalidated: !!st.contextInvalidated,
       audioRunning: !!audioContext && audioContext.state === "running",
       videoGainConnected: !!videoGain,
@@ -13271,6 +13357,11 @@ window.__ytbmStemDiag = function () {
       analysisRequested: !!st.analysisRequested,
       analysisStartTime: st.analysisStartTime,
       analysisMode: st.ai?.mode || "idle",
+      preparedRate: st.ai?.preparedApplied?.rate || null,
+      preparedTune: st.ai?.preparedApplied?.tune ?? null,
+      liveStretchActive: !!videoSpeedStretchNode?.isActive?.(),
+      preparedBytes: st.ai?.preparedCache?.bytes || 0,
+      preparedError: st.ai?.preparedError || null,
       pathMix: st.ai?.pathMix || "live",
       hasCurrentCoverage: (() => { try { return stemAiHasCurrentCoverage(); } catch { return false; } })(),
       trackPreload: st.preloadStatus,
@@ -13304,6 +13395,7 @@ function getStemSessionStorageInfo() {
     consecErrors: ai?.consecErrors || 0,
     cachedStemSegments: ai?.timeline?.segments?.size || 0,
     cachedStemBytes: stemBytes,
+    preparedStretchBytes: ai?.preparedCache?.bytes || 0,
     bufferedReady: !!st.bufferedInfo?.frames,
     bufferedError: st.bufferedError || ai?.bufferedError || null,
     captureQueueBytes: ai?.queue?.buf?.byteLength || 0,
@@ -13612,6 +13704,7 @@ async function stemMaybeOpenTrack(ai) {
     if (st.ai !== ai || track !== st.preloadId || !st.analysisRequested) return;
     if (!response?.ok) throw new Error(response?.error || "Whole song unavailable");
     const plan = YTBMStemTimeline.planTrack(response.frames, ai.requestedAt);
+    ai.preparedCache?.close(); ai.preparedCache = null; ai.preparedApplied = null;
     stemAiStopFuture();
     ai.epoch++;
     ai.mode = "track";
@@ -13777,19 +13870,34 @@ function stemAiBreakRun() {
   stemAiStopFuture();
 }
 
-function stemAiStopFuture() {
+function stemAiStopFuture(fadeSeconds = 0) {
   const ai = getStemState().ai;
   if (!ai) return;
   ai.generation = (ai.generation || 0) + 1;
   for (const s of ai.sources) {
-    for (const node of s.nodes || []) {
+    for (const [index, node] of (s.nodes || []).entries()) {
+      if (fadeSeconds && s.startAt <= audioContext.currentTime) {
+        const envelope = s.gains?.[index];
+        const now = audioContext.currentTime;
+        try {
+          if (envelope?.gain.cancelAndHoldAtTime) envelope.gain.cancelAndHoldAtTime(now);
+          else envelope?.gain.cancelScheduledValues(now);
+          envelope?.gain.linearRampToValueAtTime(0, now + fadeSeconds);
+          node.onended = () => { try { node.disconnect(); envelope?.disconnect(); } catch {} };
+          node.stop(now + fadeSeconds);
+          continue;
+        } catch {}
+      }
       try { node.stop(); } catch {}
       try { node.disconnect(); } catch {}
     }
-    for (const gain of s.gains || []) { try { gain.disconnect(); } catch {} }
+    if (!fadeSeconds || s.startAt > audioContext.currentTime) {
+      for (const gain of s.gains || []) { try { gain.disconnect(); } catch {} }
+    }
   }
   ai.sources = [];
   ai.schedHorizon = 0;
+  ai.nextFadeInSeconds = null;
 }
 
 function stemAiHeld(param, when) {
@@ -13816,8 +13924,7 @@ function stemAiSetPath(which) {
   if (which === "ai" && ai) { ai.hasPlayedSplit = true; st.seekHold = false; }
   if (!stemsNeedSplit()) st.seekHold = false;
   if (ai) ai.pathMix = which;
-  if (previousPath !== which && typeof speedOnlyMode !== "undefined" && speedOnlyMode &&
-      typeof speedHDMode !== "undefined" && !speedHDMode) syncSpeedPlayback();
+  if (previousPath !== which && typeof speedOnlyMode !== "undefined" && speedOnlyMode) syncSpeedPlayback();
   st.engine = which === "ai" ? "ai" : (which === "silent" ? "silent" : (which === "waiting" ? "waiting-for-stems" : "original"));
   const t = audioContext.currentTime;
   const liveTarget = which === "live" ? 1 : 0;
@@ -13868,6 +13975,187 @@ function stemAiExpectedRate() {
   } catch { return 1; }
 }
 
+function stemPreparedParameters() {
+  const ai = getStemState().ai;
+  if (typeof YTBMPreparedStretch === "undefined" || typeof speedOnlyMode === "undefined" || !speedOnlyMode ||
+      pitchTarget !== "video" || !ai?.ready || ai.preparedDisabled || !["track", "buffered"].includes(ai.mode)) return null;
+  const rate = getCurrentPitchRate();
+  const tune = typeof speedHDMode !== "undefined" && speedHDMode ? speedHDTuneSemitone : 0;
+  if (Math.abs(rate - 1) < 1e-8 && tune === 0) return null;
+  const profile = typeof speedHDLatencyProfile !== "undefined" ? speedHDLatencyProfile : "quality";
+  return { rate, tune, profile, tag: `${rate.toFixed(6)}/${tune}/${profile}` };
+}
+
+function stemPreparedTile(index, parameters) {
+  const ai = getStemState().ai;
+  return ai?.preparedCache?.get(ai.preparedKeys?.get(`${parameters.tag}/${index}`)) || null;
+}
+
+function stemRequestPreparedTile(index, parameters) {
+  const st = getStemState(), ai = st.ai;
+  const SR = STEM_SR, size = YTBMPreparedStretch.TILE_SECONDS * SR;
+  const from = index * size;
+  const coreEnd = Math.min(from + size, ai.trackFrames);
+  const end = Math.min(coreEnd + Math.ceil(0.08 * SR), ai.trackFrames);
+  const pad = Math.ceil(YTBMPreparedStretch.PAD_SECONDS * SR * Math.max(1, parameters.rate));
+  const readFrom = Math.max(0, from - pad), readEnd = Math.min(ai.trackFrames, end + pad);
+  if (coreEnd <= from || ai.timeline.coverage(readFrom, readEnd) < 0.999) return;
+  const old = stemPreparedTile(index, parameters);
+  if (old && old.coreEnd >= coreEnd / SR) return;
+  const key = `${parameters.tag}/${index}/${coreEnd}/${readEnd}`;
+  const cache = ai.preparedCache;
+  if (cache.jobs.has(key)) return;
+  cache.request(key, parameters.tag, () => {
+    if (st.ai !== ai || !st.installed) return null;
+    const channels = [];
+    for (let stem = 0; stem < 4; stem++) {
+      const { left, right } = ai.timeline.readStem(stem, readFrom, readEnd);
+      channels.push(left, right);
+    }
+    return { channels, sampleRate: SR, rate: parameters.rate, tune: parameters.tune,
+      config: getSpeedHDLatencyConfig(parameters.profile), offset: from - readFrom, frames: end - from,
+      moduleURL: chrome.runtime.getURL("worklets/speed-stretch-worklet.js") };
+  }).then(value => {
+    if (!value || st.ai !== ai || ai.preparedCache !== cache || !st.installed) return;
+    Object.assign(value, { from: from / SR, coreEnd: coreEnd / SR, end: end / SR });
+    ai.preparedKeys.set(`${parameters.tag}/${index}`, key);
+    stemPrepareAhead();
+    stemAiTick();
+  }).catch(error => {
+    if (st.ai !== ai || ai.preparedCache !== cache) return;
+    ai.preparedError = String(error.message || error);
+    ai.preparedDisabled = true;
+    ai.preparedApplied = null;
+    stemAiStopFuture(); syncSpeedPlayback(); stemAiTick();
+  });
+}
+
+function stemPrepareAhead() {
+  const ai = getStemState().ai;
+  const parameters = stemPreparedParameters();
+  if (!parameters) {
+    if (ai?.preparedApplied) { stemAiStopFuture(0.003); ai.preparedApplied = null; ai.lastVt = null; }
+    ai?.preparedCache?.setTarget(null);
+    return;
+  }
+  if (!ai.preparedCache) {
+    ai.preparedCache = new YTBMPreparedStretch.Cache();
+    ai.preparedKeys = new Map();
+  }
+  ai.preparedCache.setTarget(parameters.tag, ai.preparedApplied?.tag || null);
+  const vt = Number(getVideoElement()?.currentTime) || 0;
+  const index = Math.floor(vt / YTBMPreparedStretch.TILE_SECONDS);
+  // Keep the currently audible speed supplied while the latest fader target
+  // renders. Otherwise cancelling its lookahead can create a gap at a tile join.
+  if (ai.preparedApplied && ai.preparedApplied.tag !== parameters.tag) {
+    stemRequestPreparedTile(index, ai.preparedApplied);
+    stemRequestPreparedTile(index + 1, ai.preparedApplied);
+  }
+  stemRequestPreparedTile(index, parameters);
+  stemRequestPreparedTile(index + 1, parameters);
+  const tile = stemPreparedTile(index, parameters);
+  if (tile && tile.end >= vt + Math.min(0.12 * parameters.rate, Math.max(0, ai.trackFrames / STEM_SR - vt - 0.002)) &&
+      stemsNeedSplit() && ai.preparedApplied?.tag !== parameters.tag) {
+    stemAiStopFuture(0.003);
+    ai.preparedApplied = parameters;
+    ai.lastRate = parameters.rate; ai.lastVt = null;
+    syncSpeedPlayback();
+  }
+}
+
+function stemAiSchedulePrepared(vt) {
+  const ai = getStemState().ai, parameters = ai.preparedApplied;
+  if (!parameters) return;
+  const now = audioContext.currentTime, rate = parameters.rate;
+  if (ai.schedHorizon <= now) ai.schedHorizon = now + 0.005;
+  let guard = 0;
+  while (ai.schedHorizon < now + STEM_SCHED_AHEAD_S && guard++ < 8) {
+    const startAt = ai.schedHorizon;
+    const media = vt + (startAt - now) * rate;
+    const index = Math.floor((media + 1e-7) / YTBMPreparedStretch.TILE_SECONDS);
+    const tile = stemPreparedTile(index, parameters);
+    if (!tile) break;
+    const core = Math.min(STEM_SCHED_WINDOW_S, (tile.coreEnd - media) / rate);
+    if (core < 1 / STEM_SR) break;
+    const offset = Math.round((media - tile.from) / rate * STEM_SR);
+    const count = Math.min(Math.round(core * STEM_SR) + STEM_SCHED_FADE, tile.channels[0].length - offset);
+    if (count < 1) break;
+    const duration = count / STEM_SR, fade = Math.min(STEM_SCHED_FADE / STEM_SR, duration / 4);
+    const fadeOutAt = duration > core ? core : Math.max(fade, duration - fade);
+    const nodes = [], gains = [];
+    for (const key of STEM_KEYS) {
+      const channel = STEM_MODEL_INDEX[key] * 2;
+      const buffer = audioContext.createBuffer(2, count, STEM_SR);
+      buffer.copyToChannel(tile.channels[channel].subarray(offset, offset + count), 0);
+      buffer.copyToChannel(tile.channels[channel + 1].subarray(offset, offset + count), 1);
+      const source = audioContext.createBufferSource(), envelope = audioContext.createGain();
+      source.buffer = buffer;
+      envelope.gain.setValueAtTime(0, startAt);
+      envelope.gain.linearRampToValueAtTime(1, startAt + fade);
+      envelope.gain.setValueAtTime(1, startAt + Math.max(fade, fadeOutAt));
+      envelope.gain.linearRampToValueAtTime(0, startAt + duration);
+      source.connect(envelope); envelope.connect(stemAiGains[key]); source.start(startAt);
+      nodes.push(source); gains.push(envelope);
+    }
+    ai.sources.push({ nodes, gains, startAt, duration, generation: ai.generation, rate, prepared: true });
+    ai.schedHorizon = startAt + core;
+  }
+  ai.sources = ai.sources.filter(source => {
+    if (source.startAt + source.duration >= now - 0.1) return true;
+    for (const node of source.nodes) { try { node.disconnect(); } catch {} }
+    for (const gain of source.gains) { try { gain.disconnect(); } catch {} }
+    return false;
+  });
+}
+
+function stemAiRetuneSources(rate) {
+  const ai = getStemState().ai;
+  if (!ai || !audioContext) return;
+  const now = audioContext.currentTime;
+  const kept = [];
+  let horizon = now + 0.005;
+  for (const source of ai.sources) {
+    if (source.startAt > now || !Number.isFinite(source.mediaEnd)) {
+      for (const node of source.nodes || []) { try { node.stop(); node.disconnect(); } catch {} }
+      for (const gain of source.gains || []) { try { gain.disconnect(); } catch {} }
+      continue;
+    }
+    const position = source.mediaAtClock + (now - source.rateAtClock) * source.rate;
+    if (position >= source.mediaEnd) {
+      for (const node of source.nodes) { try { node.disconnect(); } catch {} }
+      for (const gain of source.gains || []) { try { gain.disconnect(); } catch {} }
+      continue;
+    }
+    const held = position < source.mediaFadeInEnd
+      ? (position - source.mediaStart) / (source.mediaFadeInEnd - source.mediaStart)
+      : (position > source.mediaFadeOut ? (source.mediaEnd - position) / (source.mediaEnd - source.mediaFadeOut) : 1);
+    const endAt = now + (source.mediaEnd - position) / rate;
+    const fadeOutAt = now + (source.mediaFadeOut - position) / rate;
+    for (const node of source.nodes) {
+      if (node.playbackRate.setValueAtTime) node.playbackRate.setValueAtTime(rate, now);
+      else node.playbackRate.value = rate;
+    }
+    for (const envelope of source.gains || []) {
+      envelope.gain.cancelScheduledValues(now);
+      envelope.gain.setValueAtTime(Math.max(0, Math.min(1, held)), now);
+      if (position < source.mediaFadeInEnd) envelope.gain.linearRampToValueAtTime(1, now + (source.mediaFadeInEnd - position) / rate);
+      if (fadeOutAt > now) envelope.gain.setValueAtTime(1, fadeOutAt);
+      envelope.gain.linearRampToValueAtTime(0, endAt);
+    }
+    source.mediaAtClock = position;
+    source.rateAtClock = now;
+    source.rate = rate;
+    source.duration = endAt - source.startAt;
+    kept.push(source);
+    if (fadeOutAt >= horizon) {
+      horizon = fadeOutAt;
+      ai.nextFadeInSeconds = (source.mediaEnd - source.mediaFadeOut) / rate;
+    }
+  }
+  ai.sources = kept;
+  ai.schedHorizon = horizon;
+}
+
 function stemAiTick() {
   const st = getStemState();
   const ai = st.ai;
@@ -13875,6 +14163,7 @@ function stemAiTick() {
   let video = null;
   try { video = getVideoElement(); } catch {}
   if (!video) { ai.captureActive = false; stemAiSetPath("live"); return; }
+  stemPrepareAhead();
   if (typeof deckA !== "undefined" && deckA !== video) {
     try { initTwoDeck(); }
     catch (error) { ai.failed = `Video audio routing failed: ${error.message}`; stemAiSetPath("live"); return; }
@@ -13883,8 +14172,13 @@ function stemAiTick() {
   const rate = Number(video.playbackRate) || 1;
   const vt = Number(video.currentTime) || 0;
   ai.captureActive = !!((ai.mode === "capture") && playing && Math.abs(rate - 1) < 0.02);
-  if (ai.lastRate != null && Math.abs(rate - ai.lastRate) > 1e-6) stemAiStopFuture();
-  if (ai.lastVt != null && playing && Math.abs((vt - ai.lastVt) - (audioContext.currentTime - ai.lastClock) * (ai.lastRate || rate)) > 0.15) {
+  const rateChanged = ai.lastRate != null && Math.abs(rate - ai.lastRate) > 1e-6;
+  if (rateChanged) {
+    if (ai.preparedApplied) stemAiStopFuture();
+    else stemAiRetuneSources(rate);
+    ai.rateChangingUntil = audioContext.currentTime + 0.15;
+  }
+  if (!rateChanged && ai.lastVt != null && playing && Math.abs((vt - ai.lastVt) - (audioContext.currentTime - ai.lastClock) * (ai.lastRate || rate)) > 0.15) {
     stemAiBreakRun();
   }
   ai.lastVt = vt;
@@ -13892,7 +14186,7 @@ function stemAiTick() {
   ai.lastRate = rate;
   if (!ai.ready) { stemAiSetPath("live"); return; }
   const needsPitchPreservation = typeof speedOnlyMode !== "undefined" && speedOnlyMode && Math.abs(rate - 1) > 0.0001;
-  if (!playing || (needsPitchPreservation && !videoSpeedStretchNode) ||
+  if (!playing || (needsPitchPreservation && !videoSpeedStretchNode && !stemPreparedParameters()) ||
       (ai.mode === "capture" && Math.abs(rate - 1) >= 0.02)) {
     ai.pauseReason = !playing ? "paused" : (ai.mode === "capture" ? "capture-speed" : "stretch-loading");
     stemAiBreakRun();
@@ -13902,6 +14196,12 @@ function stemAiTick() {
   ai.pauseReason = null;
   if (!stemsNeedSplit()) { stemAiSetPath("live"); stemAiStopFuture(); refreshStemsUI(); return; }
   if (STEM_KEYS.every(k => !isStemAudible(k))) { stemAiSetPath("silent"); stemAiStopFuture(); return; }
+  if (stemPreparedParameters()) {
+    if (!ai.preparedApplied) { stemAiStopFuture(); st.seekHold = true; stemAiSetPath("waiting"); return; }
+    stemAiSchedulePrepared(vt);
+    stemAiSetPath(stemAiAudibleNow() ? "ai" : "waiting");
+    return;
+  }
   const TL = YTBMStemTimeline;
   const need = Math.max(0.005, Math.min((STEM_SCHED_WINDOW_S + STEM_SCHED_FADE / STEM_SR) * rate,
     Number.isFinite(video.duration) ? video.duration - vt - 0.002 : Infinity));
@@ -13928,7 +14228,10 @@ function stemAiSchedule(vt) {
   if (ai.schedHorizon <= now) ai.schedHorizon = now + 0.005;
   let guard = 0;
   const gen = ai.generation;
-  while (ai.schedHorizon < now + STEM_SCHED_AHEAD_S && guard++ < 4) {
+  // During a drag, don't allocate/copy 1.5 seconds of future PCM only to cancel
+  // it again on the next pointer event. Keep enough ahead for the 150 ms poll.
+  const ahead = ai.rateChangingUntil > now ? 0.3 : STEM_SCHED_AHEAD_S;
+  while (ai.schedHorizon < now + ahead && guard++ < 4) {
     if (gen !== ai.generation) return;
     const startAt = ai.schedHorizon;
     const vtChunk = vt + (startAt - now) * rate;
@@ -13944,6 +14247,8 @@ function stemAiSchedule(vt) {
     if (ai.timeline.coverage(csChunk, csChunk + total) < 0.999) break;
     const nodes = [];
     const gains = [];
+    const fade = Math.min(overlap, total / 4) / (STEM_SR * rate);
+    const fadeIn = Math.min(ai.nextFadeInSeconds || fade, total / (STEM_SR * rate) / 4);
     try {
       for (const key of STEM_KEYS) {
         const s = STEM_MODEL_INDEX[key];
@@ -13957,9 +14262,8 @@ function stemAiSchedule(vt) {
         const aiG = stemAiGains ? stemAiGains[key] : null;
         if (!aiG) throw new Error("AI bus missing");
         const envelope = audioContext.createGain();
-        const fade = Math.min(overlap, total / 4) / (STEM_SR * rate);
         envelope.gain.setValueAtTime(0, startAt);
-        envelope.gain.linearRampToValueAtTime(1, startAt + fade);
+        envelope.gain.linearRampToValueAtTime(1, startAt + fadeIn);
         envelope.gain.setValueAtTime(1, startAt + (tail ? total / (STEM_SR * rate) - fade : n / (STEM_SR * rate)));
         envelope.gain.linearRampToValueAtTime(0, startAt + total / (STEM_SR * rate));
         src.connect(envelope); envelope.connect(aiG);
@@ -13972,7 +14276,11 @@ function stemAiSchedule(vt) {
       for (const gain of gains) { try { gain.disconnect(); } catch {} }
       break;
     }
-    ai.sources.push({ nodes, gains, startAt, duration: total / (STEM_SR * rate), generation: gen, rate });
+    ai.nextFadeInSeconds = null;
+    ai.sources.push({ nodes, gains, startAt, duration: total / (STEM_SR * rate), generation: gen, rate,
+      mediaStart: vtChunk, mediaAtClock: vtChunk, rateAtClock: startAt,
+      mediaEnd: vtChunk + total / STEM_SR, mediaFadeInEnd: vtChunk + fadeIn * rate,
+      mediaFadeOut: vtChunk + (tail ? total / STEM_SR - fade * rate : n / STEM_SR) });
     // Retire sources that fully played out (keep the tail overlap readable).
     ai.sources = ai.sources.filter((s) => {
       if (s.startAt + (s.duration || total / STEM_SR) < now - 0.1) {
@@ -14001,9 +14309,11 @@ function stemAiTeardown(full) {
     ai.history = [];
     ai.schedHorizon = 0;
     if (full) {
+      ai.preparedCache?.close();
       try { ai.worker && ai.worker.terminate(); } catch {}
       st.ai = null;
     } else {
+      ai.preparedCache?.close(); ai.preparedCache = null; ai.preparedApplied = null;
       // Video change: drop song-specific data, keep the warm worker + model.
       try {
         ai.queue = new YTBMStemTimeline.SegmentQueue();
@@ -14055,7 +14365,7 @@ function stemAiStatusText() {
   if (!ai) return "Preparing analysis… original audio continues";
   if (ai.pathMix === "waiting") return ai.failed
     ? `AI unavailable: ${ai.failed} — release stem mutes to hear original audio`
-    : "Waiting for this section's AI stems — muted stems stay muted";
+    : (stemPreparedParameters() ? "Preparing speed… selected stems stay muted" : "Waiting for this section's AI stems — muted stems stay muted");
   if (ai.pathMix === "silent") return "All stems muted";
   if (ai.failed) return `AI unavailable: ${ai.failed} — original audio`;
   if (stemsNeedSplit() && !stemAiHasCurrentCoverage()) return "Mute/solo queued — analysing this section; original audio continues";
@@ -14069,7 +14379,10 @@ function stemAiStatusText() {
       (percent != null ? `${percent}% separated` : `${ai.learnedSegs} sections ready`);
     const loaded = ai.mode === "buffered" && !ai.trackComplete ? ` · ${Math.round(ai.trackDuration || 0)}s loaded` : "";
     const playback = ai.pauseReason === "stretch-loading" ? " · loading stretch…" : "";
-    return progress + loaded + playback;
+    const prepared = stemPreparedParameters();
+    const speed = prepared && ai.preparedApplied?.tag !== prepared.tag ? " · preparing speed…" :
+      (ai.preparedError ? " · live stretch fallback" : "");
+    return progress + loaded + playback + speed;
   }
   if (ai.pathMix === "ai") return "AI separation on";
   if (ai.pauseReason === "capture-speed") return "Live capture requires 1×; full-source stems support pitch and stretch";
@@ -14099,7 +14412,7 @@ function stemAiHasCurrentCoverage() {
   const ai = getStemState().ai;
   const video = getVideoElement();
   const rate = Number(video?.playbackRate) || 1;
-  const speedAvailable = !(typeof speedOnlyMode !== "undefined" && speedOnlyMode && Math.abs(rate - 1) > 0.0001 && !videoSpeedStretchNode);
+  const speedAvailable = !(typeof speedOnlyMode !== "undefined" && speedOnlyMode && Math.abs(rate - 1) > 0.0001 && !videoSpeedStretchNode && !stemPreparedParameters());
   return !!(ai?.ready && !ai.failed && video && speedAvailable && (ai.mode !== "capture" || Math.abs(rate - 1) < 0.02) && YTBMStemTimeline.findCoveredCapture(
     stemAiAnchors(), video.currentTime, Math.max(0.005, Math.min(0.45 * rate, Number.isFinite(video.duration) ? video.duration - video.currentTime - 0.002 : Infinity)), STEM_SR, ai.timeline
   ) != null);
@@ -14268,18 +14581,11 @@ function refreshStemsUI() {
   }
   if (stemsDownloadAllBtn) stemsDownloadAllBtn.style.display = showGrid ? "block" : "none";
   if (stemsGridMin) stemsGridMin.style.display = showGrid ? "flex" : "none";
-  if (stemsAnalysisProgressMin) {
-    const percent = st.installed ? stemAiSeparationProgress() : null;
-    stemsAnalysisProgressMin.style.display = percent == null ? "none" : "";
-    if (percent != null) {
-      stemsAnalysisProgressMin.textContent = `${percent}%`;
-      stemsAnalysisProgressMin.setAttribute("aria-valuenow", String(percent));
-      stemsAnalysisProgressMin.dataset.hint = `${percent}% of song separated`;
-    }
-  }
   if (stemsUninstallBtn) stemsUninstallBtn.style.display = showGrid ? "block" : "none";
   if (stemsGridMin && showGrid) {
     const currentReady = stemAiHasCurrentCoverage();
+    const percent = stemAiSeparationProgress();
+    const progressHint = percent == null ? "" : `\n${percent}% separated`;
     for (const btn of stemsGridMin.querySelectorAll("[data-stem]")) {
       const key = btn.getAttribute("data-stem");
       btn.classList.toggle("ytbm-stem-muted", !!st.mutes[key]);
@@ -14293,7 +14599,7 @@ function refreshStemsUI() {
       btn.setAttribute("aria-pressed", st.mutes[key] ? "true" : "false");
       btn.removeAttribute("title");
       const state = st.mutes[key] ? "muted" : (st.solos[key] ? "solo" : "on");
-      btn.dataset.hint = `${STEM_LABELS[key]} · ${state}\nClick: mute · ⇧/⌘/Ctrl-click: solo\nRight-click: options`;
+      btn.dataset.hint = `${STEM_LABELS[key]} · ${state}${progressHint}\nClick: mute · ⇧/⌘/Ctrl-click: solo\nRight-click: options`;
     }
   }
   if (stemsStatusMin) {
@@ -14480,14 +14786,6 @@ function buildStemsControl() {
     stemsGridMin.appendChild(b);
   }
   wrap.appendChild(stemsGridMin);
-  stemsAnalysisProgressMin = document.createElement("span");
-  stemsAnalysisProgressMin.className = "ytbm-stems-analysis-progress";
-  stemsAnalysisProgressMin.style.cssText = "display:none;font-size:10px;color:#bbb;font-variant-numeric:tabular-nums;";
-  stemsAnalysisProgressMin.setAttribute("role", "progressbar");
-  stemsAnalysisProgressMin.setAttribute("aria-label", "Song separated");
-  stemsAnalysisProgressMin.setAttribute("aria-valuemin", "0");
-  stemsAnalysisProgressMin.setAttribute("aria-valuemax", "100");
-  wrap.appendChild(stemsAnalysisProgressMin);
   // Right-click a gap of the inline grid: open the drop-up menu.
   stemsGridMin.addEventListener("contextmenu", (e) => {
     e.preventDefault();
@@ -14911,6 +15209,18 @@ function refreshPitchUI() {
             ? "Speed HD: HD engine unavailable; using browser stretch fallback. Click for Pitch."
             : "Speed HD: loading Signalsmith Stretch; using browser stretch until ready. Click for Pitch.")));
     minimalPitchModeButton.setAttribute("data-engine", engine);
+    if (speedOnlyMode && pitchTarget === "video") {
+      const tune = speedHDMode ? speedHDTuneSemitone : 0;
+      if (Math.abs(getCurrentPitchRate() - 1) < 1e-8 && tune === 0) {
+        minimalPitchModeButton.title = `${mode}: direct at 1×, no stretch buffer. Click to change mode.`;
+      } else if (typeof stemPreparedParameters === "function" && stemPreparedParameters() && stemsNeedSplit()) {
+        const desired = stemPreparedParameters(), applied = getStemState().ai.preparedApplied;
+        minimalPitchModeButton.title = applied?.tag === desired.tag
+          ? `${mode}: prepared stems, no live stretch buffer. Click to change mode.`
+          : `${mode}: preparing speed… previous prepared speed continues until ready.`;
+        minimalPitchModeButton.setAttribute("data-engine", "prepared");
+      }
+    }
     minimalPitchModeButton.setAttribute("aria-label", `${mode}. ${minimalPitchModeButton.title}`);
     minimalPitchModeButton.setAttribute("aria-pressed", String(speedOnlyMode));
   }
@@ -14964,6 +15274,10 @@ function updatePitch(v) {
     }
   }
   syncSpeedPlayback();
+
+  // Apply queued stem rates in the same turn as pitch correction; waiting for
+  // the 150 ms poll briefly corrects old-speed audio with the new pitch ratio.
+  if (typeof stemState !== "undefined" && stemState?.ai?.ready && typeof stemAiTick === "function") stemAiTick();
 
   // Update UI elements
   refreshPitchUI();

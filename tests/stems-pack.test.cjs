@@ -39,7 +39,7 @@ function graphFixture() {
     stemBranchGains: null, stemBranchFilters: null, stemLiveGains: null, stemAiGains: null, stemBusContext: null,
     stemTap: null, stemWorker: null,
     stemsButtonMin: null, stemsDropdownMin: null, stemsStatusMin: null,
-    stemsGridMin: null, stemsAnalysisProgressMin: null, loopGainEnvelopes: new WeakMap(),
+    stemsGridMin: null, loopGainEnvelopes: new WeakMap(),
     getVideoElement: () => video, YTBMStemTimeline: TL,
     Float32Array, Map, URL, setTimeout, clearTimeout, setInterval, clearInterval,
   };
@@ -289,10 +289,13 @@ test('buffered stream changes reopen analysis instead of failing silently', asyn
     ready: true, mode: 'buffered', stream: 's1', epoch: 1, sources: [], pending: new Map(),
     timeline: new TL.StemTimeline(), pendingQueue: [], trackTotal: 2, learnedSegs: 2,
   };
+  let closed = 0;
+  ai.preparedCache = { close: () => closed++ }; ai.preparedApplied = { rate: 0.5 };
   st.bufferedInfo = { track: 'buf1', stream: 's2', frames: TL.SEG + 10, duration: 8 };
   await ctx.stemMaybeOpenBuffered(ai);
   assert.equal(ai.stream, 's2');
   assert.equal(ai.learnedSegs, 0, 'stale separated sections are dropped on source change');
+  assert.equal(closed, 1); assert.equal(ai.preparedCache, null); assert.equal(ai.preparedApplied, null);
 });
 
 test('growing buffered audio adds new full windows and final tail without erasing ready stems', async () => {
@@ -483,6 +486,33 @@ test('full-source stems follow pitched rates and changing rate cancels obsolete 
   assert.equal(ai.sources[0].nodes[0].playbackRate.value, 1.5);
   assert.ok(ai.sources[0].duration < 0.42);
   assert.equal(st.mutes.vocals, true);
+});
+
+test('fader changes retime active stem sources without restarting their waveform or crossfade', () => {
+  const { ctx, video } = graphFixture(); const st = ctx.getStemState();
+  st.analysisRequested = true; st.mutes.vocals = true; video.currentTime = 1;
+  const ai = st.ai = { ready: true, mode: 'track', sources: [], generation: 0, schedHorizon: 0,
+    timeline: new TL.StemTimeline(), trackAnchor: { vt: 0, cs: 0, csEnd: TL.SEG } };
+  ai.timeline.addSegment(0, new Float32Array(TL.SEG * 8).fill(0.1));
+  ctx.stemAiTick();
+  const active = ai.sources[0], future = ai.sources.slice(1);
+  ctx.audioContext.currentTime += 0.1; video.currentTime += 0.1;
+  for (const rate of [0.5, 1.5, 1, 0.75]) {
+    const before = active.mediaAtClock + (ctx.audioContext.currentTime - active.rateAtClock) * active.rate;
+    video.playbackRate = rate; ctx.stemAiTick();
+    assert.ok(ai.sources.includes(active), 'retain the currently sounding buffer');
+    assert.ok(active.nodes.every(n => !n.stopped && n.playbackRate.value === rate));
+    assert.ok(Math.abs(active.mediaAtClock - before) < 1e-9, 'rate change must preserve the source sample position');
+    assert.equal(ai.pathMix, 'ai');
+    const next = ai.sources.find(s => s.startAt > ctx.audioContext.currentTime);
+    if (next) {
+      assert.ok(Math.abs(next.mediaStart - active.mediaFadeOut) < 1e-6, 'new buffers join at the existing overlap');
+      assert.ok(Math.abs(next.mediaFadeInEnd - next.mediaStart - (active.mediaEnd - active.mediaFadeOut)) < 1e-6,
+        'crossfade must cover the same source samples after retiming');
+    }
+    assert.ok(ai.sources.length <= 2, 'dragging must not repeatedly allocate a full 1.5-second future queue');
+  }
+  assert.ok(future.every(s => s.nodes.every(n => n.stopped)), 'only obsolete future buffers are cancelled');
 });
 
 test('audibility guard joins adjacent chunks instead of pulsing back to original at each boundary', () => {

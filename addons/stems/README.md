@@ -1,4 +1,10 @@
-# Optional YTBM Stems — 2.4.1
+# Optional YTBM Stems — 2.4.2
+
+Version 2.4.2 prepares cached full/native-buffered stems ahead for Speed/HD
+playback, with separate stereo analysis per stem and a bounded 96 MiB PCM
+cache. Ready audio bypasses the live stretch buffer. A new rate/tuning waits
+for preparation while the committed rate continues. Unity/zero tuning uses
+direct audio. See `STEMS-2.4.2-EXPORT.md` for timing and fallback limits.
 
 ## Installation and removal
 
@@ -25,7 +31,7 @@ folder, verifies absence, and restores normal playback in every open tab.
 
 - Four inline buttons: Vocals / Drums / Bass / Other. Click mutes; modifier-click
   solos. Right-click opens genuine-stem exports, Reanalyse song and Uninstall.
-- A compact percentage beside the controls measures actual separated audio
+- A compact percentage in the black stem info box measures actual separated audio
   against the whole song. A processed partial player buffer is not 100%.
   Reanalyse song discards AI results and reruns available source audio, keeping
   the installed model, original audio store and selected mute/solo controls.
@@ -83,6 +89,8 @@ folder, verifies absence, and restores normal playback in every open tab.
 - `offscreen.html` / `offscreen.js`: extension-origin model and worker ownership.
 - `stems-inference-worker.js`: actual HT-Demucs ONNX inference.
 - `stem-timeline.js`: segmentation and normalized overlap-add.
+- `prepared-stretch.js`: independent stereo offline rendering and bounded,
+  serialized lookahead/cache lifecycle.
 - `track-source.js`: player-source discovery in the current frame's main world.
 - `track-store.js`: bounded whole-audio preloading, deferred decode and cleanup.
 - `media-observer.js` / `media-bridge.js`: early native audio-buffer observation
@@ -97,7 +105,7 @@ folder, verifies absence, and restores normal playback in every open tab.
 
 Run `npm test` for routing, lifecycle, timeline, cue, sidechain, HD speed and
 VJ checks. `bash build_release.sh` builds a fresh allowlisted, model-free ZIP.
-See `STEMS-2.4.1-EXPORT.md` in the package root for the latest update and
+See `STEMS-2.4.2-EXPORT.md` in the package root for the latest update and
 `STEMS-2.4-EXPORT.md` for the underlying 2.4 export,
 measured browser button tests, and installation instructions.
 

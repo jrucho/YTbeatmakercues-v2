@@ -202,6 +202,7 @@ function controls() {
     console,
     pitchPercentage: 0, pitchSemitone: 0, pitchSemitoneMode: false,
     speedOnlyMode: false, speedHDMode: false, speedHDTuneSemitone: 0,
+    stemState: null,
     speedHDTuneControl: null, speedHDTuneValue: null, speedHDTuneDownButton: null, speedHDTuneUpButton: null,
     pitchTarget: 'video', videoPitchPercentage: 0, loopPitchPercentage: 25,
     pitchSliderElement: {}, minimalPitchSlider: {},
@@ -303,7 +304,7 @@ test('units can change inside Speed without disabling speed mode', () => {
   assert.equal(c.speedHDMode, true);
   assert.equal(c.deckA.playbackRate, 2);
   c.updatePitch(0);
-  assert.equal(c.messages.at(-1).active, false, 'unity should bypass buffered processing');
+  assert.equal(c.messages.at(-1).active, false, 'unity bypasses processing at zero tuning');
 });
 
 test('HD tune arrows change one semitone and reset without altering fader units or speed', () => {
@@ -375,7 +376,7 @@ test('HD tuning at normal speed stays active and speed reset does not reset tuni
   assert.equal(c.speedHDTuneSemitone, 3);
   assert.equal(c.messages.at(-1).active, true);
   c.updateSpeedHDTune(0);
-  assert.equal(c.messages.at(-1).active, false, 'normal speed and zero tuning should bypass HD buffering');
+  assert.equal(c.messages.at(-1).active, false, 'normal speed and zero tuning bypass the HD buffer');
 });
 
 test('HD tuning clamps at 24 semitones and disables arrows when the engine is unavailable', () => {
@@ -434,7 +435,7 @@ test('adapter configures HQ processing, bypasses dry audio and applies octave co
     constructor() {
       this.connections = [];
       this.gain = {
-        value: 1, cancelAndHoldAtTime() {},
+        value: 1, cancelAndHoldAtTime() {}, cancelScheduledValues() {},
         setValueAtTime(value) { this.value = value; },
         linearRampToValueAtTime(value) { this.value = value; }
       };
@@ -487,6 +488,17 @@ test('adapter configures HQ processing, bypasses dry audio and applies octave co
   const count = workletNode.messages.length;
   node.port.postMessage({ active: true, rate: 0.5, tuneSemitones: 3 });
   assert.equal(workletNode.messages.length, count, 'unchanged controls should not reschedule processing');
+  node.beginSeek();
+  assert.equal(wet.gain.value, 0, 'cue must silence old buffered output');
+  const oldResetCount = workletNode.messages.filter(m => m[1] === 'configure').length;
+  node.endSeek();
+  node.beginSeek(); // Supersede the pending reset before its response arrives.
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(wet.gain.value, 0, 'obsolete cue reset must not reopen the wet path');
+  node.endSeek();
+  await Promise.resolve(); await Promise.resolve();
+  assert.equal(wet.gain.value, 1, 'latest cue schedules the wet recovery after warmup');
+  assert.equal(workletNode.messages.filter(m => m[1] === 'configure').length, oldResetCount + 2);
   node.port.postMessage({ active: false, rate: 1 });
   assert.equal(dry.gain.value, 1);
   assert.equal(wet.gain.value, 0);
@@ -525,9 +537,9 @@ test('three-step label is stable and HD engine readiness/fallback is reported in
   assert.equal(c.deckA.preservesPitch, false);
 });
 
-test('release exposes the worklet and declares version 2.4.1', () => {
+test('release exposes the worklet and declares version 2.4.2', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '2.4.1');
+  assert.equal(manifest.version, '2.4.2');
   assert.ok(manifest.content_scripts.some((entry) => entry.js[0] === 'vj-live.js'));
   assert.ok(manifest.permissions.includes('power'));
   assert.ok(manifest.web_accessible_resources.some((entry) => entry.resources.includes('worklets/speed-stretch-worklet.js')));

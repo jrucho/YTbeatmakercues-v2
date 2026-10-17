@@ -177,7 +177,7 @@ async function hooks(e = env) {
   const trigger = e.cdp.send('Runtime.evaluate', { expression: '__ytbmStemDiag()', contextId: e.world() });
   const event = await paused;
   const hookResult = await e.cdp.send('Debugger.evaluateOnCallFrame', { callFrameId: event.callFrames[0].callFrameId,
-    expression: `window.__test={getStemState,getStemAISlice,stopStemAnalysis,jumpToCue,stemAiTick,refreshStemsUI,audioContext,stemBusOutput,requestStemAnalysis,getVideoElement,videoSpeedStretchNode,
+    expression: `window.__test={getStemState,getStemAISlice,stopStemAnalysis,jumpToCue,stemAiTick,refreshStemsUI,audioContext,stemBusOutput,requestStemAnalysis,getVideoElement,videoSpeedStretchNode,buildTouchPopup,setCueAtKey,
       setMode:(mode,rate,tune=0)=>{pitchTarget='video';speedOnlyMode=mode!=='Pitch';speedHDMode=mode==='Speed HD';pitchSemitoneMode=false;updatePitch((rate-1)*100);if(speedHDMode)updateSpeedHDTune(tune);},
       stretchReady:()=>!!videoSpeedStretchNode}` });
   await e.cdp.send('Debugger.removeBreakpoint', { breakpointId }); await e.cdp.send('Debugger.resume'); await trigger;
@@ -243,7 +243,9 @@ async function nativePlayerTest() {
   await wait(async () => { const s = await e.run('__ytbmStemDiag()'); if (s.bufferedError) console.log('BUFFER ERROR', s.bufferedError); return s.analysisMode === 'buffered' && s.learnedSegments >= s.trackSegments; });
   const result = await playbackButtons(e, 'native player WebM with delayed first metadata');
   const origin = await e.page.evaluate(() => performance.timeOrigin);
-  assert.equal(await e.page.locator('.ytbm-stems-analysis-progress').textContent(), '100%');
+  assert.equal(await e.page.locator('.ytbm-stems-analysis-progress').count(), 0);
+  await e.page.locator('[data-stem="vocals"]').hover();
+  assert.match(await e.page.locator('#ytbm-tooltip').textContent(), /100% separated/);
   await e.run('window.__beforeReanalyse=__test.getStemState().ai');
   const downloads = report.modelNetwork.length;
   await e.page.locator('[data-stem="vocals"]').click({ button: 'right' });
@@ -276,6 +278,10 @@ async function playbackRates(e, label) {
     await e.run(`__test.setMode(${JSON.stringify(mode)},${rate},${tune})`);
     await e.run('__test.jumpToCue(1)');
     await e.page.locator('video.html5-main-video').first().evaluate(v => v.play());
+    if (mode !== 'Pitch') await wait(async () => {
+      const s = await e.run('__ytbmStemDiag()');
+      return s.preparedError || (s.preparedRate === rate && s.preparedTune === tune && !s.liveStretchActive);
+    });
     await sleep(450);
     const result = await e.run(`(async()=>{
       const c=__test.audioContext,node=__test.videoSpeedStretchNode.output,a=c.createAnalyser();a.fftSize=32768;
@@ -283,6 +289,7 @@ async function playbackRates(e, label) {
       let peak=-Infinity,index=0;for(let i=Math.floor(35*a.fftSize/c.sampleRate);i<Math.ceil(210*a.fftSize/c.sampleRate);i++)if(spectrum[i]>peak){peak=spectrum[i];index=i;}
       return {frequency:index*c.sampleRate/a.fftSize,peak,path:__ytbmStemDiag().pathMix,rate:__test.getVideoElement().playbackRate,mutes:__test.getStemState().mutes};
     })()`);
+    console.log('RATE SAMPLE', { mode, rate, tune, ...result });
     assert.equal(result.path, 'ai'); assert.equal(result.rate, rate);
     assert.ok(Math.abs(result.frequency - expected) < 5, `${label} ${mode} at ${rate}x should be ${expected}Hz, got ${result.frequency}`);
     assert.equal(result.mutes.vocals, true); assert.equal(result.mutes.bass, false);
@@ -332,6 +339,110 @@ async function cachedCueReadiness(e) {
   await e.page.locator('[data-stem="vocals"]').click();
   await e.page.locator('video.html5-main-video').first().evaluate(v => v.pause());
   return metrics;
+}
+async function preparedPlayback(e) {
+  await hooks(e);
+  for (const key of ['vocals', 'drums', 'other']) await e.page.locator(`[data-stem="${key}"]`).click();
+  await e.page.locator('video.html5-main-video').first().evaluate(v => v.play());
+  const metrics = [];
+  for (const [mode, rate, tune] of [['Speed', 0.5, 0], ['Speed HD', 0.5, 3], ['Speed HD', 1, 0], ['Speed', 1.5, 0]]) {
+    await e.run(`__test.setMode(${JSON.stringify(mode)},${rate},${tune})`);
+    await wait(async () => {
+      const s = await e.run('__ytbmStemDiag()');
+      if (s.preparedError) throw new Error(s.preparedError);
+      return !s.liveStretchActive && s.pathMix === 'ai' && (rate === 1 && tune === 0 ? s.preparedRate == null : s.preparedRate === rate && s.preparedTune === tune);
+    });
+    const result = await e.run(`(async()=>{
+      const c=__test.audioContext,a=c.createAnalyser();a.fftSize=256;
+      __test.videoSpeedStretchNode.output.connect(a);
+      __test.jumpToCue(1.25);
+      await new Promise(r=>setTimeout(r,60));
+      const d=new Float32Array(256);a.getFloatTimeDomainData(d);
+      __test.videoSpeedStretchNode.output.disconnect(a);
+      return {rmsAt60ms:Math.sqrt(d.reduce((s,x)=>s+x*x,0)/d.length),state:__ytbmStemDiag()};
+    })()`);
+    assert.ok(result.rmsAt60ms > 0.001, 'prepared/direct cue must sound before the old HD warmup');
+    assert.equal(result.state.liveStretchActive, false); assert.equal(result.state.pathMix, 'ai');
+    assert.ok(result.state.preparedBytes <= 96 * 1024 * 1024);
+    metrics.push({ mode, rate, tune, ...result });
+  }
+  for (const rate of [0.7, 0.8, 0.9, 1.2]) {
+    const transition = await e.run(`(()=>{
+      __test.setMode('Speed HD',${rate});
+      return {actual:__test.getVideoElement().playbackRate,state:__ytbmStemDiag()};
+    })()`);
+    assert.equal(transition.actual, transition.state.preparedRate, 'hold the committed speed until the new render is ready');
+    assert.equal(transition.state.liveStretchActive, false);
+    await sleep(20);
+  }
+  await wait(async () => { const s = await e.run('__ytbmStemDiag()');
+    if (s.preparedError) throw new Error(s.preparedError);
+    return s.preparedRate === 1.2 && !s.liveStretchActive && s.pathMix === 'ai';
+  });
+  await e.run('__test.buildTouchPopup();__test.setCueAtKey("1",1);');
+  await e.page.evaluate(() => {
+    window.__padSeeks=0;document.querySelector('video.html5-main-video').addEventListener('seeking',()=>window.__padSeeks++);
+  });
+  const pad = e.page.locator('[data-pad-index="0"]');
+  await pad.scrollIntoViewIfNeeded(); const rect = await pad.boundingBox();
+  await e.run('__test.audioContext.suspend()');
+  await e.page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  await e.page.mouse.down(); await sleep(80);
+  assert.equal(await e.run('__test.audioContext.state'), 'running', 'pad press must resume audio before release');
+  const seeksOnPress = await e.page.evaluate(() => window.__padSeeks);
+  assert.equal(seeksOnPress, 1, 'cue must seek while the pad is held down');
+  await e.page.mouse.up(); await sleep(50);
+  assert.equal(await e.page.evaluate(() => window.__padSeeks), seeksOnPress, 'release must not retrigger the cue');
+  await e.page.locator('video.html5-main-video').first().evaluate(v => v.pause());
+  await e.run('__test.setMode("Pitch",1)');
+  for (const key of ['vocals', 'drums', 'other']) await e.page.locator(`[data-stem="${key}"]`).click();
+  console.log('PREPARED PLAYBACK', JSON.stringify(metrics));
+  return { metrics, seeksOnPress, releaseRetriggered: false };
+}
+async function playbackTransitions(e) {
+  await hooks(e);
+  for (const key of ['vocals', 'drums', 'other']) await e.page.locator(`[data-stem="${key}"]`).click();
+  const results = [];
+  for (const mode of ['Speed', 'Speed HD']) {
+    await e.run(`__test.setMode(${JSON.stringify(mode)},0.65)`);
+    await e.page.locator('video.html5-main-video').first().evaluate(v => v.play());
+    await sleep(500);
+    const fader = [];
+    for (const rate of [0.7, 0.8, 0.95, 1, 1.05, 1.2, 0.9]) {
+      fader.push(await e.run(`(()=>{
+        const ai=__test.getStemState().ai,c=__test.audioContext;
+        const old=ai.sources.find(s=>s.startAt<=c.currentTime&&s.startAt+s.duration>c.currentTime);
+        __test.setMode(${JSON.stringify(mode)},${rate});
+        return {rate:${rate},path:ai.pathMix,retained:!old||ai.sources.includes(old),scheduledRates:ai.sources.map(s=>s.rate),actualRates:ai.sources.map(s=>s.nodes[0].playbackRate.value)};
+      })()`));
+      await sleep(35);
+      fader.at(-1).renderedRates = await e.run('__test.getStemState().ai.sources.map(s=>s.nodes[0].playbackRate.value)');
+    }
+    for (const sample of fader) {
+      assert.equal(sample.path, 'ai'); assert.equal(sample.retained, true);
+      assert.ok(sample.scheduledRates.every(rate => Math.abs(rate - sample.rate) < 1e-6), JSON.stringify(sample));
+      assert.ok(sample.renderedRates.every(rate => Math.abs(rate - sample.rate) < 1e-6), JSON.stringify(sample));
+    }
+    const cueOutput = await e.run(`(async()=>{
+      const c=__test.audioContext,a=c.createAnalyser();a.fftSize=256;
+      __test.videoSpeedStretchNode.output.connect(a);
+      const rms=()=>{const d=new Float32Array(256);a.getFloatTimeDomainData(d);return Math.sqrt(d.reduce((s,x)=>s+x*x,0)/d.length);};
+      __test.jumpToCue(1);
+      await new Promise(r=>setTimeout(r,60));const duringWarmup=rms();
+      await new Promise(r=>setTimeout(r,300));const recovered=rms();
+      __test.videoSpeedStretchNode.output.disconnect(a);
+      return {duringWarmup,recovered,path:__ytbmStemDiag().pathMix};
+    })()`);
+    assert.ok(cueOutput.duringWarmup < 0.00001, 'cue must not replay old spectral history');
+    assert.ok(cueOutput.recovered > 0.001, 'fresh cue audio must recover after the existing engine warmup');
+    assert.equal(cueOutput.path, 'ai');
+    results.push({ mode, fader, cueOutput });
+    await e.page.locator('video.html5-main-video').first().evaluate(v => v.pause());
+  }
+  await e.run('__test.setMode("Pitch",1)');
+  for (const key of ['vocals', 'drums', 'other']) await e.page.locator(`[data-stem="${key}"]`).click();
+  console.log('SPEED TRANSITIONS', JSON.stringify(results));
+  return results;
 }
 async function darkTooltips(e) {
   const cue = e.page.locator('.ytbm-minimal-bar button').filter({ hasText: 'Cues' }).first();
@@ -408,8 +519,12 @@ async function liveYouTubeTest() {
         await page.locator('video.html5-main-video').first().evaluate(v=>v.play());
         await sleep(350);
         await page.locator('[data-stem="vocals"]').click();
-        await sleep(350);
-        const sample=await run('__ytbmStemDiag()');
+        const sample=await wait(async()=>{
+          const state=await run('__ytbmStemDiag()');
+          if(state.preparedError)throw new Error(state.preparedError);
+          const ready=mode==='Pitch'||(state.preparedRate===rate&&state.preparedTune===(mode==='Speed HD'?tune:0)&&!state.liveStretchActive);
+          return ready&&state.pathMix==='ai'?state:false;
+        });
         assert.equal(sample.pathMix,'ai');
         rateStates.push({mode,rate,tune,path:sample.pathMix});
         await page.locator('[data-stem="vocals"]').click();
@@ -438,11 +553,27 @@ async function liveYouTubeTest() {
       await scenario('fresh UI installation starts working in the same document without refresh', () => playbackButtons(env, 'fresh UI install'));
       return;
     }
+    if (process.env.YTBM_TRANSITIONS_ONLY) {
+      await scenario('continuous fader retiming and cue history isolation in Speed and Speed HD', () => playbackTransitions(env));
+      return;
+    }
+    if (process.env.YTBM_PREPARED_ONLY) {
+      await scenario('prepared Speed/HD cues and unity bypass; pads trigger before release', () => preparedPlayback(env));
+      return;
+    }
+    if (process.env.YTBM_LIVE_ONLY) {
+      await scenario('all buttons and cues on a real YouTube page', liveYouTubeTest);
+      await env.page.close();
+      await wait(async () => { const s=await inspect();return !s.temporaryDownloads.length&&!s.inferenceWorkers.length&&!s.bufferedAudio.length&&!s.preloadedTracks.length; });
+      await snapshot('video sessions closed; source files and workers reclaimed');
+      return;
+    }
     if (process.env.YTBM_RELEASE_ONLY) {
       await scenario('all buttons and cues on actual direct-source audio', () => playbackButtons(env, 'direct source'));
       await scenario('cached cues schedule on decoder readiness with the 150 ms poll disabled', () => cachedCueReadiness(env));
       await scenario('shared black tooltips, compact stem/download text and untouched host titles', () => darkTooltips(env));
       if(process.env.YTBM_RATE_TESTS) await scenario('stem playback follows Pitch, Speed and Speed HD with preserved mute state', () => playbackRates(env, 'direct source'));
+      if(process.env.YTBM_RATE_TESTS) await scenario('prepared Speed/HD cues and unity bypass; pads trigger before release', () => preparedPlayback(env));
       await scenario('player element replacement does not bind the hidden cue deck or bypass stems', async () => {
         await env.page.locator('video.html5-main-video').first().evaluate(video => {
           const next = video.cloneNode(false), parent = video.parentNode;
