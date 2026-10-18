@@ -16,6 +16,12 @@ Mark cue points, loop audio/video, apply live effects, and customize your beatma
 
 The **YouTube Beatmaker Cues** extension supports precise pitch adjustments, audio and video looping, effects toggling, and intuitive cue management. Use keyboard shortcuts or the detailed Advanced Panel for quick control.
 
+## New in 2.4.5
+- Keep existing stem audio playing while changed Speed/Speed HD settings prepare; render available analysed subsections rather than waiting for unrelated neighbouring windows.
+- Saved **Automatic processing On/Off** and **Process/Resume this video** actions in Stems settings. Ready stems remain usable when inference is Off; automatic processing waits for more chunks until the complete accessible song is separated.
+- The Cues mini-bar switch remembers your open/closed choice across videos and reloads in the tab session.
+- See **[CONTINUITY-2.4.5.md](CONTINUITY-2.4.5.md)** for exact behavior, verification and availability limits.
+
 ## New in 2.4.4
 - Icon-only **Cues** switch next to **CC** in YouTube's native player controls. The mini bar starts hidden for each video; click the cue-pad icon to show/hide it.
 - Uses YouTube's existing control-group surface without an extra square/circle hover highlight. Supports keyboard activation, replaced control groups and fullscreen.

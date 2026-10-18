@@ -14,7 +14,7 @@ destination = sys.argv[1] or f'ytbeatmakercues-{version}.zip'
 files = [root / name for name in (
     'manifest.json', 'background.js', 'content.js', 'ui-tooltips.js', 'player-cues-button.js', 'video-region-loop.js', 'vj-live.js', 'style.css',
     'popup.html', 'options.html', 'options.js', 'icon.png', 'README.md',
-    'THIRD_PARTY_NOTICES.md', 'STEMS-2.4-EXPORT.md', 'STEMS-2.4.1-EXPORT.md', 'STEMS-2.4.2-EXPORT.md', 'REGION-LOOP-2.4.3.md', 'PLAYER-CUES-2.4.4.md', 'SPEED-STABILITY.md',
+    'THIRD_PARTY_NOTICES.md', 'STEMS-2.4-EXPORT.md', 'STEMS-2.4.1-EXPORT.md', 'STEMS-2.4.2-EXPORT.md', 'REGION-LOOP-2.4.3.md', 'PLAYER-CUES-2.4.4.md', 'CONTINUITY-2.4.5.md', 'SPEED-STABILITY.md',
 )]
 for directory in ('sounds', 'worklets', 'addons/stems', 'node_modules/signalsmith-stretch'):
     files.extend(path for path in (root / directory).rglob('*') if path.is_file())

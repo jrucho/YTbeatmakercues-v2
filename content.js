@@ -913,6 +913,8 @@ if (typeof randomCuesButton !== "undefined" && randomCuesButton) {
       stemsDropdownMin = null,
       stemsGridMin = null,
       stemsStatusMin = null,
+      stemsAutoProcessingBtn = null,
+      stemsProcessVideoBtn = null,
       stemsDownloadBtn = null,
       stemsDownloadAllBtn = null,
       stemsProgressWrap = null,
@@ -2545,7 +2547,7 @@ function toggleBlindMode() {
     }
     console.log("Blind mode is now OFF");
     // Optionally restore the minimal UI automatically when leaving blind mode:
-    if (minimalActive) goMinimalUI({ show: minimalVisible });
+    if (minimalActive) goMinimalUI({ show: minimalVisible, persist: false });
   }
   updateMinimalToggleButtonState();
 }
@@ -3576,10 +3578,10 @@ function attachAudioPriming() {
 
 document.addEventListener('DOMContentLoaded', () => {
   // Ensure minimal view is active immediately
-  if (typeof goMinimalUI === "function") goMinimalUI({ show: minimalVisible });
+  if (typeof goMinimalUI === "function") goMinimalUI({ show: minimalVisible, persist: false });
   // Also launch minimal view after audio context is ready
   ensureAudioContext()
-    .then(() => { if (typeof goMinimalUI === "function") goMinimalUI({ show: minimalVisible }); })
+    .then(() => { if (typeof goMinimalUI === "function") goMinimalUI({ show: minimalVisible, persist: false }); })
     .catch(console.error);
 
   // If no cue points are loaded, generate random cues
@@ -4736,7 +4738,15 @@ const YTBM_ICON_PATHS = {
 const MINIMAL_POS_KEY = "ytbm_minimalPos";
 let minimalToggleButton = null;
 let playerCuesControl = null;
-let minimalVisible = false;
+let minimalVisible = readMinimalUIVisibility();
+
+function readMinimalUIVisibility() {
+  try { return sessionStorage.getItem('ytbm_miniVisible') === '1'; } catch { return false; }
+}
+
+function persistMinimalUIVisibility(visible) {
+  try { sessionStorage.setItem('ytbm_miniVisible', visible ? '1' : '0'); } catch {}
+}
 
 function ensureMinimalToggleButton() {
   if (!shouldRunOnThisPage()) return;
@@ -4752,7 +4762,7 @@ function ensureMinimalToggleButton() {
           goMinimalUI();
         }
       },
-      onVideoChange: hideMinimalUIBar,
+      onVideoChange: applyMinimalUIVisibility,
       onFullscreen: mountMinimalUIContainer,
     });
   } else playerCuesControl.ensure();
@@ -4770,8 +4780,9 @@ function applyMinimalUIVisibility() {
   updateMinimalToggleButtonState();
 }
 
-function hideMinimalUIBar() {
+function hideMinimalUIBar({ persist = true } = {}) {
   minimalVisible = false;
+  if (persist) persistMinimalUIVisibility(false);
   applyMinimalUIVisibility();
   if (stemState) { stemState.dropdownOpen = false; refreshStemsUI(); closeStemContextMenu(); }
   if (regionLoopController?.menu) regionLoopController.menu.style.display = 'none';
@@ -5500,7 +5511,7 @@ function jumpToCue(targetTime) {
 let videoCheckInterval = setInterval(() => {
   regionLoopController?.sync();
   if (stemState?.installed && stemState.videoId !== getStemVideoId()) clearStemSession("video changed");
-  if (stemState?.installed && !stemState.analysisRequested && !stemState.analysisCancelled && getVideoElement()?.readyState >= 1) requestStemAnalysis();
+  if (stemState?.installed && stemState.autoProcess !== false && !stemState.analysisRequested && !stemState.analysisCancelled && getVideoElement()?.readyState >= 1) requestStemAnalysis();
   if (audioContext) {
     let vid = getVideoElement();
     if (vid && !vid._audioConnected) {
@@ -12052,6 +12063,7 @@ function analyseBPMFromEnergies(energies) {
 function goAdvancedUI() {
   minimalActive = false;
   minimalVisible = false;
+  persistMinimalUIVisibility(false);
   updateMinimalToggleButtonState();
   if (panelContainer) panelContainer.style.display = "block";
   // Remove any minimal UI containers present in the DOM.
@@ -12066,10 +12078,11 @@ function goAdvancedUI() {
   if (window.refreshMinimalState) window.refreshMinimalState();
 }
 
-function goMinimalUI({ show = true } = {}) {
+function goMinimalUI({ show = true, persist = true } = {}) {
   if (blindMode) return; // do not show the minimal UI if blind mode is active
   minimalActive = true;
   minimalVisible = show;
+  if (persist) persistMinimalUIVisibility(show);
   updateMinimalToggleButtonState();
   if (panelContainer) panelContainer.style.display = "none";
   // Rebuild the minimal UI if it doesn't exist.
@@ -13005,6 +13018,9 @@ function getStemState() {
       downloadAbort: null,
       engine: "original",
       analysisRequested: false,
+      autoProcess: true,
+      preferencesReady: false,
+      processingPaused: false,
       analysisStartTime: null,
       preloadStatus: "idle",
       preloadAttempts: 0,
@@ -13101,6 +13117,8 @@ function ensureStemSession() {
 function resetStemAnalysisSession() {
   const st = getStemState();
   st.analysisRequested = false;
+  st.processingPaused = st.autoProcess === false;
+  st.analysisCancelled = st.autoProcess === false;
   st.seekHold = false;
   st.analysisStartTime = null;
   teardownBufferedSubscription();
@@ -13124,7 +13142,7 @@ function resetStemAnalysisSession() {
 
 function queueStemPreload() {
   const st = getStemState();
-  if (st.contextInvalidated || !st.installed || st._preloadTimer || st.preloadAttempts >= 6 || st.preloadStatus === "ready") return;
+  if (st.contextInvalidated || !st.installed || st.processingPaused || st._preloadTimer || st.preloadAttempts >= 6 || st.preloadStatus === "ready") return;
   st._preloadTimer = setTimeout(() => { st._preloadTimer = null; preloadStemSong(); }, 5000);
 }
 
@@ -13136,7 +13154,7 @@ function teardownBufferedSubscription() {
 
 function ensureBufferedSubscription() {
   const st = getStemState();
-  if (!st.installed || !st.analysisRequested || st._bufferedUnsub) return;
+  if (!st.installed || !st.analysisRequested || st.processingPaused || st._bufferedUnsub) return;
   if (!st.bufferedId) st.bufferedId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const track = st.bufferedId;
   const videoId = st.videoId;
@@ -13180,7 +13198,7 @@ function ensureBufferedSubscription() {
 async function stemMaybeOpenBuffered(ai) {
   const st = getStemState();
   const info = st.bufferedInfo;
-  if (!ai || st.ai !== ai || !st.analysisRequested || !info || info.track !== st.bufferedId) return;
+  if (!ai || st.ai !== ai || !st.analysisRequested || st.processingPaused || !info || info.track !== st.bufferedId) return;
   if (ai.mode === "track") return;
   const frames = Number(info.frames) || 0;
   if (!Number.isInteger(frames) || frames < 1 || frames > STEM_SR * 600) return;
@@ -13235,7 +13253,7 @@ async function stemMaybeOpenBuffered(ai) {
 
 async function preloadStemSong() {
   const st = ensureStemSession();
-  if (!st.installed || st.preloadBusy || ["ready", "loading"].includes(st.preloadStatus) || st.preloadAttempts >= 6) return;
+  if (!st.installed || st.processingPaused || st.preloadBusy || ["ready", "loading"].includes(st.preloadStatus) || st.preloadAttempts >= 6) return;
   if (!st.preloadId) st.preloadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const track = st.preloadId;
   st.preloadBusy = true;
@@ -13259,7 +13277,7 @@ async function preloadStemSong() {
 
 function requestStemAnalysis() {
   const st = ensureStemSession();
-  if (!st.installed || !getVideoElement()) return;
+  if (!st.installed || st.processingPaused || !getVideoElement()) return;
   if (!stemContextAvailable()) return;
   st.analysisCancelled = false;
   ensureStemResourcePort();
@@ -13267,7 +13285,11 @@ function requestStemAnalysis() {
   // the same video's separation session is already running.
   if (st.analysisRequested && st.ai && !st.ai.failed && stemBusContext === audioContext &&
       (typeof deckA === "undefined" || deckA === getVideoElement())) {
+    if (!st.ai.worker) startStemWorker(st.ai);
+    if (st.ai.mode === 'capture') ensureStemTap();
     ensureBufferedSubscription();
+    stemMaybeOpenBuffered(st.ai);
+    stemMaybeOpenTrack(st.ai);
     if (audioContext?.state === "suspended") audioContext.resume().catch(() => {});
     return;
   }
@@ -13278,7 +13300,7 @@ function requestStemAnalysis() {
   }
   const videoId = st.videoId;
   ensureAudioContext().then(() => {
-    if (!st.installed || !st.analysisRequested || st.videoId !== videoId) return;
+    if (!st.installed || !st.analysisRequested || st.processingPaused || st.videoId !== videoId) return;
     ensureStemBus();
     applyAllFXRouting();
     ensureBufferedSubscription();
@@ -13318,6 +13340,70 @@ function stopStemAnalysis({ keepSource = false } = {}) {
   refreshStemsUI();
 }
 
+async function loadStemPreferences() {
+  const st = getStemState();
+  if (st.preferencesReady) return;
+  if (st._preferencesPromise) return st._preferencesPromise;
+  st._preferencesPromise = (async () => {
+    try {
+      const saved = await chrome.storage.local.get?.({ ytbmStemsAutoProcess: true });
+      if (!st.preferencesReady) {
+        st.autoProcess = saved?.ytbmStemsAutoProcess !== false;
+        if (!st.analysisRequested) st.processingPaused = !st.autoProcess;
+      }
+    } catch {}
+    st.preferencesReady = true;
+  })();
+  await st._preferencesPromise;
+}
+
+function pauseStemProcessing() {
+  const st = getStemState(), ai = st.ai;
+  st.processingPaused = true; st.analysisCancelled = true;
+  clearTimeout(st._preloadTimer); st._preloadTimer = null;
+  teardownBufferedSubscription(); teardownStemTap();
+  if (ai) {
+    // Keep separated PCM and the playback scheduler. Only the inference job
+    // stops, so a background-processing preference does not cut selected stems.
+    ai.pendingQueue = ai.pendingQueue || [];
+    if (ai.mode === 'capture' && ai.anchor) {
+      for (const segment of ai.queue?.flush?.() || []) ai.pendingQueue.push(segment);
+      ai.anchor.csEnd = ai.captureSamples;
+      ai.history = [...ai.history || [], ai.anchor].slice(-50); ai.anchor = null;
+      const nextIndex = Math.ceil(ai.captureSamples / YTBMStemTimeline.HOP);
+      ai.captureSamples = nextIndex * YTBMStemTimeline.HOP;
+      ai.queue = new YTBMStemTimeline.SegmentQueue(nextIndex);
+      ai.rsCarry = { frac: 0, prevL: 0, prevR: 0 };
+    }
+    const queued = new Set(ai.pendingQueue.map(job => job.index));
+    if (ai.mode === 'track' || ai.mode === 'buffered') {
+      for (const job of ai.pending?.values() || []) if (job.epoch === ai.epoch && !queued.has(job.index)) {
+        ai.pendingQueue.unshift({ index: job.index, validLength: job.validLength }); queued.add(job.index);
+      }
+    }
+    ai.pending?.clear(); ai.inFlight = false; ai.captureActive = false;
+    ai.worker?.terminate(); ai.worker = null; ai.workerReady = false; ai.starting = false;
+  }
+  refreshStemsUI();
+}
+
+function resumeStemProcessing() {
+  const st = ensureStemSession();
+  st.processingPaused = false; st.analysisCancelled = false;
+  if (st.preloadStatus === 'unavailable') st.preloadAttempts = 0;
+  requestStemAnalysis(); refreshStemsUI();
+}
+
+function setStemAutomaticProcessing(enabled, persist = true) {
+  const st = getStemState();
+  st.autoProcess = !!enabled; st.preferencesReady = true;
+  if (persist) {
+    try { chrome.storage.local.set({ ytbmStemsAutoProcess: st.autoProcess }).catch(() => {}); } catch {}
+  }
+  if (enabled) resumeStemProcessing();
+  else pauseStemProcessing();
+}
+
 function restartStemAnalysis() {
   const st = ensureStemSession();
   if (!st.installed || !stemContextAvailable()) return;
@@ -13326,6 +13412,7 @@ function restartStemAnalysis() {
   st.seekHold = !!(st.seekHold || (st.ai?.hasPlayedSplit && stemsNeedSplit()));
   stopStemAnalysis({ keepSource: true });
   st.analysisRequested = true;
+  st.processingPaused = false;
   st.analysisCancelled = false;
   st.analysisStartTime = 0;
   if (st.preloadStatus === "unavailable") st.preloadAttempts = 0;
@@ -13389,7 +13476,7 @@ function getStemBusOutput() { return stemBusOutput; }
 
 // Build stamp: verify in console that the loaded copy is current.
 // If this is missing or stale, the extension was loaded from an old folder.
-window.__ytbmBuild = { version: "2.4.4", flavor: "native-player-cues-switch", built: "2026-10-18" };
+window.__ytbmBuild = { version: "2.4.5", flavor: "continuous-stem-transitions", built: "2026-10-18" };
 
 // Live diagnostic for console checks: samples, loopers, audio graph.
 window.__ytbmAudioDiag = function () {
@@ -13414,7 +13501,7 @@ window.__ytbmStemDiag = function () {
   try {
     const st = getStemState();
     return {
-      extVersion: st.contextInvalidated ? window.__ytbmBuild?.version || "2.4.4" : chrome?.runtime?.getManifest?.().version || null,
+      extVersion: st.contextInvalidated ? window.__ytbmBuild?.version || "2.4.5" : chrome?.runtime?.getManifest?.().version || null,
       contextInvalidated: !!st.contextInvalidated,
       audioRunning: !!audioContext && audioContext.state === "running",
       videoGainConnected: !!videoGain,
@@ -13433,6 +13520,8 @@ window.__ytbmStemDiag = function () {
       lastInferenceMs: st.ai?.lastInferenceMs || null,
       providerErrors: st.ai?.providerErrors || [],
       analysisRequested: !!st.analysisRequested,
+      automaticProcessing: st.autoProcess !== false,
+      processingPaused: !!st.processingPaused,
       analysisStartTime: st.analysisStartTime,
       analysisMode: st.ai?.mode || "idle",
       preparedRate: st.ai?.preparedApplied?.rate || null,
@@ -13580,7 +13669,7 @@ function stemsInterleave(left, right) {
 async function ensureStemTapWorklet() {
   const st = getStemState();
   if (st._tapReady || !audioContext || audioContext.state === "closed" || !stemBusInput) return false;
-  if (!st.installed || !st.analysisRequested) return false;
+  if (!st.installed || !st.analysisRequested || st.processingPaused) return false;
   if (!stemContextAvailable()) return false;
   const session = st.videoId;
   const tapGeneration = st._tapGeneration || 0;
@@ -13696,7 +13785,7 @@ function createStemEngineClient() {
 }
 function ensureStemAI() {
   const st = getStemState();
-  if (!st.installed || !st.analysisRequested) return null;
+  if (!st.installed || !st.analysisRequested || st.processingPaused) return null;
   if (!stemContextAvailable()) return null;
   if (st.ai && (st.ai.ready || st.ai.starting) && !st.ai.failed) {
     if (!st.ai.timer) {
@@ -13746,10 +13835,18 @@ function ensureStemAI() {
   try {
     ai.timer = setInterval(stemAiTick, 150);
   } catch {}
+  startStemWorker(ai);
+  return ai;
+}
+
+function startStemWorker(ai) {
+  const st = getStemState();
+  if (st.ai !== ai || st.processingPaused || ai.worker || !st.installed) return;
+  ai.workerReady = false; ai.starting = true;
   try {
     const worker = createStemEngineClient();
     ai.worker = worker;
-    worker.onmessage = (ev) => { if (st.ai === ai && st.installed) stemAiOnWorkerMessage(ev.data || {}); };
+    worker.onmessage = (ev) => { if (st.ai === ai && st.installed && !st.processingPaused && ai.worker === worker) stemAiOnWorkerMessage(ev.data || {}); };
     worker.onerror = (err) => {
       ai.failed = "worker error: " + ((err && err.message) || err);
       ai.starting = false;
@@ -13770,18 +13867,18 @@ function ensureStemAI() {
     ai.starting = false;
     try { refreshStemsUI(); } catch {}
   }
-  return ai;
 }
 
 async function stemMaybeOpenTrack(ai) {
   const st = getStemState();
-  if (!ai || st.ai !== ai || !st.analysisRequested || st.preloadStatus !== "ready" || ai.trackOpening || ai.trackAttempted) return;
+  if (!ai || st.ai !== ai || !st.analysisRequested || st.processingPaused || st.preloadStatus !== "ready" || ai.trackOpening || ai.trackAttempted) return;
   ai.trackOpening = true;
   ai.trackAttempted = true;
   const track = st.preloadId;
   try {
     const response = await sendToBackground({ type: "ytbm-stems-track-open", track });
     if (st.ai !== ai || track !== st.preloadId || !st.analysisRequested) return;
+    if (st.processingPaused) { ai.trackAttempted = false; return; }
     if (!response?.ok) throw new Error(response?.error || "Whole song unavailable");
     const plan = YTBMStemTimeline.planTrack(response.frames, ai.requestedAt);
     ai.preparedCache?.close(); ai.preparedCache = null; ai.preparedApplied = null;
@@ -13809,8 +13906,9 @@ async function stemMaybeOpenTrack(ai) {
 function stemAiOnWorkerMessage(msg) {
   const st = getStemState();
   const ai = st.ai;
-  if (!ai) return;
+  if (!ai || st.processingPaused) return;
   if (msg.type === "ready") {
+    ai.workerReady = true;
     ai.ready = true;
     ai.starting = false;
     ai.ep = msg.ep || "wasm";
@@ -13876,7 +13974,7 @@ function stemAiOnWorkerMessage(msg) {
 function stemAiPump() {
   const st = getStemState();
   const ai = st.ai;
-  if (!ai || !ai.ready || ai.failed || ai.inFlight || !ai.worker) return;
+  if (!ai || st.processingPaused || !ai.ready || ai.workerReady === false || ai.failed || ai.inFlight || !ai.worker) return;
   const seg = ai.pendingQueue.shift();
   if (!seg) return;
   ai.inFlight = true;
@@ -13896,7 +13994,7 @@ function stemAiPump() {
 function stemAiCaptureFrames(interleaved48, startTime) {
   const st = getStemState();
   const ai = st.ai;
-  if (!st.analysisRequested || !ai || ai.mode === "track" || ai.mode === "buffered" || !ai.captureActive || ai.failed) return;
+  if (!st.analysisRequested || st.processingPaused || !ai || ai.mode === "track" || ai.mode === "buffered" || !ai.captureActive || ai.failed) return;
   if (!Number.isFinite(startTime) || startTime < (ai.captureAfter || 0)) return;
   const video = getVideoElement();
   if (!video || video.paused || video.seeking || Math.abs(video.playbackRate - 1) >= 0.02) return;
@@ -13954,7 +14052,7 @@ function stemAiStopFuture(fadeSeconds = 0) {
   const ai = getStemState().ai;
   if (!ai) return;
   ai.generation = (ai.generation || 0) + 1;
-  for (const s of ai.sources) {
+  for (const s of [...ai.sources, ...ai.retiringSources || []]) {
     for (const [index, node] of (s.nodes || []).entries()) {
       if (fadeSeconds && s.startAt <= audioContext.currentTime) {
         const envelope = s.gains?.[index];
@@ -13976,8 +14074,37 @@ function stemAiStopFuture(fadeSeconds = 0) {
     }
   }
   ai.sources = [];
+  ai.retiringSources = [];
   ai.schedHorizon = 0;
   ai.nextFadeInSeconds = null;
+}
+
+function stemAiBeginTransition(ai) {
+  // Leave the current sources scheduled until replacement buffers really
+  // exist. Rendering/copying PCM can outlast a small wall-clock fade budget.
+  ai.retiringSources = [...ai.retiringSources || [], ...ai.sources];
+  ai.sources = []; ai.generation = (ai.generation || 0) + 1;
+  ai.schedHorizon = 0; ai.nextFadeInSeconds = null;
+}
+
+function stemAiFinishTransition(ai, firstStart) {
+  const sources = ai.retiringSources;
+  if (!sources?.length) return;
+  ai.retiringSources = [];
+  const start = Math.max(audioContext.currentTime, firstStart), end = start + 0.012;
+  for (const source of sources) {
+    for (const [i, node] of source.nodes.entries()) {
+      const envelope = source.gains?.[i];
+      try {
+        if (source.startAt >= end) { node.stop(); node.disconnect(); envelope?.disconnect(); continue; }
+        if (envelope?.gain.cancelAndHoldAtTime) envelope.gain.cancelAndHoldAtTime(start);
+        else { envelope?.gain.cancelScheduledValues(start); envelope?.gain.setValueAtTime(1, start); }
+        envelope?.gain.linearRampToValueAtTime(0, end);
+        node.onended = () => { try { node.disconnect(); envelope?.disconnect(); } catch {} };
+        node.stop(end);
+      } catch { try { node.stop(); node.disconnect(); envelope?.disconnect(); } catch {} }
+    }
+  }
 }
 
 function stemAiHeld(param, when) {
@@ -14066,13 +14193,13 @@ function stemAudioRegion(ai, video) {
   if (control.clock && (control.clock.owner !== ai || control.clock.epoch !== ai.epoch)) control.dropClock();
   const start = Math.round(range.in * STEM_SR), end = Math.round(range.out * STEM_SR);
   if (ai.timeline.coverage(start, end) < 0.999) { control.dropClock(); return null; }
-  if (stemPreparedParameters()) {
+  if (stemPreparedParameters() && !ai.preparedDirectHold) {
     const applied = ai.preparedApplied;
     if (!applied) return null;
     const size = YTBMPreparedStretch.TILE_SECONDS;
     const head = stemPreparedTile(Math.floor(range.in / size), applied);
     const tail = stemPreparedTile(Math.floor((range.out - 1e-7) / size), applied);
-    if (!control.clock && (!head || !tail || head.end <= range.in || tail.end < range.out - 1e-6)) return null;
+    if (!control.clock && (!head || !tail || head.from > range.in + 1 / STEM_SR || head.end <= range.in || tail.end < range.out - 1e-6)) return null;
   }
   if (!control.clock && (video.seeking || video.readyState < 2)) return null;
   const previous = control.clock;
@@ -14122,7 +14249,7 @@ function stemReadPreparedRegion(channel, media, frames, parameters, range) {
     if (range && range.out - media < 2 / STEM_SR) media = range.in;
     const index = Math.floor((media + 1e-7) / YTBMPreparedStretch.TILE_SECONDS);
     const tile = stemPreparedTile(index, parameters);
-    if (!tile) return null;
+    if (!tile || tile.from > media + 1 / STEM_SR) return null;
     const offset = Math.max(0, Math.round((media - tile.from) / parameters.rate * STEM_SR));
     const limit = range ? Math.min(tile.end, range.out) : tile.end;
     const count = Math.min(frames - written, tile.channels[channel].length - offset,
@@ -14158,16 +14285,16 @@ function stemPreparedTile(index, parameters) {
 
 function stemRequestPreparedTile(index, parameters) {
   const st = getStemState(), ai = st.ai;
-  const SR = STEM_SR, size = YTBMPreparedStretch.TILE_SECONDS * SR;
-  const from = index * size;
-  const coreEnd = Math.min(from + size, ai.trackFrames);
-  const end = Math.min(coreEnd + Math.ceil(0.08 * SR), ai.trackFrames);
-  const pad = Math.ceil(YTBMPreparedStretch.PAD_SECONDS * SR * Math.max(1, parameters.rate));
-  const readFrom = Math.max(0, from - pad), readEnd = Math.min(ai.trackFrames, end + pad);
-  if (coreEnd <= from || ai.timeline.coverage(readFrom, readEnd) < 0.999) return;
+  const SR = STEM_SR;
+  const plan = YTBMPreparedStretch.planTile({ segments: ai.timeline.segments, trackFrames: ai.trackFrames,
+    index, rate: parameters.rate, sampleRate: SR, hop: YTBMStemTimeline.HOP,
+    priority: (Number(getVideoElement()?.currentTime) || 0) * SR });
+  if (!plan) return;
+  const { from, coreEnd, end, readFrom, readEnd } = plan;
+  if (ai.timeline.coverage(readFrom, readEnd) < 0.999) return;
   const old = stemPreparedTile(index, parameters);
-  if (old && old.coreEnd >= coreEnd / SR) return;
-  const key = `${parameters.tag}/${index}/${coreEnd}/${readEnd}`;
+  if (old && old.from <= from / SR && old.coreEnd >= coreEnd / SR) return;
+  const key = `${parameters.tag}/${index}/${from}/${coreEnd}/${readFrom}/${readEnd}`;
   const cache = ai.preparedCache;
   if (cache.jobs.has(key)) return;
   cache.request(key, parameters.tag, () => {
@@ -14190,6 +14317,7 @@ function stemRequestPreparedTile(index, parameters) {
     if (st.ai !== ai || ai.preparedCache !== cache) return;
     ai.preparedError = String(error.message || error);
     ai.preparedDisabled = true;
+    ai.preparedDirectHold = false;
     ai.preparedApplied = null;
     stemAiStopFuture(); syncSpeedPlayback(); stemAiTick();
   });
@@ -14199,9 +14327,17 @@ function stemPrepareAhead() {
   const ai = getStemState().ai;
   const parameters = stemPreparedParameters();
   if (!parameters) {
-    if (ai?.preparedApplied) { stemAiStopFuture(0.003); ai.preparedApplied = null; ai.lastVt = null; }
+    if (ai) ai.preparedDirectHold = false;
+    if (ai?.preparedApplied) { stemAiBeginTransition(ai); ai.preparedApplied = null; ai.lastVt = null; }
     ai?.preparedCache?.setTarget(null);
     return;
+  }
+  if (!stemsNeedSplit()) ai.preparedDirectHold = false;
+  else if (!ai.preparedApplied && ai.pathMix === 'ai' &&
+      Math.abs((Number(getVideoElement()?.playbackRate) || 1) - 1) < 1e-8 && !videoSpeedStretchNode?.isActive?.()) {
+    // No rendering is needed to continue the already-playing unity stems.
+    // Do not cut this queue while the first changed speed/tuning prepares.
+    ai.preparedDirectHold = true;
   }
   if (!ai.preparedCache) {
     ai.preparedCache = new YTBMPreparedStretch.Cache();
@@ -14224,14 +14360,34 @@ function stemPrepareAhead() {
     stemRequestPreparedTile(Math.floor(loop.in / size), parameters);
     stemRequestPreparedTile(Math.floor((loop.out - 1e-7) / size), parameters);
   }
-  const tile = stemPreparedTile(index, parameters);
-  if (tile && tile.end >= vt + Math.min(0.12 * parameters.rate, Math.max(0, ai.trackFrames / STEM_SR - vt - 0.002)) &&
+  const playhead = loop && typeof regionLoopController !== 'undefined'
+    ? regionLoopController?.positionAt?.(audioContext.currentTime) ?? vt : vt;
+  const need = loop ? 0.5 * parameters.rate : Math.min(0.5 * parameters.rate, Math.max(0, ai.trackFrames / STEM_SR - vt - 0.002));
+  if (stemPreparedHasCoverage(playhead, need, parameters, loop) &&
       stemsNeedSplit() && ai.preparedApplied?.tag !== parameters.tag) {
-    stemAiStopFuture(0.003);
+    stemAiBeginTransition(ai);
+    ai.preparedDirectHold = false;
     ai.preparedApplied = parameters;
     ai.lastRate = parameters.rate; ai.lastVt = null;
     syncSpeedPlayback();
+    if (typeof refreshPitchUI === 'function') refreshPitchUI();
   }
+}
+
+function stemPreparedHasCoverage(media, seconds, parameters, range = null) {
+  let cursor = media, remaining = seconds, guard = 0;
+  if (range) cursor = range.in + ((cursor - range.in) % (range.out - range.in) + range.out - range.in) % (range.out - range.in);
+  while (remaining > 0 && guard++ < 64) {
+    const index = Math.floor((cursor + 1e-7) / YTBMPreparedStretch.TILE_SECONDS);
+    const tile = stemPreparedTile(index, parameters);
+    if (!tile || tile.from > cursor + 1 / STEM_SR || tile.coreEnd <= cursor) return false;
+    const end = Math.min(tile.coreEnd, range?.out ?? Infinity);
+    const covered = end - cursor;
+    if (covered <= 0) return false;
+    remaining -= covered;
+    cursor = range && end >= range.out ? range.in : end;
+  }
+  return remaining <= 0 && seconds > 0;
 }
 
 function stemAiSchedulePrepared(vt) {
@@ -14246,7 +14402,7 @@ function stemAiSchedulePrepared(vt) {
     const media = region ? stemRegionPosition(startAt, vt) : vt + (startAt - now) * rate;
     const index = Math.floor((media + 1e-7) / YTBMPreparedStretch.TILE_SECONDS);
     const tile = stemPreparedTile(index, parameters);
-    if (!tile) break;
+    if (!tile || tile.from > media + 1 / STEM_SR) break;
     const core = Math.min(STEM_SCHED_WINDOW_S, (tile.coreEnd - media) / rate, region ? (region.out - media) / rate : Infinity);
     if (core < 1 / STEM_SR) break;
     const offset = Math.round((media - tile.from) / rate * STEM_SR);
@@ -14278,6 +14434,7 @@ function stemAiSchedulePrepared(vt) {
       nodes.push(source); gains.push(envelope);
     }
     ai.sources.push({ nodes, gains, startAt, duration, generation: ai.generation, rate, prepared: true, mediaStart: media, region });
+    stemAiFinishTransition(ai, startAt);
     ai.schedHorizon = startAt + Math.round(core * STEM_SR) / STEM_SR;
   }
   ai.sources = ai.sources.filter(source => {
@@ -14343,6 +14500,11 @@ function stemAiTick() {
   let video = null;
   try { video = getVideoElement(); } catch {}
   if (!video) { ai.captureActive = false; stemAiSetPath("live"); return; }
+  if (!st.processingPaused && ai.ready) {
+    stemMaybeOpenBuffered(ai);
+    stemMaybeOpenTrack(ai);
+    stemAiPump();
+  }
   stemPrepareAhead();
   if (typeof deckA !== "undefined" && deckA !== video) {
     try { initTwoDeck(); }
@@ -14352,7 +14514,7 @@ function stemAiTick() {
   const playing = !video.paused && (region || (!video.seeking && video.readyState >= 2));
   const rate = Number(video.playbackRate) || 1;
   const vt = region ? stemRegionPosition(audioContext.currentTime, video.currentTime) : Number(video.currentTime) || 0;
-  ai.captureActive = !!((ai.mode === "capture") && playing && Math.abs(rate - 1) < 0.02);
+  ai.captureActive = !!(!st.processingPaused && (ai.mode === "capture") && playing && Math.abs(rate - 1) < 0.02);
   const rateChanged = ai.lastRate != null && Math.abs(rate - ai.lastRate) > 1e-6;
   if (rateChanged) {
     if (ai.preparedApplied) stemAiStopFuture();
@@ -14378,10 +14540,13 @@ function stemAiTick() {
   if (!stemsNeedSplit()) { stemAiSetPath("live"); stemAiStopFuture(); refreshStemsUI(); return; }
   if (STEM_KEYS.every(k => !isStemAudible(k))) { stemAiSetPath("silent"); stemAiStopFuture(); return; }
   if (stemPreparedParameters()) {
-    if (!ai.preparedApplied) { stemAiStopFuture(); st.seekHold = true; stemAiSetPath("waiting"); return; }
-    stemAiSchedulePrepared(vt);
-    stemAiSetPath(stemAiAudibleNow() ? "ai" : "waiting");
-    return;
+    if (ai.preparedApplied) {
+      stemAiSchedulePrepared(vt);
+      stemAiSetPath(stemAiAudibleNow() ? "ai" : "waiting");
+      return;
+    }
+    if (!ai.preparedDirectHold) { stemAiStopFuture(); st.seekHold = true; stemAiSetPath("waiting"); return; }
+    // Otherwise use the existing direct scheduler at the held 1x rate.
   }
   const TL = YTBMStemTimeline;
   const need = Math.max(0.005, Math.min((STEM_SCHED_WINDOW_S + STEM_SCHED_FADE / STEM_SR) * rate,
@@ -14466,6 +14631,7 @@ function stemAiSchedule(vt) {
       mediaStart: vtChunk, mediaAtClock: vtChunk, rateAtClock: startAt, region,
       mediaEnd: vtChunk + total / STEM_SR, mediaFadeInEnd: vtChunk + fadeIn * rate,
       mediaFadeOut: vtChunk + (tail ? total / STEM_SR - fade * rate : n / STEM_SR) });
+    stemAiFinishTransition(ai, startAt);
     // Retire sources that fully played out (keep the tail overlap readable).
     ai.sources = ai.sources.filter((s) => {
       if (s.startAt + (s.duration || total / STEM_SR) < now - 0.1) {
@@ -14541,6 +14707,10 @@ function stemAiSeparationProgress() {
 function stemAiStatusText() {
   const st = getStemState();
   const ai = st.ai;
+  if (st.processingPaused) {
+    const percent = stemAiSeparationProgress();
+    return percent == null ? 'Automatic processing off — choose Process this video' : `Processing off · ${percent}% separated · ready stems remain usable`;
+  }
   if (!st.analysisRequested) {
     if (st.analysisCancelled) return "Analysis stopped — click a stem to restart";
     const preload = st.preloadStatus === "ready" ? "whole song preloaded" :
@@ -14567,7 +14737,9 @@ function stemAiStatusText() {
     const prepared = stemPreparedParameters();
     const speed = prepared && ai.preparedApplied?.tag !== prepared.tag ? " · preparing speed…" :
       (ai.preparedError ? " · live stretch fallback" : "");
-    return progress + loaded + playback + speed;
+    const waiting = ai.mode === 'buffered' && !ai.trackComplete && !ai.inFlight && !ai.pendingQueue?.length
+      ? ' · waiting for more audio' : '';
+    return progress + loaded + playback + speed + waiting;
   }
   if (ai.pathMix === "ai") return "AI separation on";
   if (ai.pauseReason === "capture-speed") return "Live capture requires 1×; full-source stems support pitch and stretch";
@@ -14584,7 +14756,7 @@ function stemAiStatusText() {
 function stemAnalysisIsWorking() {
   const st = getStemState();
   const ai = st.ai;
-  if (!st.analysisRequested || ai?.failed) return false;
+  if (!st.analysisRequested || st.processingPaused || ai?.failed) return false;
   if (!ai?.ready) return true;
   // Capture can never cover unheard audio ahead of a moving playhead. Once
   // genuine sections exist, show availability/status rather than an endless
@@ -14742,6 +14914,15 @@ function refreshStemsUI() {
   const showRetry = !st.installed && !st.downloading && st.modelCheckState === "error";
   const showProgress = !st.installed && st.downloading;
   const showGrid = st.installed;
+  if (stemsAutoProcessingBtn) {
+    stemsAutoProcessingBtn.style.display = showGrid ? 'block' : 'none';
+    stemsAutoProcessingBtn.textContent = `Automatic processing · ${st.autoProcess === false ? 'Off' : 'On'}`;
+    stemsAutoProcessingBtn.setAttribute('aria-checked', String(st.autoProcess !== false));
+  }
+  if (stemsProcessVideoBtn) {
+    stemsProcessVideoBtn.style.display = showGrid && st.processingPaused ? 'block' : 'none';
+    stemsProcessVideoBtn.textContent = st.ai?.learnedSegs ? 'Resume processing this video' : 'Process this video';
+  }
   // Pre-install: Stems text + drop-up installer.
   // Post-install: compact 2x2 grid embedded in the bar replaces the text.
   if (stemsButtonMin) stemsButtonMin.style.display = showGrid ? "none" : "";
@@ -14784,7 +14965,8 @@ function refreshStemsUI() {
       btn.setAttribute("aria-pressed", st.mutes[key] ? "true" : "false");
       btn.removeAttribute("title");
       const state = st.mutes[key] ? "muted" : (st.solos[key] ? "solo" : "on");
-      btn.dataset.hint = `${STEM_LABELS[key]} · ${state}${progressHint}\nClick: mute · ⇧/⌘/Ctrl-click: solo\nRight-click: options`;
+      const processingHint = st.processingPaused ? '\nProcessing off · Right-click to start' : '';
+      btn.dataset.hint = `${STEM_LABELS[key]} · ${state}${progressHint}${processingHint}\nClick: mute · ⇧/⌘/Ctrl-click: solo\nRight-click: options`;
     }
   }
   if (stemsStatusMin) {
@@ -14811,11 +14993,27 @@ function refreshStemsUI() {
   }
 }
 
+function mountStemMenu(menu) {
+  if (!menu) return;
+  const fullscreen = document.fullscreenElement;
+  const host = fullscreen && !fullscreen.matches('video, audio') ? fullscreen : document.body;
+  if (menu.parentElement !== host) host.appendChild(menu);
+}
+
 function openStemContextMenu(stemKey, x, y) {
   if (!stemsContextMenu) return;
   const st = getStemState();
   if (!st.installed) return;
+  mountStemMenu(stemsContextMenu);
   stemsContextMenu._stemKey = stemKey;
+  const automatic = stemsContextMenu._buttons?.automatic;
+  if (automatic) {
+    automatic.textContent = `Automatic processing · ${st.autoProcess === false ? 'Off' : 'On'}`;
+    automatic.setAttribute('aria-label', automatic.textContent);
+    automatic.setAttribute('aria-checked', String(st.autoProcess !== false));
+  }
+  const process = stemsContextMenu._buttons?.process;
+  if (process) process.style.display = st.processingPaused ? 'block' : 'none';
   const oneBtn = stemsContextMenu._buttons && stemsContextMenu._buttons.one;
   if (oneBtn) {
     oneBtn.textContent = `Download ${STEM_LABELS[stemKey]} stem`;
@@ -14846,6 +15044,7 @@ function setStemsDropdown(open) {
   closeStemContextMenu();
   refreshStemsUI();
   if (st.dropdownOpen) {
+    mountStemMenu(stemsDropdownMin);
     // Position after display so offsetWidth is measurable.
     requestAnimationFrame(() => {
       try {
@@ -14857,6 +15056,15 @@ function setStemsDropdown(open) {
 
 function buildStemsControl() {
   const st = getStemState();
+  if (!st._preferencesListener && chrome.storage?.onChanged?.addListener) {
+    st._preferencesListener = (changes, area) => {
+      if (area !== 'local' || !changes.ytbmStemsAutoProcess) return;
+      const enabled = changes.ytbmStemsAutoProcess.newValue !== false;
+      if (enabled !== st.autoProcess) setStemAutomaticProcessing(enabled, false);
+    };
+    chrome.storage.onChanged.addListener(st._preferencesListener);
+    cleanupFunctions.push(() => chrome.storage.onChanged.removeListener(st._preferencesListener));
+  }
   const wrap = document.createElement("div");
   wrap.className = "ytbm-stems-wrap";
   stemsButtonMin = document.createElement("button");
@@ -14883,6 +15091,20 @@ function buildStemsControl() {
   stemsDropdownMin = document.createElement("div");
   stemsDropdownMin.className = "ytbm-stems-dropdown";
   stemsDropdownMin.style.display = "none";
+
+  stemsAutoProcessingBtn = document.createElement('button');
+  stemsAutoProcessingBtn.type = 'button';
+  stemsAutoProcessingBtn.className = 'ytbm-stems-download ytbm-stems-automatic';
+  stemsAutoProcessingBtn.setAttribute('role', 'switch');
+  stemsAutoProcessingBtn.setAttribute('aria-label', 'Automatic stem processing');
+  stemsAutoProcessingBtn.title = 'On: analyse new videos automatically and wait for more audio. Off: pause background analysis and keep ready stems; process a video manually when needed.';
+  stemsAutoProcessingBtn.addEventListener('click', event => { event.stopPropagation(); setStemAutomaticProcessing(st.autoProcess === false); });
+  stemsDropdownMin.appendChild(stemsAutoProcessingBtn);
+  stemsProcessVideoBtn = document.createElement('button');
+  stemsProcessVideoBtn.type = 'button';
+  stemsProcessVideoBtn.className = 'ytbm-stems-download';
+  stemsProcessVideoBtn.addEventListener('click', event => { event.stopPropagation(); resumeStemProcessing(); });
+  stemsDropdownMin.appendChild(stemsProcessVideoBtn);
 
   stemsDownloadBtn = document.createElement("button");
   stemsDownloadBtn.type = "button";
@@ -15010,7 +15232,7 @@ function buildStemsControl() {
   document.body.appendChild(stemsDropdownMin);
   const repositionStemsDropdown = () => {
     if (!st.dropdownOpen || !stemsButtonMin || !stemsDropdownMin) return;
-    const r = stemsButtonMin.getBoundingClientRect();
+    const r = (st.installed ? stemsGridMin : stemsButtonMin).getBoundingClientRect();
     const w = Math.max(190, Math.min(240, stemsDropdownMin.offsetWidth || 190));
     let left = r.left + r.width / 2 - w / 2;
     left = Math.max(8, Math.min(window.innerWidth - w - 8, left));
@@ -15025,6 +15247,8 @@ function buildStemsControl() {
   const ctxItems = [
     { label: "", action: "one", title: "" },
     { label: "Download all stems", action: "all", title: "Download all 4 stems as WAV files" },
+    { label: 'Automatic processing · On', action: 'automatic', title: 'Remember whether new videos should analyse automatically' },
+    { label: 'Process this video', action: 'process', title: 'Start or resume analysis manually; keep the automatic preference unchanged' },
     { label: "Reanalyse song", action: "reanalyse", title: "Clear separated results and analyse available song audio again" },
     { label: "Uninstall stems", action: "uninstall", title: "Remove the stems package, model and temporary stems" },
   ];
@@ -15034,6 +15258,8 @@ function buildStemsControl() {
     btn.type = "button";
     btn.className = "ytbm-stems-contextitem" + (item.action === "uninstall" ? " ytbm-stems-contextitem--danger" : "");
     btn.setAttribute("role", "menuitem");
+    if (item.action === 'automatic') btn.setAttribute('role', 'menuitemcheckbox');
+    if (item.action === 'automatic' || item.action === 'process') btn.setAttribute('aria-label', item.label);
     if (item.label) btn.textContent = item.label;
     if (item.title) btn.title = item.title;
     btn.addEventListener("click", (e) => {
@@ -15042,6 +15268,8 @@ function buildStemsControl() {
       closeStemContextMenu();
       if (item.action === "one" && key) exportStem(key, 30);
       else if (item.action === "all") exportAllStems(30);
+      else if (item.action === 'automatic') setStemAutomaticProcessing(st.autoProcess === false);
+      else if (item.action === 'process') resumeStemProcessing();
       else if (item.action === "reanalyse") restartStemAnalysis();
       else if (item.action === "uninstall") uninstallStemPack();
     });
@@ -15157,6 +15385,7 @@ async function installStemPack() {
   }, 15000);
   refreshStemsUI();
   try {
+    await loadStemPreferences();
     await ensureAudioContext();
     const source = getStemModelSource();
     const status = await sendToBackground({ type: "ytbm-stems-model-status" });
@@ -15182,8 +15411,11 @@ async function installStemPack() {
     ensureStemBus();
     updateStemBusTopology();
     try { applyAllFXRouting(); } catch {}
-    preloadStemSong();
-    requestStemAnalysis();
+    if (st.autoProcess !== false) {
+      st.processingPaused = false;
+      preloadStemSong();
+      requestStemAnalysis();
+    }
     refreshStemsUI();
   } catch (err) {
     if (st.contextInvalidated || isStemContextError(err)) { stopStemsForInvalidContext(); return; }
@@ -15271,10 +15503,12 @@ async function reconcileStemInstallation() {
   const check = (async () => {
     let timeout;
     try {
+      const preferences = loadStemPreferences();
       const status = await Promise.race([
         sendToBackground({ type: "ytbm-stems-model-status" }),
         new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("Model check timed out — retry the check")), 30000); }),
       ]);
+      await preferences;
       if (generation !== (st.installGeneration || 0) || st.downloading) return;
       if (!status?.ok) throw new Error(status?.error || "Model status unavailable");
       if (status.downloading && !status.present) {
@@ -15298,8 +15532,11 @@ async function reconcileStemInstallation() {
       if (generation !== (st.installGeneration || 0)) return;
       ensureStemSession();
       if (audioContext) { ensureStemBus(); applyAllFXRouting(); }
-      preloadStemSong();
-      requestStemAnalysis();
+      if (st.autoProcess !== false) {
+        st.processingPaused = false;
+        preloadStemSong();
+        requestStemAnalysis();
+      }
     } catch (error) {
       if (generation === (st.installGeneration || 0) && !st.downloading) {
         st.modelCheckState = "error";
@@ -15324,7 +15561,7 @@ function clearStemSession(reason) {
   try { stemWorker?.postMessage?.({ type: "clear-cache" }); } catch {}
   resetStemAnalysisSession();
   st.videoId = null;
-  if (st.installed && reason === "video changed") {
+  if (st.installed && st.autoProcess !== false && reason === "video changed") {
     ensureStemSession();
     preloadStemSong();
     requestStemAnalysis();

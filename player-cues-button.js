@@ -47,8 +47,8 @@
         button.innerHTML = '<span class="ytbm-player-cues-content" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" focusable="false"><rect x="3" y="3" width="7" height="7" rx="1.5" fill="currentColor" stroke="none"/><path d="M5 4.2 8.8 6.5 5 8.8Z" fill="#111" stroke="none"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>';
         button.addEventListener('click', event => {
           event.preventDefault(); event.stopPropagation();
-          // A click may beat the navigation observer. Reset the new video's
-          // hidden default first, then apply this explicit show/hide action.
+          // A click may beat the navigation observer. Synchronize the player
+          // first, preserving the user's tab-wide choice across videos.
           this.ensure();
           this.options.onToggle(); this.refresh();
         });

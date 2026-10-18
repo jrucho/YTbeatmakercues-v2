@@ -1,4 +1,9 @@
-# Optional YTBM Stems — 2.4.2
+# Optional YTBM Stems — 2.4.5
+
+Version 2.4.5 keeps audible stems during prepared speed transitions, renders
+available analysed subsections, and adds Automatic processing On/Off plus manual
+Process/Resume actions. Off preserves ready PCM; On continues as new native
+chunks arrive. See `CONTINUITY-2.4.5.md` for current controls and limits.
 
 Version 2.4.2 prepares cached full/native-buffered stems ahead for Speed/HD
 playback, with separate stereo analysis per stem and a bounded 96 MiB PCM
@@ -105,7 +110,7 @@ folder, verifies absence, and restores normal playback in every open tab.
 
 Run `npm test` for routing, lifecycle, timeline, cue, sidechain, HD speed and
 VJ checks. `bash build_release.sh` builds a fresh allowlisted, model-free ZIP.
-See `STEMS-2.4.2-EXPORT.md` in the package root for the latest update and
+See `CONTINUITY-2.4.5.md` in the package root for the latest update and
 `STEMS-2.4-EXPORT.md` for the underlying 2.4 export,
 measured browser button tests, and installation instructions.
 

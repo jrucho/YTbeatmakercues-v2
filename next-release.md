@@ -1,3 +1,14 @@
+# Release 2.4.5
+
+- Preserve unity and committed prepared-stem playback while speed/tuning targets render, plan from real analysed subsections, require ready lookahead and overlap handoffs with actually scheduled replacement audio.
+- Respect wrapped loop coverage instead of requiring audio after OUT. Never substitute original mixed audio into gaps.
+- Keep analysis active while waiting for growing buffered audio; continue newly available windows and the true final tail toward 100%.
+- Add saved Automatic processing On/Off and manual Process/Resume this video settings. Stop inference without clearing ready PCM, requeue interrupted full-source work and fence stale worker callbacks.
+- Restore the mini bar's open/closed choice across video navigation and reloads within the tab session.
+- Version/display name **2.4.5**. See `CONTINUITY-2.4.5.md` for timing and source-availability limits.
+
+---
+
 # Release 2.4.4
 
 - Add a real icon-only Cues button directly beside CC in the native right-hand YouTube controls; fall back to Settings if CC is absent.

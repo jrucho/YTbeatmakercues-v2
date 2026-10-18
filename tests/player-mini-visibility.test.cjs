@@ -28,8 +28,22 @@ test('startup rendering respects the hidden choice and ordinary show actions exp
   const context={blindMode:false,minimalActive:true,minimalVisible:false,minimalUIContainer:bar,panelContainer:{style:{}},
     updateMinimalToggleButtonState(){},setupMinimalUIDrag(){},mountMinimalUIContainer(){},window:{},
     applyMinimalUIVisibility(){bar.hidden=!context.minimalVisible;}};
+  context.persistMinimalUIVisibility=()=>{};
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('function goMinimalUI('),source.indexOf('/**************************************\n * Advanced Panel')),context);
   context.goMinimalUI({show:false});assert.equal(context.minimalVisible,false);assert.equal(bar.hidden,true);
   context.goMinimalUI();assert.equal(context.minimalVisible,true);assert.equal(bar.hidden,false);
+});
+
+test('the mini bar restores and records the tab-session visibility choice', () => {
+  const saved=new Map([['ytbm_miniVisible','1']]);
+  const context={sessionStorage:{getItem:key=>saved.get(key),setItem:(key,value)=>saved.set(key,value)},
+    minimalUIContainer:{hidden:true,style:{}},minimalActive:true,blindMode:false,stemState:null,regionLoopController:null,
+    window:{},document:{},shouldRunOnThisPage:()=>false};
+  vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf('const MINIMAL_POS_KEY'),source.indexOf('function createIconButton(')),context);
+  context.applyMinimalUIVisibility();assert.equal(context.minimalUIContainer.hidden,false);
+  context.hideMinimalUIBar();assert.equal(saved.get('ytbm_miniVisible'),'0');
+  assert.equal(context.readMinimalUIVisibility(),false);
+  context.persistMinimalUIVisibility(true);assert.equal(context.readMinimalUIVisibility(),true);
 });

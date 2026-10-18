@@ -7,6 +7,7 @@ const { webcrypto } = require('node:crypto');
 const { ModelStore } = require('../addons/stems/model-store.js');
 const TL = require('../addons/stems/stem-timeline.js');
 const { RegionLoop } = require('../video-region-loop.js');
+const Prepared = require('../addons/stems/prepared-stretch.js');
 const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
 
@@ -39,7 +40,7 @@ function graphFixture() {
     audioContext, videoGain: new Node(), stemState: null, stemBusInput: null, stemBusOutput: null,
     stemBranchGains: null, stemBranchFilters: null, stemLiveGains: null, stemAiGains: null, stemBusContext: null,
     stemTap: null, stemWorker: null,
-    stemsButtonMin: null, stemsDropdownMin: null, stemsStatusMin: null,
+    stemsButtonMin: null, stemsDropdownMin: null, stemsStatusMin: null, stemsAutoProcessingBtn: null, stemsProcessVideoBtn: null,
     stemsGridMin: null, loopGainEnvelopes: new WeakMap(),
     getVideoElement: () => video, YTBMStemTimeline: TL,
     Float32Array, Map, URL, setTimeout, clearTimeout, setInterval, clearInterval,
@@ -113,6 +114,42 @@ test('restoring a verified model repairs the flag and automatically starts analy
   assert.equal(restored, true);
   assert.equal(initialized, 1);
   assert.ok(preloads >= 1);
+});
+
+test('saved Automatic processing Off verifies the model without starting a worker or preload', async () => {
+  const {ctx}=graphFixture();const st=ctx.getStemState();st.installed=false;
+  ctx.chrome.storage={local:{get:async()=>({ytbmStemsAutoProcess:false}),set:async()=>{}}};
+  ctx.sendToBackground=async()=>({ok:true,present:true,source:'opfs',bytes:165612636});
+  ctx.applyAllFXRouting=()=>{};
+  ctx.preloadStemSong=ctx.requestStemAnalysis=()=>{throw new Error('Automatic processing was disabled');};
+  await ctx.reconcileStemInstallation();
+  assert.equal(st.installed,true);assert.equal(st.autoProcess,false);assert.equal(st.processingPaused,true);
+  assert.equal(st.analysisRequested,false);assert.equal(st.ai,undefined);
+});
+
+test('processing Off retains ready stems and selected mutes, requeues the interrupted job and resumes manually', () => {
+  const {ctx}=graphFixture();const st=ctx.ensureStemSession(),posted=[];
+  st.analysisRequested=true;st.mutes.vocals=true;
+  let terminated=0;
+  const timeline=new TL.StemTimeline();timeline.addSegment(0,new Float32Array(TL.SEG*8).fill(.1));
+  const source={nodes:[]};
+  const ai=st.ai={ready:true,mode:'track',track:'retained',trackFrames:TL.SEG*3,epoch:1,sources:[source],timeline,
+    pending:new Map([[5,{index:1,validLength:TL.SEG,epoch:1}]]),pendingQueue:[{index:2,validLength:100}],
+    inFlight:true,nextId:6,worker:{terminate:()=>terminated++},learnedSegs:1};
+  ctx.chrome.storage={local:{set:async()=>{}}};
+  ctx.setStemAutomaticProcessing(false);
+  assert.equal(terminated,1);assert.equal(st.processingPaused,true);assert.equal(st.autoProcess,false);
+  assert.equal(ai.timeline,timeline);assert.equal(ai.sources[0],source);assert.equal(st.mutes.vocals,true);
+  assert.deepEqual(ai.pendingQueue.map(job=>job.index),[1,2]);assert.equal(ai.worker,null);
+  assert.equal(ctx.stemAnalysisIsWorking(),false);assert.match(ctx.stemAiStatusText(),/Processing off/);
+  ctx.createStemEngineClient=()=>({postMessage:msg=>posted.push(msg),terminate(){}});
+  ctx.chrome.runtime.getURL=p=>p;
+  ctx.resumeStemProcessing();assert.equal(posted[0].type,'init');
+  ctx.stemAiPump();assert.equal(posted.length,1,'cached readiness cannot dispatch before the resumed worker initializes');
+  ctx.stemAiOnWorkerMessage({type:'ready',ep:'wasm'});
+  assert.equal(posted[1].type,'separate-track');assert.equal(posted[1].index,1);
+  assert.equal(st.autoProcess,false,'manual processing must not turn global automatic processing back on');
+  assert.equal(st.processingPaused,false);assert.equal(ai.timeline,timeline);
 });
 
 test('download stays hidden during checking and on verification failure, and only appears for a missing model', async () => {
@@ -312,6 +349,8 @@ test('growing buffered audio adds new full windows and final tail without erasin
   await ctx.stemMaybeOpenBuffered(ai);
   assert.deepEqual(jobs.map(job => job.index), [0]);
   ctx.stemAiOnWorkerMessage({ type: 'stems', id: jobs[0].id, data: new Float32Array(TL.SEG * 8) });
+  assert.equal(st.analysisRequested,true,'an empty prefix queue is a wait, not an analysis stop');
+  assert.equal(ai.inFlight,false);
   st.bufferedInfo = { ...st.bufferedInfo, frames: TL.HOP + TL.SEG + 10 };
   await ctx.stemMaybeOpenBuffered(ai);
   assert.deepEqual(jobs.map(job => job.index), [0, 1]);
@@ -323,6 +362,8 @@ test('growing buffered audio adds new full windows and final tail without erasin
   await ctx.stemMaybeOpenBuffered(ai);
   assert.deepEqual(jobs.map(job => job.index), [0, 1, 2]);
   assert.equal(ai.timeline.segments.size, 2);
+  ctx.stemAiOnWorkerMessage({type:'stems',id:jobs[2].id,data:new Float32Array(TL.SEG*8)});
+  assert.equal(ctx.stemAiSeparationProgress(),100,'new chunks and the actual final tail must reach whole-song completion');
 });
 
 test('single-stem mutes switch to genuine AI audio only when the current section is covered', () => {
@@ -516,6 +557,78 @@ test('fader changes retime active stem sources without restarting their waveform
     assert.ok(ai.sources.length <= 2, 'dragging must not repeatedly allocate a full 1.5-second future queue');
   }
   assert.ok(future.every(s => s.nodes.every(n => n.stopped)), 'only obsolete future buffers are cancelled');
+});
+
+test('changing Speed on an analysed partial section keeps unity stems audible while the new setting prepares', () => {
+  const {ctx,video}=graphFixture(),st=ctx.getStemState(),renders=[];
+  video.currentTime=7.4;video.duration=30;video.playbackRate=1;
+  ctx.speedOnlyMode=true;ctx.speedHDMode=false;ctx.pitchTarget='video';
+  ctx.getCurrentPitchRate=()=>0.75;ctx.getSpeedHDLatencyConfig=()=>({blockMs:160,intervalMs:8,splitComputation:true});
+  ctx.chrome.runtime.getURL=p=>p;
+  ctx.videoSpeedStretchNode={isActive:()=>false};
+  ctx.syncSpeedPlayback=()=>{};
+  ctx.YTBMPreparedStretch={...Prepared,Cache:class extends Prepared.Cache{
+    constructor(){super(args=>{renders.push(args);return new Promise(()=>{});});}
+  }};
+  st.analysisRequested=true;st.mutes.vocals=true;
+  const ai=st.ai={ready:true,mode:'buffered',pathMix:'ai',hasPlayedSplit:true,trackFrames:30*44100,
+    sources:[],generation:0,schedHorizon:0,timeline:new TL.StemTimeline(),trackAnchor:{vt:0,cs:0,csEnd:30*44100}};
+  ai.timeline.addSegment(1,new Float32Array(TL.SEG*8).fill(0.1));
+  ctx.stemAiTick();
+  assert.equal(ai.pathMix,'ai','changing the target speed must not mute already-playing unity stems');
+  assert.ok(ai.sources.length>0,'the unity stem queue must remain supplied while rendering');
+  assert.equal(renders.length,1,'prepare the covered subsection even though the start of its nominal tile is not analysed');
+  assert.ok(renders[0].offset>=0);assert.ok(renders[0].channels[0].length<=TL.SEG);
+  assert.equal(st.mutes.vocals,true);
+  ai.preparedCache.close();
+});
+
+test('a prepared target is committed only when its lookahead is ready across a tile boundary', () => {
+  const {ctx,video}=graphFixture(),st=ctx.getStemState();
+  ctx.YTBMPreparedStretch=Prepared;ctx.speedOnlyMode=true;ctx.speedHDMode=false;ctx.pitchTarget='video';
+  ctx.getCurrentPitchRate=()=>.75;ctx.syncSpeedPlayback=()=>{};ctx.stemRequestPreparedTile=()=>{};
+  video.currentTime=7.9;video.playbackRate=.5;st.mutes.vocals=true;
+  const target={rate:.75,tune:0,profile:'quality',tag:'0.750000/0/quality'};
+  const tiles=new Map([['head',{from:7.05,coreEnd:8,end:8.08}]]);
+  const ai=st.ai={ready:true,mode:'buffered',pathMix:'ai',trackFrames:30*44100,sources:[],generation:0,
+    preparedApplied:{rate:.5,tune:0,tag:'previous'},
+    preparedKeys:new Map([[target.tag+'/1','head']]),preparedCache:{setTarget(){},get:key=>tiles.get(key)}};
+  ctx.stemPrepareAhead();assert.equal(ai.preparedApplied.tag,'previous','do not switch into the missing next tile');
+  tiles.set('next',{from:8,coreEnd:12,end:12.08});ai.preparedKeys.set(target.tag+'/2','next');
+  ctx.stemPrepareAhead();assert.equal(ai.preparedApplied.tag,target.tag);
+});
+
+test('loop speed preparation checks wrapped IN/OUT coverage rather than unanalysed audio after OUT', () => {
+  const {ctx}=graphFixture();
+  ctx.YTBMPreparedStretch=Prepared;
+  ctx.getStemState().ai={preparedKeys:new Map([['speed/1','tile']]),
+    preparedCache:{get:()=>({from:7.05,coreEnd:7.8,end:7.8})}};
+  assert.equal(ctx.stemPreparedHasCoverage(7.6,.5,{tag:'speed'}),false);
+  assert.equal(ctx.stemPreparedHasCoverage(7.6,.5,{tag:'speed'},{in:7.2,out:7.8}),true);
+});
+
+test('prepared transitions retire old buffers only after replacement audio has an actual scheduled start', () => {
+  const {ctx,Node}=graphFixture(),st=ctx.getStemState();
+  const old=new Node(),future=new Node(),gain=ctx.audioContext.createGain();
+  old.stop=when=>{old.stopAt=when;old.stopped=true;};
+  const ai=st.ai={generation:1,schedHorizon:11,sources:[{nodes:[old],gains:[gain],startAt:9.8,duration:1},
+    {nodes:[future],gains:[],startAt:10.5,duration:.4}]};
+  ctx.stemAiBeginTransition(ai);
+  assert.equal(old.stopped,undefined,'starting preparation must not stop the current waveform');
+  assert.equal(ai.sources.length,0);assert.equal(ai.retiringSources.length,2);
+  ctx.audioContext.currentTime=10.03;
+  ctx.stemAiFinishTransition(ai,10.035);
+  assert.ok(old.stopAt>=10.047-1e-9,'the old sound must cover replacement start plus fade-in');
+  assert.equal(future.stopped,true);assert.equal(ai.retiringSources.length,0);
+});
+
+test('pausing capture closes its old anchor so resume cannot concatenate audio across the pause', () => {
+  const {ctx}=graphFixture(),st=ctx.getStemState();
+  const ai=st.ai={ready:true,mode:'capture',sources:[],pending:new Map(),pendingQueue:[],captureSamples:1000,
+    anchor:{vt:1,cs:0},queue:new TL.SegmentQueue(),worker:{terminate(){}},history:[]};
+  ctx.pauseStemProcessing();
+  assert.equal(ai.anchor,null);assert.equal(ai.history[0].csEnd,1000);
+  assert.equal(ai.captureSamples,TL.HOP);assert.equal(st.processingPaused,true);
 });
 
 test('audibility guard joins adjacent chunks instead of pulsing back to original at each boundary', () => {

@@ -1,5 +1,24 @@
 /* Bounded, ahead-of-playback stretch tiles. No live processor on the ready path. */
 (function (root) {
+  function planTile({ segments, trackFrames, index, rate, sampleRate = 44100, hop = 310905, priority = 0 }) {
+    const size = 4 * sampleRate, nominalStart = index * size;
+    const nominalEnd = Math.min(nominalStart + size, trackFrames), ranges = [];
+    for (const [key, segment] of [...segments].sort((a, b) => a[0] - b[0])) {
+      const from = key * hop, end = Math.min(trackFrames, from + segment.validLength);
+      if (!(end > from)) continue;
+      const previous = ranges[ranges.length - 1];
+      if (previous && from <= previous.end) previous.end = Math.max(previous.end, end);
+      else ranges.push({ from, end });
+    }
+    const candidates = ranges.filter(range => range.from < nominalEnd && range.end > nominalStart);
+    const range = candidates.find(range => priority >= range.from && priority < range.end) || candidates[0];
+    if (!range) return null;
+    const from = Math.max(nominalStart, range.from), coreEnd = Math.min(nominalEnd, range.end);
+    if (coreEnd - from < 64) return null;
+    const end = Math.min(coreEnd + Math.ceil(0.08 * sampleRate), range.end);
+    const pad = Math.ceil(0.4 * sampleRate * Math.max(1, rate));
+    return { from, coreEnd, end, readFrom: Math.max(range.from, from - pad), readEnd: Math.min(range.end, end + pad) };
+  }
   async function render({ channels, sampleRate, rate, tune, config, offset, frames, moduleURL }) {
     const extra = Math.ceil((config.blockMs + config.intervalMs) * sampleRate / 1000) + 256;
     const context = new OfflineAudioContext(channels.length, Math.ceil(channels[0].length / rate) + extra, sampleRate);
@@ -110,6 +129,6 @@
       for (const job of this.queue.splice(0)) { this.jobs.delete(job.key); job.resolve(null); }
     }
   }
-  root.YTBMPreparedStretch = { Cache, render, TILE_SECONDS: 4, PAD_SECONDS: 0.4 };
+  root.YTBMPreparedStretch = { Cache, render, planTile, TILE_SECONDS: 4, PAD_SECONDS: 0.4 };
   if (typeof module !== 'undefined') module.exports = root.YTBMPreparedStretch;
 })(globalThis);

@@ -1,7 +1,7 @@
 {
   "id": "ytbm-stems-pack",
   "name": "YT Beatmaker Stems Pack (optional)",
-  "version": "2.4.4",
+  "version": "2.4.5",
   "description": "Optional local stem separation. Dormant unless installed via the Stems menu. Browser-only; works on macOS and Windows.",
   "runtime": "onnxruntime-web (MIT, vendored separately) + public HT-Demucs ONNX export (MIT)",
   "model": {

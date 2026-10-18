@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { Cache } = require('../addons/stems/prepared-stretch.js');
+const { Cache, planTile } = require('../addons/stems/prepared-stretch.js');
 
 test('prepared rendering serializes work, coalesces duplicate requests and respects the PCM budget', async () => {
   const jobs = [];
@@ -43,4 +43,23 @@ test('the committed speed keeps its lookahead while the next speed is being prep
   jobs[2]({ channels: [new Float32Array(8)] }); await desired;
   assert.ok(cache.get('new-current'));
   cache.close(); assert.equal(cache.bytes, 0);
+});
+
+test('partial analysis renders the available subsection rather than requiring an unanalysed tile prefix', () => {
+  const segments=new Map([[1,{validLength:343980}]]);
+  const plan=planTile({segments,trackFrames:30*44100,index:1,rate:.75,priority:7.4*44100});
+  assert.equal(plan.from,310905);assert.equal(plan.coreEnd,8*44100);
+  assert.equal(plan.readFrom,310905);assert.ok(plan.readEnd<=310905+343980);
+  assert.equal(planTile({segments,trackFrames:30*44100,index:0,rate:.75}),null);
+  segments.set(0,{validLength:343980});
+  const expanded=planTile({segments,trackFrames:30*44100,index:1,rate:.75,priority:7.4*44100});
+  assert.equal(expanded.from,4*44100);assert.ok(expanded.readFrom<expanded.from);
+});
+
+test('out-of-order islands never fill an unanalysed gap with synthetic audio', () => {
+  const segments=new Map([[2,{validLength:343980}],[0,{validLength:343980}]]);
+  assert.equal(planTile({segments,trackFrames:30*44100,index:2,rate:1.5}),null);
+  const plan=planTile({segments,trackFrames:30*44100,index:3,rate:1.5,priority:14.5*44100});
+  assert.equal(plan.from,2*310905);assert.equal(plan.readFrom,2*310905);
+  assert.ok(plan.readEnd<=2*310905+343980);
 });
