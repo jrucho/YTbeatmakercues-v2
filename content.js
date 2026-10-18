@@ -2545,7 +2545,7 @@ function toggleBlindMode() {
     }
     console.log("Blind mode is now OFF");
     // Optionally restore the minimal UI automatically when leaving blind mode:
-    if (minimalActive) goMinimalUI();
+    if (minimalActive) goMinimalUI({ show: minimalVisible });
   }
   updateMinimalToggleButtonState();
 }
@@ -3576,10 +3576,10 @@ function attachAudioPriming() {
 
 document.addEventListener('DOMContentLoaded', () => {
   // Ensure minimal view is active immediately
-  if (typeof goMinimalUI === "function") goMinimalUI();
+  if (typeof goMinimalUI === "function") goMinimalUI({ show: minimalVisible });
   // Also launch minimal view after audio context is ready
   ensureAudioContext()
-    .then(() => { if (typeof goMinimalUI === "function") goMinimalUI(); })
+    .then(() => { if (typeof goMinimalUI === "function") goMinimalUI({ show: minimalVisible }); })
     .catch(console.error);
 
   // If no cue points are loaded, generate random cues
@@ -3781,6 +3781,7 @@ function addTrackedListener(target, type, listener, options) {
   cleanupFunctions.push(() => target.removeEventListener(type, listener, options));
 }
 function cleanupResources() {
+  playerCuesControl?.dispose(); playerCuesControl = null; minimalToggleButton = null;
   regionLoopController?.dispose(); regionLoopController = null;
   cancelCueSeek();
   stopVJRenderer();
@@ -4734,14 +4735,48 @@ const YTBM_ICON_PATHS = {
 
 const MINIMAL_POS_KEY = "ytbm_minimalPos";
 let minimalToggleButton = null;
-let minimalVisible = true;
+let playerCuesControl = null;
+let minimalVisible = false;
 
 function ensureMinimalToggleButton() {
-  document.querySelectorAll(".ytbm-toggle-btn").forEach(btn => btn.remove());
-  minimalToggleButton = null;
+  if (!shouldRunOnThisPage()) return;
+  if (!playerCuesControl) {
+    playerCuesControl = new YTBMPlayerCues.PlayerCuesButton({
+      getVideo: getVideoElement,
+      getVideoId: getStemVideoId,
+      isVisible: () => minimalActive && minimalVisible && !blindMode,
+      onToggle: () => {
+        if (minimalActive && minimalVisible && !blindMode) hideMinimalUIBar();
+        else {
+          if (blindMode) toggleBlindMode();
+          goMinimalUI();
+        }
+      },
+      onVideoChange: hideMinimalUIBar,
+      onFullscreen: mountMinimalUIContainer,
+    });
+  } else playerCuesControl.ensure();
+  minimalToggleButton = playerCuesControl.button;
 }
 
-function updateMinimalToggleButtonState() {}
+function updateMinimalToggleButtonState() { playerCuesControl?.refresh(); }
+
+function applyMinimalUIVisibility() {
+  const visible = minimalActive && minimalVisible && !blindMode;
+  if (minimalUIContainer) {
+    minimalUIContainer.hidden = !visible;
+    minimalUIContainer.style.display = visible ? 'flex' : 'none';
+  }
+  updateMinimalToggleButtonState();
+}
+
+function hideMinimalUIBar() {
+  minimalVisible = false;
+  applyMinimalUIVisibility();
+  if (stemState) { stemState.dropdownOpen = false; refreshStemsUI(); closeStemContextMenu(); }
+  if (regionLoopController?.menu) regionLoopController.menu.style.display = 'none';
+  try { window.YTBMTooltips?.hide(); } catch {}
+}
 
 function createIconButton(iconPath, labelText) {
   const button = document.createElement("button");
@@ -4760,8 +4795,10 @@ function createIconButton(iconPath, labelText) {
 function mountMinimalUIContainer() {
   ensureMinimalToggleButton();
   if (!minimalUIContainer) return;
-  if (!minimalUIContainer.isConnected) {
-    document.body.appendChild(minimalUIContainer);
+  const fullscreen = document.fullscreenElement;
+  const host = fullscreen && !fullscreen.matches('video, audio') ? fullscreen : document.body;
+  if (minimalUIContainer.parentElement !== host) {
+    host.appendChild(minimalUIContainer);
   }
   restoreMinimalUIPosition();
 }
@@ -4850,8 +4887,11 @@ function onMinimalPointerUp(e) {
 }
 
   function buildMinimalUIBar() {
+  if (minimalUIContainer?.isConnected) { applyMinimalUIVisibility(); return; }
   minimalUIContainer = document.createElement("div");
+  minimalUIContainer.id = 'ytbm-mini-bar';
   minimalUIContainer.className = "ytbm-minimal-bar ytbm-glass";
+  minimalUIContainer.hidden = !(minimalActive && minimalVisible && !blindMode);
   minimalUIContainer.style.display = "none";
   mountMinimalUIContainer();
   setupMinimalUIDrag();
@@ -4993,13 +5033,11 @@ function onMinimalPointerUp(e) {
   advancedButtonMin.addEventListener("click", goAdvancedUI);
   minimalUIContainer.appendChild(advancedButtonMin);
 
-  minimalUIContainer.style.display = (minimalActive && minimalVisible && !blindMode) ? "flex" : "none";
+  applyMinimalUIVisibility();
 
   function refreshMinimalState() {
     mountMinimalUIContainer();
-    if (minimalUIContainer) {
-      minimalUIContainer.style.display = (minimalActive && minimalVisible && !blindMode) ? "flex" : "none";
-    }
+    applyMinimalUIVisibility();
     refreshPitchUI();
     regionLoopController?.render();
 
@@ -12028,10 +12066,10 @@ function goAdvancedUI() {
   if (window.refreshMinimalState) window.refreshMinimalState();
 }
 
-function goMinimalUI() {
+function goMinimalUI({ show = true } = {}) {
   if (blindMode) return; // do not show the minimal UI if blind mode is active
   minimalActive = true;
-  minimalVisible = true;
+  minimalVisible = show;
   updateMinimalToggleButtonState();
   if (panelContainer) panelContainer.style.display = "none";
   // Rebuild the minimal UI if it doesn't exist.
@@ -12040,7 +12078,7 @@ function goMinimalUI() {
   } else {
     setupMinimalUIDrag();
     mountMinimalUIContainer();
-    minimalUIContainer.style.display = "flex";
+    applyMinimalUIVisibility();
   }
   if (window.refreshMinimalState) window.refreshMinimalState();
 }
@@ -13351,7 +13389,7 @@ function getStemBusOutput() { return stemBusOutput; }
 
 // Build stamp: verify in console that the loaded copy is current.
 // If this is missing or stale, the extension was loaded from an old folder.
-window.__ytbmBuild = { version: "2.4.3", flavor: "video-region-loop", built: "2026-10-17" };
+window.__ytbmBuild = { version: "2.4.4", flavor: "native-player-cues-switch", built: "2026-10-18" };
 
 // Live diagnostic for console checks: samples, loopers, audio graph.
 window.__ytbmAudioDiag = function () {
@@ -13376,7 +13414,7 @@ window.__ytbmStemDiag = function () {
   try {
     const st = getStemState();
     return {
-      extVersion: st.contextInvalidated ? window.__ytbmBuild?.version || "2.4.3" : chrome?.runtime?.getManifest?.().version || null,
+      extVersion: st.contextInvalidated ? window.__ytbmBuild?.version || "2.4.4" : chrome?.runtime?.getManifest?.().version || null,
       contextInvalidated: !!st.contextInvalidated,
       audioRunning: !!audioContext && audioContext.state === "running",
       videoGainConnected: !!videoGain,
@@ -18918,6 +18956,7 @@ function detectVideoChanges() {
       lastUrl = currentUrl;
       console.log("Video changed! Re-attaching loadedmetadata listener.");
       attachVideoMetadataListener();
+      ensureMinimalToggleButton();
       regionLoopController?.sync();
       if (stemState?.installed && stemState.videoId !== getStemVideoId()) clearStemSession("video changed");
     }
@@ -19119,7 +19158,6 @@ if (typeof midiNotes !== "undefined" && midiNotes.randomCues !== undefined) {
   style.id = 'ytbm-minimal-ui-responsive';
   style.textContent = `
     .ytbm-minimal-bar {
-      display: flex !important;
       flex-wrap: wrap !important;
       overflow-x: auto !important;
       gap: 4px !important;

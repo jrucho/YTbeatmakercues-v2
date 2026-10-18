@@ -537,9 +537,9 @@ test('three-step label is stable and HD engine readiness/fallback is reported in
   assert.equal(c.deckA.preservesPitch, false);
 });
 
-test('release exposes the worklet and declares version 2.4.3', () => {
+test('release exposes the worklet and declares version 2.4.4', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.version, '2.4.3');
+  assert.equal(manifest.version, '2.4.4');
   assert.ok(manifest.content_scripts.some((entry) => entry.js[0] === 'vj-live.js'));
   assert.ok(manifest.permissions.includes('power'));
   assert.ok(manifest.web_accessible_resources.some((entry) => entry.resources.includes('worklets/speed-stretch-worklet.js')));

@@ -1,6 +1,6 @@
 {
   "name": "youtube-beatmaker-cues",
-  "version": "2.4.3",
+  "version": "2.4.4",
   "private": true,
   "description": "Local runtime dependency and audio checks for the Chrome extension",
   "scripts": {

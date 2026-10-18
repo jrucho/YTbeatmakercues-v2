@@ -87,7 +87,7 @@ async function start() {
         headers:{'accept-ranges':'bytes','content-length':String(end-from+1),...(range?{'content-range':`bytes ${from}-${end}/${audio.length}`}:{})},body:audio.subarray(from,end+1) });
     }
     const kind = url.searchParams.get('kind') || 'normal';
-    if (kind.startsWith('mse')) return route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body><div id="movie_player"><video class="html5-main-video" controls></video></div><script>
+    if (kind.startsWith('mse')) return route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body><div id="movie_player" class="html5-video-player"><video class="html5-main-video" controls></video><div class="ytp-right-controls" style="height:48px"><button class="ytp-subtitles-button">CC</button><button class="ytp-settings-button">Settings</button></div></div><script>
       window.__loadNativeSource=async(id,delay=0)=>{if(id)history.pushState({},'', '/watch?v='+id+'&kind=mse');if(delay)await new Promise(r=>setTimeout(r,delay));const v=document.querySelector('video.html5-main-video'),m=new MediaSource();v.pause();v.src=URL.createObjectURL(m);await new Promise(r=>m.addEventListener('sourceopen',r,{once:true}));const s=m.addSourceBuffer('audio/webm;codecs=opus');m.duration=8.2;const data=await(await fetch('/audit.webm')).arrayBuffer();s.appendBuffer(data);await new Promise(r=>s.addEventListener('updateend',r,{once:true}));m.endOfStream();};
       __loadNativeSource(null,${kind === 'mse-late' ? 1200 : 0});
     </script></body></html>` });
@@ -95,7 +95,7 @@ async function start() {
     const metadata = { videoDetails: { videoId: url.searchParams.get('v'), lengthSeconds: String(seconds) }, streamingData: { adaptiveFormats: [
       { mimeType: 'audio/wav', url: `https://rr1---sn-test.googlevideo.com:${server.address().port}/sample.wav?kind=${kind}` },
     ] } };
-    return route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body><script>window.ytInitialPlayerResponse=${JSON.stringify(metadata)}</script><div id="movie_player"><video class="html5-main-video" controls preload="auto" src="https://www.youtube.com/sample.wav?kind=${kind}"></video></div></body></html>` });
+    return route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><body><script>window.ytInitialPlayerResponse=${JSON.stringify(metadata)}</script><div id="movie_player" class="html5-video-player"><video class="html5-main-video" controls preload="auto" src="https://www.youtube.com/sample.wav?kind=${kind}"></video><div class="ytp-right-controls" style="height:48px"><button class="ytp-subtitles-button">CC</button><button class="ytp-settings-button">Settings</button></div></div></body></html>` });
   });
   return origin;
 }
@@ -112,7 +112,15 @@ async function video(kind = 'normal') {
   };
   await wait(async () => { try { return !!await run('window.__ytbmStemDiag'); } catch { return false; } });
   await run('window.__send=msg=>new Promise(resolve=>chrome.runtime.sendMessage(msg,resolve))');
+  if (!process.env.YTBM_PLAYER_SWITCH_ONLY) {
+    await page.locator('.ytbm-player-cues-button').waitFor({ state: 'visible' });
+    await page.locator('.ytbm-player-cues-button').click();
+  }
   return { page, cdp, run, world: () => world };
+}
+async function showMiniBar(e) {
+  await e.page.locator('.ytbm-player-cues-button').waitFor({ state: 'visible' });
+  if (!await e.page.locator('.ytbm-minimal-bar').isVisible()) await e.page.locator('.ytbm-player-cues-button').click();
 }
 async function wait(condition, timeout = 120000) {
   const end = Date.now() + timeout;
@@ -192,6 +200,106 @@ async function separated(e = env) {
 async function scenario(name, fn) {
   try { const details = await fn(); report.tests.push({ name, result: 'PASS', details }); console.log('PASS', name); }
   catch (error) { report.tests.push({ name, result: 'FAIL', error: error.message }); console.error('FAIL', name, error); throw error; }
+}
+async function playerCuesSwitch(e) {
+  const button=e.page.locator('.ytbm-player-cues-button'),bar=e.page.locator('#ytbm-mini-bar');
+  await button.waitFor({state:'visible'});await bar.waitFor({state:'attached'});
+  assert.equal(await bar.isVisible(),false,'mini bar must stay hidden on startup');
+  assert.equal(await button.getAttribute('aria-pressed'),'false');
+  const placement=await button.evaluate(el=>({tag:el.tagName,native:el.classList.contains('ytp-button'),
+    parent:el.parentElement.className,next:el.nextElementSibling?.className,previous:el.previousElementSibling?.className,
+    label:el.textContent,svg:!!el.querySelector('svg'),background:getComputedStyle(el).backgroundColor}));
+  assert.equal(placement.tag,'BUTTON');assert.equal(placement.native,true);assert.match(placement.parent,/ytp-right-controls/);
+  assert.match(placement.next,/ytp-settings-button/);assert.equal(placement.label,'');assert.equal(placement.svg,true);
+  assert.match(await button.getAttribute('aria-label'),/Show Cues/);
+  assert.match(placement.previous,/ytp-subtitles-button/);
+  await button.hover();await sleep(180);
+  const hoverStyle=await button.evaluate(el=>({outer:getComputedStyle(el).backgroundColor,
+    pill:getComputedStyle(el.querySelector('.ytbm-player-cues-content')).backgroundColor,
+    round:getComputedStyle(el.querySelector('.ytbm-player-cues-content')).borderRadius}));
+  assert.equal(hoverStyle.outer,'rgba(0, 0, 0, 0)');assert.equal(hoverStyle.pill,'rgba(0, 0, 0, 0)');assert.equal(hoverStyle.round,'999px');
+  const glyph=await button.evaluate(el=>{
+    const svg=el.querySelector('svg'),p=svg.querySelector('path').getBBox(),b=svg.getBoundingClientRect(),outer=el.getBoundingClientRect();
+    return {playWidth:p.width,playHeight:p.height,iconWidth:b.width,iconHeight:b.height,
+      dx:b.left+b.width/2-outer.left-outer.width/2,dy:b.top+b.height/2-outer.top-outer.height/2};
+  });
+  assert.ok(glyph.playWidth>=3.5&&glyph.playHeight>=4.4);assert.equal(glyph.iconWidth,24);assert.equal(glyph.iconHeight,24);
+  assert.ok(Math.abs(glyph.dx)<.5&&Math.abs(glyph.dy)<.5);
+  await button.click();assert.equal(await bar.isVisible(),true);assert.equal(await button.getAttribute('aria-pressed'),'true');
+  await button.click();assert.equal(await bar.isVisible(),false);
+  await button.focus();await e.page.keyboard.press('Enter');assert.equal(await bar.isVisible(),true);
+  await e.page.keyboard.press('Space');assert.equal(await bar.isVisible(),false);
+  await button.click();
+  const current=e.page.url();
+  await e.page.evaluate(()=>history.pushState({},'','/watch?v=toggle-next'));
+  await wait(async()=>!await bar.isVisible());assert.equal(await button.getAttribute('aria-pressed'),'false');
+  await button.click();assert.equal(await bar.isVisible(),true);
+  await e.page.locator('.ytp-right-controls').evaluate(el=>{
+    const next=document.createElement('div');next.className='ytp-right-controls';next.style.height='48px';
+    next.innerHTML='<div class="ytp-control-group" style="height:48px"><button class="ytp-subtitles-button">CC</button><button class="ytp-settings-button">Settings</button></div>';el.replaceWith(next);
+  });
+  await button.waitFor({state:'visible'});
+  assert.equal(await button.count(),1);assert.equal(await bar.isVisible(),true,'control rebuild must preserve the current visibility');
+  assert.equal(await button.evaluate(el=>el.previousElementSibling?.classList.contains('ytp-subtitles-button')),true);
+  await button.click();assert.equal(await bar.isVisible(),false);
+  await e.page.evaluate(url=>history.pushState({},'',url),current);
+  await wait(async()=>!await bar.isVisible());
+  await button.click();await e.page.locator('#movie_player').evaluate(el=>el.requestFullscreen());
+  await wait(()=>e.page.evaluate(()=>document.fullscreenElement?.contains(document.getElementById('ytbm-mini-bar'))));
+  assert.equal(await bar.isVisible(),true);await button.click();assert.equal(await bar.isVisible(),false);
+  await button.click();await e.page.evaluate(()=>document.exitFullscreen());
+  await wait(()=>e.page.evaluate(()=>document.getElementById('ytbm-mini-bar').parentElement===document.body));
+  assert.equal(await bar.isVisible(),true);
+  await e.page.locator('video.html5-main-video').first().evaluate(v=>v.play());
+  await button.click();const t=await e.page.locator('video.html5-main-video').first().evaluate(v=>v.currentTime);
+  await sleep(150);assert.equal(await bar.isVisible(),false);
+  assert.ok(await e.page.locator('video.html5-main-video').first().evaluate(v=>!v.paused&&v.currentTime>0));
+  await e.page.locator('video.html5-main-video').first().evaluate(v=>v.pause());
+  await e.page.screenshot({path:process.env.YTBM_EVIDENCE_DIR+'/player-cues-switch.png'});
+  return {placement,fullscreen:true,keyboard:true,controlsReplacement:true,navigationStartsHidden:true,audioContinuesWhileHidden:true};
+}
+async function livePlayerCuesSwitch() {
+  await context.unroute('https://www.youtube.com/**');
+  const page=await context.newPage();
+  const extensionErrors=[];
+  page.on('pageerror',e=>{if(/player-cues-button\.js|chrome-extension:/.test(e.stack||''))extensionErrors.push(e.stack);});
+  await page.goto('https://www.youtube.com/watch?v=jNQXAC9IVRw',{waitUntil:'domcontentloaded',timeout:60000});
+  await sleep(3000);
+  for(const frame of page.frames()){
+    const reject=frame.getByRole('button',{name:/refuser|reject|refuse/i}).first();
+    if(await reject.count()){await reject.click({timeout:10000});await sleep(2500);break;}
+  }
+  try{await page.locator('.ytbm-player-cues-button').waitFor({state:'attached',timeout:30000});}
+  catch(error){
+    console.log('LIVE SWITCH DOM',await page.evaluate(()=>({url:location.href,title:document.title,video:document.querySelectorAll('video').length,
+      controls:document.querySelectorAll('.ytp-right-controls').length,players:document.querySelectorAll('#movie_player').length,
+      mini:document.querySelectorAll('.ytbm-minimal-bar').length,body:document.body.innerText.slice(0,1500)})));
+    await page.screenshot({path:process.env.YTBM_EVIDENCE_DIR+'/player-cues-live-debug.png'});throw error;
+  }
+  await page.locator('#movie_player').hover();
+  const button=page.locator('.ytbm-player-cues-button'),bar=page.locator('#ytbm-mini-bar');
+  assert.equal(await bar.isVisible(),false);
+  await button.click();assert.equal(await bar.isVisible(),true);
+  const placement=await button.evaluate(el=>{
+    const b=el.getBoundingClientRect(),row=el.closest('.ytp-right-controls'),settings=row.querySelector('.ytp-settings-button').getBoundingClientRect();
+    return {parent:el.parentElement.className,width:b.width,height:b.height,settingsHeight:settings.height,
+      right:b.right,settingsLeft:settings.left,pressed:el.getAttribute('aria-pressed'),previous:el.previousElementSibling?.className};
+  });
+  assert.ok(placement.height>0&&Math.abs(placement.height-placement.settingsHeight)<2);
+  assert.ok(placement.right<=placement.settingsLeft+1,'Cues must sit beside settings without overlapping it');
+  assert.match(placement.previous,/ytp-subtitles-button/);
+  await page.screenshot({path:process.env.YTBM_EVIDENCE_DIR+'/player-cues-live-youtube.png'});
+  await button.hover();await sleep(180);await button.screenshot({path:process.env.YTBM_EVIDENCE_DIR+'/player-cues-live-icon.png'});
+  await button.click();assert.equal(await bar.isVisible(),false);
+  await button.focus();await page.keyboard.press('Enter');assert.equal(await bar.isVisible(),true);
+  await page.locator('#movie_player').evaluate(el=>el.requestFullscreen());
+  await wait(()=>page.evaluate(()=>document.fullscreenElement?.contains(document.getElementById('ytbm-mini-bar'))));
+  await page.locator('#movie_player').hover();
+  await page.screenshot({path:process.env.YTBM_EVIDENCE_DIR+'/player-cues-live-fullscreen.png'});
+  await button.click();assert.equal(await bar.isVisible(),false);
+  await page.evaluate(()=>document.exitFullscreen());
+  assert.deepEqual(extensionErrors,[],'native control insertion must not raise extension errors');
+  await page.close();return {url:'https://www.youtube.com/watch?v=jNQXAC9IVRw',placement,fullscreen:true,keyboard:true};
 }
 async function regionControls(e) {
   e.page.on('pageerror', error => console.log('REGION PAGE ERROR',error.stack));
@@ -274,6 +382,7 @@ async function regionControls(e) {
   await e.page.locator('video.html5-main-video').first().evaluate(v=>v.pause());
   await e.run('__test.getRegionLoopController().change({in:1.1,out:2.4,enabled:true})');
   await e.page.reload();
+  await showMiniBar(e);
   await e.page.locator('[data-region-action="in"]').waitFor(); await hooks(e);
   await wait(async () => (await state()).in === 1.1);
   assert.equal((await state()).out, 2.4); assert.equal((await state()).enabled, true);
@@ -289,6 +398,7 @@ async function regionControls(e) {
 }
 
 async function regionStemPlayback(e) {
+  await showMiniBar(e);
   await hooks(e);
   await e.page.locator('video.html5-main-video').first().evaluate(v => {v.pause();v.currentTime=1;});
   await e.page.waitForFunction(() => !document.querySelector('video.html5-main-video').seeking);
@@ -342,6 +452,7 @@ async function verifyInstalledStemUI(e) {
   assert.equal(await e.page.getByText('Download stems package',{exact:true}).evaluateAll(els=>els.some(el=>el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden')),false);
 }
 async function normalStemUI(e) {
+  await showMiniBar(e);
   await hooks(e);
   await e.page.locator('video.html5-main-video').first().evaluate(v=>{v.pause();v.currentTime=1;});
   await wait(()=>e.run('__ytbmStemDiag().hasCurrentCoverage'));
@@ -363,7 +474,43 @@ async function normalStemUI(e) {
   console.log('INSTALLED STEM UI CHECK',{clicks,modes:['Pitch','Speed','Speed HD'],viewSwitches:9,result:'PASS'});
   return {clicks,viewSwitches:9,installerReappeared:false};
 }
+async function hdThenMute(e) {
+  await showMiniBar(e);await hooks(e);
+  const metrics=[];
+  for(const [rate,tune] of [[0.65,3],[1.5,-3],[1,5]]){
+    await e.run(`__test.getRegionLoopController().clear();__test.setMode('Speed HD',${rate},${tune});__test.jumpToCue(1)`);
+    await e.page.locator('video.html5-main-video').first().evaluate(v=>v.play());
+    await sleep(120);
+    const before=await e.run('__ytbmStemDiag()');
+    assert.equal(before.pathMix,'live');assert.equal(before.liveStretchActive,true);
+    const started=Date.now();await e.page.locator('[data-stem="vocals"]').click();
+    const state=await wait(async()=>{
+      const s=await e.run('__ytbmStemDiag()');
+      if(s.preparedError||s.aiError)throw new Error(s.preparedError||s.aiError);
+      return s.pathMix==='ai'&&s.preparedRate===rate&&s.preparedTune===tune&&!s.liveStretchActive?s:false;
+    },45000);
+    const rms=await e.run(`(async()=>{
+      const c=__test.audioContext,a=c.createAnalyser();a.fftSize=2048;__test.videoSpeedStretchNode.output.connect(a);
+      await new Promise(r=>setTimeout(r,80));const d=new Float32Array(2048);a.getFloatTimeDomainData(d);
+      __test.videoSpeedStretchNode.output.disconnect(a);return Math.sqrt(d.reduce((s,x)=>s+x*x,0)/d.length);
+    })()`);
+    assert.ok(rms>0.001,'muting vocals must leave other stems audible with speed and tuning');
+    await verifyInstalledStemUI(e);
+    await e.page.locator('.ytbm-player-cues-button').click();
+    assert.equal(await e.page.locator('#ytbm-mini-bar').isVisible(),false);
+    const hiddenState=await e.run('__ytbmStemDiag()');assert.equal(hiddenState.pathMix,'ai');
+    assert.equal(await e.run('__test.getStemState().mutes.vocals'),true);
+    await e.page.locator('.ytbm-player-cues-button').click();
+    await e.page.locator('[data-stem="vocals"]').click();
+    await wait(()=>e.run('__ytbmStemDiag().pathMix==="live"'));
+    metrics.push({rate,tune,prepareMs:Date.now()-started,rms,state});
+    await e.page.locator('video.html5-main-video').first().evaluate(v=>v.pause());
+  }
+  await e.run('__test.setMode("Pitch",1)');
+  console.log('HD FIRST THEN VOCAL MUTE',JSON.stringify(metrics));return metrics;
+}
 async function playbackButtons(e, label) {
+  await showMiniBar(e);
   await hooks(e);
   await e.run(`window.__measure=async()=>{const {audioContext:c,stemBusOutput:b}=__test;const a=c.createAnalyser();a.fftSize=2048;b.connect(a);let energy=0;const d=new Float32Array(2048);for(let i=0;i<24;i++){a.getFloatTimeDomainData(d);energy+=d.reduce((s,x)=>s+x*x,0);await new Promise(r=>setTimeout(r,15));}b.disconnect(a);return Math.sqrt(energy/(24*d.length))}`);
   const keys = ['vocals', 'drums', 'bass', 'other'];
@@ -438,6 +585,7 @@ async function nativePlayerTest() {
   await e.page.close(); return { initial: result, reanalysed: repeated, navigated, refreshRequired: false };
 }
 async function playbackRates(e, label) {
+  await showMiniBar(e);
   await hooks(e);
   await wait(() => e.run('__test.stretchReady()'));
   for (const key of ['vocals','drums','other']) await e.page.locator(`[data-stem="${key}"]`).click();
@@ -514,6 +662,7 @@ async function cachedCueReadiness(e) {
   return metrics;
 }
 async function preparedPlayback(e) {
+  await showMiniBar(e);
   await hooks(e);
   for (const key of ['vocals', 'drums', 'other']) await e.page.locator(`[data-stem="${key}"]`).click();
   await e.page.locator('video.html5-main-video').first().evaluate(v => v.play());
@@ -671,7 +820,8 @@ async function liveYouTubeTest() {
     if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
     return result.result.value;
   };
-  const e = { page, cdp, run, world: () => world };
+   const e = { page, cdp, run, world: () => world };
+   await showMiniBar(e);
   await page.evaluate(() => document.getElementById('movie_player')?.playVideo?.());
   await page.waitForFunction(() => { const v = document.querySelector('video.html5-main-video'); return v?.buffered.length && v.buffered.end(v.buffered.length - 1) > 7.8; }, { timeout: 30000 });
   await page.evaluate(() => { const p = document.getElementById('movie_player'); p.seekTo(1, true); p.pauseVideo(); });
@@ -706,6 +856,7 @@ async function liveYouTubeTest() {
       console.log('LIVE YOUTUBE RATES',rateStates);
     }
      if(process.env.YTBM_REGION_LIVE) await regionStemPlayback(e);
+     if(process.env.YTBM_HD_MUTE_LIVE) await hdThenMute(e);
      await page.close();
     return { url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw', state, measured, rateStates };
 }
@@ -713,6 +864,11 @@ async function liveYouTubeTest() {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
     const origin = await start(); env = await video();
+    if(process.env.YTBM_PLAYER_SWITCH_ONLY){
+      await scenario('native player Cues switch: hidden startup, keyboard, navigation, fullscreen and replacement',()=>playerCuesSwitch(env));
+      if(process.env.YTBM_PLAYER_SWITCH_LIVE)await scenario('native Cues control matches the live YouTube control row and fullscreen',livePlayerCuesSwitch);
+      return;
+    }
     if (!process.env.YTBM_RELEASE_ONLY && (await inspect()).model.present) await remove();
     const existingModel = (await inspect()).model.present;
     if (process.env.YTBM_LOCAL_MODEL) await useFixtureModel();
@@ -730,6 +886,10 @@ async function liveYouTubeTest() {
     }
     if (process.env.YTBM_UI_ONLY) {
       await scenario('repeated stem mute/solo and Advanced/minimal switches never restore the installer',()=>normalStemUI(env));
+      return;
+    }
+    if(process.env.YTBM_HD_MUTE_ONLY){
+      await scenario('Speed HD speed+tuning first, then vocal mute preserves other stems',()=>hdThenMute(env));
       return;
     }
     if (process.env.YTBM_STARTUP_ONLY) {

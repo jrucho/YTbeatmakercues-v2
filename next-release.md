@@ -1,3 +1,14 @@
+# Release 2.4.4
+
+- Add a real icon-only Cues button directly beside CC in the native right-hand YouTube controls; fall back to Settings if CC is absent.
+- Start each video's mini bar hidden and toggle it visually without stopping audio, stems, speed/tuning or region loops.
+- Handle nested control groups, control replacement, keyboard activation and fullscreen reparenting. Remove forced mini-bar visibility styling and prevent duplicate startup bars.
+- Use a centered 24 px cue-pad icon and enlarged play glyph, leaving hover highlighting to YouTube's pill without a separate circle or square background.
+- Investigate Speed HD speed+tuning followed by stem mute on controlled and live YouTube audio. Other stems recovered after preparation; no persistent total mute was reproduced and no speculative DSP fix was added.
+- Version/display name **2.4.4**. See `PLAYER-CUES-2.4.4.md` for controls and verification scope.
+
+---
+
 # Release 2.4.3
 
 - Replace mini-bar Import with rounded IN/OUT/clear controls. Match idle colors, use teal/amber for marked boundaries and light the centered SVG clear/repeat symbol red while looping.
