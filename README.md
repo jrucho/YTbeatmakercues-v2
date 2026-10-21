@@ -4,6 +4,8 @@
 ![4](https://github.com/user-attachments/assets/1930ad98-1d20-4f49-9fb1-12058b291e83)
 ![5](https://github.com/user-attachments/assets/c06c65e9-32f7-4506-af9e-9c3e1052502e)
 
+NEW desktop version here : https://github.com/jrucho/YT-Beatmaker-Cues-Desktop
+
 # YouTube Beatmaker Cues - Chrome Extension
 
 You can try out my new website with some of the extension’s features here, before downloading it: https://bit.ly/beatmakercues
